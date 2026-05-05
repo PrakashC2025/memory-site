@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { X } from 'lucide-react';
+import AppErrorBoundary from './components/AppErrorBoundary';
 import AnimatedBackground from './components/AnimatedBackground';
 import MusicPlayer from './components/MusicPlayer';
 import Navbar from './components/Navbar';
@@ -9,12 +9,13 @@ import { UserProvider, useUser } from './context/UserContext';
 import Dashboard from './pages/Dashboard';
 import EventExplorer from './pages/EventExplorer';
 import Login from './pages/Login';
+import Memoriya from './pages/Memoriya';
 import MemoryTree from './pages/MemoryTree';
 import Settings from './pages/Settings';
 import StoryMode from './pages/StoryMode';
 import Timeline from './pages/Timeline';
 
-type Page = 'dashboard' | 'tree' | 'timeline' | 'events' | 'story' | 'settings';
+type Page = 'dashboard' | 'memoriya' | 'tree' | 'timeline' | 'events' | 'story' | 'settings';
 
 const PAGE_TRANSITIONS = {
   initial: { opacity: 0, y: 18, filter: 'blur(8px)' },
@@ -23,8 +24,8 @@ const PAGE_TRANSITIONS = {
 };
 
 const AppContent: React.FC = () => {
-  const { user } = useUser();
-  const [currentPage, setCurrentPage] = useState<Page>('dashboard');
+  const { authLoading, user } = useUser();
+  const [currentPage, setCurrentPage] = useState<Page>('memoriya');
 
   const navigate = (page: string) => {
     setCurrentPage(page as Page);
@@ -32,6 +33,22 @@ const AppContent: React.FC = () => {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
+
+  if (authLoading) {
+    return (
+      <>
+        <AnimatedBackground />
+        <main className="relative z-10 grid min-h-screen place-items-center px-4">
+          <div className="neon-card p-6 text-center">
+            <div className="text-sm font-black uppercase tracking-[0.22em] text-white/70">Checking secure session</div>
+            <div className="mt-3 h-1.5 w-56 overflow-hidden rounded-full bg-white/10">
+              <motion.div className="h-full w-1/2 rounded-full bg-cyan-300" animate={{ x: ['-100%', '220%'] }} transition={{ duration: 1.1, repeat: Infinity }} />
+            </div>
+          </div>
+        </main>
+      </>
+    );
+  }
 
   if (!user) {
     return (
@@ -57,6 +74,11 @@ const AppContent: React.FC = () => {
               <Dashboard onNavigate={navigate} />
             </motion.div>
           )}
+          {currentPage === 'memoriya' && (
+            <motion.div key="memoriya" {...PAGE_TRANSITIONS} transition={{ duration: 0.45 }}>
+              <Memoriya />
+            </motion.div>
+          )}
           {currentPage === 'tree' && (
             <motion.div key="tree" {...PAGE_TRANSITIONS} transition={{ duration: 0.45 }}>
               <MemoryTree />
@@ -74,19 +96,7 @@ const AppContent: React.FC = () => {
           )}
           {currentPage === 'story' && (
             <motion.div key="story" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.55 }}>
-              <div className="fixed right-4 top-4 z-50">
-                <motion.button
-                  whileHover={{ scale: 1.04 }}
-                  whileTap={{ scale: 0.96 }}
-                  onClick={() => navigate('dashboard')}
-                  className="neon-button flex items-center gap-2 px-3 py-2 text-xs font-semibold"
-                  style={{ borderColor: 'rgba(255,255,255,0.22)', background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(16px)' }}
-                >
-                  <X size={14} />
-                  Exit Story
-                </motion.button>
-              </div>
-              <StoryMode />
+              <StoryMode onExit={() => navigate('dashboard')} />
             </motion.div>
           )}
           {currentPage === 'settings' && (
@@ -103,11 +113,13 @@ const AppContent: React.FC = () => {
 };
 
 const App: React.FC = () => (
-  <ThemeProvider>
-    <UserProvider>
-      <AppContent />
-    </UserProvider>
-  </ThemeProvider>
+  <AppErrorBoundary>
+    <ThemeProvider>
+      <UserProvider>
+        <AppContent />
+      </UserProvider>
+    </ThemeProvider>
+  </AppErrorBoundary>
 );
 
 export default App;

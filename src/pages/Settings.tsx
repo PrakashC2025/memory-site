@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Bell, BookOpen, Check, Lock, Music, Palette, Shield, Sparkles, User, Users, Wand2 } from 'lucide-react';
+import { Bell, BookOpen, Check, Film, Lock, Music, Palette, Shield, Sparkles, User, Users, Wand2 } from 'lucide-react';
 import DriveConnectPanel from '../components/DriveConnectPanel';
 import { THEMES, type Theme, useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
@@ -13,6 +13,29 @@ const fadeUp = {
 const Settings: React.FC = () => {
   const { config, theme, setTheme } = useTheme();
   const { user, isMusicOn, setMusicOn } = useUser();
+  const [privacy, setPrivacy] = useState({
+    privateSpace: true,
+    familySpace: false,
+    friendsCollab: false,
+  });
+  const [slideshow, setSlideshow] = useState({
+    transition: 'Dream Dissolve',
+    duration: 'Balanced',
+    intensity: 'Premium',
+    captions: true,
+    fit: 'Contain',
+    fullscreen: true,
+    treeOverlay: true,
+    cinemaBars: true,
+  });
+
+  const togglePrivacy = (key: keyof typeof privacy) => {
+    setPrivacy(value => ({ ...value, [key]: !value[key] }));
+  };
+
+  const toggleSlideshow = (key: keyof typeof slideshow) => {
+    setSlideshow(value => ({ ...value, [key]: !value[key] }));
+  };
 
   return (
     <div className="mx-auto min-h-screen max-w-4xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
@@ -97,17 +120,64 @@ const Settings: React.FC = () => {
           <DriveConnectPanel />
         </motion.section>
 
+        <motion.section {...fadeUp} transition={{ duration: 0.56, delay: 0.22 }} className="neon-card p-5 md:p-6">
+          <h2 className="mb-4 flex items-center gap-2 text-base font-black text-white">
+            <Film size={18} style={{ color: config.primary }} />
+            Slideshow Defaults
+          </h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {[
+              { key: 'transition', label: 'Transition', options: ['Dream Dissolve', 'Ken Burns', 'Branch Guided', 'Film Fade', 'Scrapbook'] },
+              { key: 'duration', label: 'Duration', options: ['Slow Emotional', 'Balanced', 'Fast Highlights'] },
+              { key: 'intensity', label: 'Intensity', options: ['Soft', 'Premium', 'Dramatic'] },
+              { key: 'fit', label: 'Image Fit', options: ['Contain', 'Cover', 'Smart'] },
+            ].map(item => (
+              <label key={item.key} className="grid gap-2 text-xs font-bold uppercase tracking-[0.14em]" style={{ color: config.primary }}>
+                {item.label}
+                <select
+                  value={String(slideshow[item.key as keyof typeof slideshow])}
+                  onChange={event => setSlideshow(value => ({ ...value, [item.key]: event.target.value }))}
+                  className="rounded-lg px-3 py-2 text-sm normal-case tracking-normal text-white outline-none"
+                  style={{ background: 'rgba(255,255,255,0.07)', border: `1px solid ${config.primary}33` }}
+                >
+                  {item.options.map(option => <option key={option}>{option}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {[
+              ['captions', 'Captions On'],
+              ['fullscreen', 'Fullscreen Auto-enter'],
+              ['treeOverlay', 'Tree Overlay'],
+              ['cinemaBars', 'Cinema Bars'],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => toggleSlideshow(key as keyof typeof slideshow)}
+                className="flex items-center justify-between rounded-lg border px-3 py-3 text-left"
+                style={{ borderColor: config.primary + '24', background: 'rgba(255,255,255,0.045)' }}
+              >
+                <span className="text-sm font-bold text-white">{label}</span>
+                <span className="relative h-6 w-11 rounded-full" style={{ background: slideshow[key as keyof typeof slideshow] ? config.primary : 'rgba(255,255,255,0.16)' }}>
+                  <motion.span animate={{ x: slideshow[key as keyof typeof slideshow] ? 23 : 4 }} className="absolute top-1 h-4 w-4 rounded-full bg-white" />
+                </span>
+              </button>
+            ))}
+          </div>
+        </motion.section>
+
         <motion.section {...fadeUp} transition={{ duration: 0.56, delay: 0.24 }} className="neon-card p-5 md:p-6">
           <h2 className="mb-4 flex items-center gap-2 text-base font-black text-white">
             <Shield size={18} style={{ color: config.primary }} />
             Privacy & Access Control
           </h2>
           {[
-            { label: 'Private Memory Space', desc: 'Only you can see this archive', on: true, Icon: Lock },
-            { label: 'Shared Family Space', desc: 'Invite family members by email', on: false, Icon: Users },
-            { label: 'Friends Collaboration', desc: 'Allow friends to add memories', on: false, Icon: Users },
+            { key: 'privateSpace', label: 'Private Memory Space', desc: 'Only you can see this archive', Icon: Lock },
+            { key: 'familySpace', label: 'Shared Family Space', desc: 'Invite family members by email', Icon: Users },
+            { key: 'friendsCollab', label: 'Friends Collaboration', desc: 'Allow friends to add memories', Icon: Users },
           ].map(item => (
-            <div key={item.label} className="flex items-center justify-between gap-4 border-b py-3 last:border-b-0" style={{ borderColor: config.primary + '18' }}>
+            <button key={item.label} onClick={() => togglePrivacy(item.key as keyof typeof privacy)} className="flex w-full items-center justify-between gap-4 border-b py-3 text-left last:border-b-0" style={{ borderColor: config.primary + '18' }}>
               <div className="flex items-start gap-3">
                 <item.Icon size={17} style={{ color: config.primary }} />
                 <div>
@@ -115,10 +185,10 @@ const Settings: React.FC = () => {
                   <p className="text-xs text-white/48">{item.desc}</p>
                 </div>
               </div>
-              <span className="relative h-6 w-11 rounded-full" style={{ background: item.on ? config.primary : 'rgba(255,255,255,0.16)' }}>
-                <span className="absolute top-1 h-4 w-4 rounded-full bg-white" style={{ left: item.on ? 23 : 4 }} />
+              <span className="relative h-6 w-11 shrink-0 rounded-full" style={{ background: privacy[item.key as keyof typeof privacy] ? config.primary : 'rgba(255,255,255,0.16)' }}>
+                <motion.span animate={{ x: privacy[item.key as keyof typeof privacy] ? 23 : 4 }} className="absolute top-1 h-4 w-4 rounded-full bg-white" />
               </span>
-            </div>
+            </button>
           ))}
         </motion.section>
 

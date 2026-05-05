@@ -1,234 +1,1112 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, CalendarDays, MapPin, Sparkles, TreePine } from 'lucide-react';
+import {
+  Archive,
+  ArrowDownToLine,
+  Bot,
+  CalendarDays,
+  Camera,
+  ChevronDown,
+  ChevronUp,
+  Download,
+  Eye,
+  FileArchive,
+  FileImage,
+  FileText,
+  Filter,
+  FolderHeart,
+  Heart,
+  ImagePlus,
+  Layers3,
+  LockKeyhole,
+  Maximize2,
+  Minus,
+  Music2,
+  PanelRightOpen,
+  Pause,
+  PenLine,
+  Play,
+  Plus,
+  RefreshCcw,
+  Search,
+  Share2,
+  Shuffle,
+  Sparkles,
+  Star,
+  TreePine,
+  WandSparkles,
+} from 'lucide-react';
 import MemoryLightbox from '../components/MemoryLightbox';
+import type { SlideshowTemplate, SlideshowTransition } from '../components/MemoryLightbox';
 import { useTheme } from '../context/ThemeContext';
+import { useUser } from '../context/UserContext';
 import { SAMPLE_MEMORIES, groupMemoriesByYear } from '../data/memories';
-import type { Memory, MemoryYear } from '../data/memories';
+import type { Memory } from '../data/memories';
 
-const YEAR_COLORS: Record<number, { primary: string; leaf: string }> = {
-  2021: { primary: '#ffd166', leaf: '#36f1cd' },
-  2022: { primary: '#00e5ff', leaf: '#8ee3ff' },
-  2023: { primary: '#ff4ecd', leaf: '#b8ff6a' },
-  2024: { primary: '#36f1cd', leaf: '#ff5fd2' },
-};
+type TreeNodeKind = 'root' | 'year' | 'event' | 'media';
+
+interface TreeNode {
+  id: string;
+  kind: TreeNodeKind;
+  title: string;
+  subtitle: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  accent: string;
+  order: number;
+  parentId?: string;
+  memory?: Memory;
+  memories: Memory[];
+  count: number;
+}
+
+interface TreeEdge {
+  id: string;
+  from: string;
+  to: string;
+  d: string;
+  color: string;
+  order: number;
+}
+
+interface TreeModel {
+  nodes: TreeNode[];
+  edges: TreeEdge[];
+  nodeMap: Map<string, TreeNode>;
+  width: number;
+  height: number;
+}
 
 const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-const MiniTree: React.FC<{ year: MemoryYear; color: string; leaf: string }> = ({ year, color, leaf }) => {
-  const branches = year.memories.slice(0, 8);
+const EMOTION_COLORS: Record<string, { primary: string; accent: string }> = {
+  joy: { primary: '#ffd166', accent: '#ff8f70' },
+  nostalgia: { primary: '#8ee3ff', accent: '#ff5fd2' },
+  love: { primary: '#ff5fd2', accent: '#ffe66d' },
+  adventure: { primary: '#36f1cd', accent: '#8ee3ff' },
+  friendship: { primary: '#7cf7ff', accent: '#b8ff6a' },
+  celebration: { primary: '#ffcf5f', accent: '#ff4ecd' },
+  farewell: { primary: '#d8f3ff', accent: '#36f1cd' },
+};
+
+const FRAME_THEMES = [
+  'Classic Elegant',
+  'Modern Glass',
+  'Wedding Gold',
+  'Vintage Paper',
+  'Kids Birthday',
+  'Film Strip',
+  'Polaroid',
+  'Premium Matte',
+  'Romantic Glow',
+  'Festival Light',
+];
+
+const STORY_TEMPLATES = [
+  'Wedding Romance',
+  'Kids Birthday',
+  'Anniversary',
+  'Travel Journey',
+  'College Farewell',
+  'Family Archive',
+  'Baby First Year',
+];
+
+const EXPORT_FORMATS = ['JPG', 'PNG', 'WEBP', 'PDF', 'ZIP', 'MP4', 'Print PDF'];
+
+const INVITATION_TEMPLATES = ['Wedding', 'Birthday', 'Anniversary', 'Baby Shower', 'Family Reunion', 'Graduation'];
+
+const TREE_WIDTH = 1560;
+const ROOT_WIDTH = 286;
+const ROOT_HEIGHT = 168;
+const YEAR_WIDTH = 218;
+const YEAR_HEIGHT = 112;
+const EVENT_WIDTH = 204;
+const EVENT_HEIGHT = 104;
+const MEDIA_WIDTH = 178;
+const MEDIA_HEIGHT = 134;
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const downloadTextFile = (filename: string, content: string) => {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
+const templateFromLabel = (label: string): SlideshowTemplate => {
+  const value = label.toLowerCase();
+  if (value.includes('wedding')) return 'wedding';
+  if (value.includes('kids')) return 'kids-birthday';
+  if (value.includes('birthday')) return 'birthday';
+  if (value.includes('baby')) return 'baby';
+  if (value.includes('travel')) return 'travel';
+  if (value.includes('college')) return 'college';
+  if (value.includes('family')) return 'family';
+  return 'nostalgia';
+};
+
+const branchPath = (from: TreeNode, to: TreeNode) => {
+  const startX = from.x + from.width / 2;
+  const startY = from.y + from.height;
+  const endX = to.x + to.width / 2;
+  const endY = to.y;
+  const distance = Math.max(80, endY - startY);
+  const curve = distance * 0.48;
+  return `M ${startX} ${startY} C ${startX} ${startY + curve}, ${endX} ${endY - curve}, ${endX} ${endY}`;
+};
+
+const groupByEvent = (memories: Memory[]) => {
+  const map = new Map<string, Memory[]>();
+  memories.forEach(memory => {
+    const key = memory.event || `${MONTH_NAMES[memory.month]} ${memory.year}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(memory);
+  });
+  return Array.from(map.entries()).map(([event, items]) => ({
+    event,
+    memories: items.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+  }));
+};
+
+const colorForMemory = (memory?: Memory, fallback = '#9bffec') => {
+  if (!memory?.emotion) return { primary: fallback, accent: '#ff4ecd' };
+  return EMOTION_COLORS[memory.emotion] || { primary: fallback, accent: '#ff4ecd' };
+};
+
+const buildTreeModel = (memories: Memory[], themePrimary: string): TreeModel => {
+  const nodes: TreeNode[] = [];
+  const edges: TreeEdge[] = [];
+  let order = 0;
+  let yCursor = 34;
+
+  const root: TreeNode = {
+    id: 'root',
+    kind: 'root',
+    title: 'My Memories',
+    subtitle: `${memories.length} living moments`,
+    x: TREE_WIDTH / 2 - ROOT_WIDTH / 2,
+    y: yCursor,
+    width: ROOT_WIDTH,
+    height: ROOT_HEIGHT,
+    color: themePrimary,
+    accent: '#ff4ecd',
+    order: order++,
+    memories,
+    count: memories.length,
+  };
+  nodes.push(root);
+  yCursor += 272;
+
+  const years = groupMemoriesByYear(memories);
+  years.forEach((year, yearIndex) => {
+    const yearMemories = year.memories;
+    const yearColor = colorForMemory(yearMemories.find(item => item.isFavorite) || yearMemories[0], themePrimary);
+    const yearOffset = yearIndex % 2 === 0 ? -360 : 360;
+    const yearNode: TreeNode = {
+      id: `year-${year.year}`,
+      kind: 'year',
+      title: String(year.year),
+      subtitle: `${yearMemories.length} memories`,
+      x: TREE_WIDTH / 2 - YEAR_WIDTH / 2 + yearOffset,
+      y: yCursor,
+      width: YEAR_WIDTH,
+      height: YEAR_HEIGHT,
+      color: yearColor.primary,
+      accent: yearColor.accent,
+      order: order++,
+      parentId: root.id,
+      memories: yearMemories,
+      count: yearMemories.length,
+    };
+    nodes.push(yearNode);
+    edges.push({ id: `${root.id}-${yearNode.id}`, from: root.id, to: yearNode.id, d: branchPath(root, yearNode), color: yearNode.color, order: yearNode.order });
+
+    const eventGroups = groupByEvent(yearMemories);
+    const eventY = yCursor + 166;
+    const eventGap = eventGroups.length <= 1 ? 0 : (TREE_WIDTH - 360) / (eventGroups.length - 1);
+
+    eventGroups.forEach((group, eventIndex) => {
+      const eventColor = colorForMemory(group.memories.find(item => item.isFavorite) || group.memories[0], yearNode.color);
+      const rawX = eventGroups.length <= 1 ? TREE_WIDTH / 2 - EVENT_WIDTH / 2 : 180 + eventGap * eventIndex - EVENT_WIDTH / 2;
+      const eventNode: TreeNode = {
+        id: `event-${year.year}-${eventIndex}`,
+        kind: 'event',
+        title: group.event,
+        subtitle: `${group.memories.length} item${group.memories.length > 1 ? 's' : ''}`,
+        x: clamp(rawX, 44, TREE_WIDTH - EVENT_WIDTH - 44),
+        y: eventY,
+        width: EVENT_WIDTH,
+        height: EVENT_HEIGHT,
+        color: eventColor.primary,
+        accent: eventColor.accent,
+        order: order++,
+        parentId: yearNode.id,
+        memories: group.memories,
+        count: group.memories.length,
+      };
+      nodes.push(eventNode);
+      edges.push({ id: `${yearNode.id}-${eventNode.id}`, from: yearNode.id, to: eventNode.id, d: branchPath(yearNode, eventNode), color: eventNode.color, order: eventNode.order });
+
+      const leaves = group.memories;
+      leaves.forEach((memory, memoryIndex) => {
+        const row = Math.floor(memoryIndex / 3);
+        const column = memoryIndex % 3;
+        const spread = Math.min(leaves.length, 3);
+        const centeredColumn = column - (spread - 1) / 2;
+        const mediaColor = colorForMemory(memory, eventNode.color);
+        const leafX = clamp(eventNode.x + EVENT_WIDTH / 2 - MEDIA_WIDTH / 2 + centeredColumn * 190, 28, TREE_WIDTH - MEDIA_WIDTH - 28);
+        const leafY = eventY + 142 + row * 156;
+        const mediaNode: TreeNode = {
+          id: `media-${memory.id}`,
+          kind: 'media',
+          title: memory.title,
+          subtitle: `${MONTH_NAMES[memory.month]} ${memory.year}`,
+          x: leafX,
+          y: leafY,
+          width: MEDIA_WIDTH,
+          height: MEDIA_HEIGHT,
+          color: mediaColor.primary,
+          accent: mediaColor.accent,
+          order: order++,
+          parentId: eventNode.id,
+          memory,
+          memories: [memory],
+          count: 1,
+        };
+        nodes.push(mediaNode);
+        edges.push({ id: `${eventNode.id}-${mediaNode.id}`, from: eventNode.id, to: mediaNode.id, d: branchPath(eventNode, mediaNode), color: mediaNode.color, order: mediaNode.order });
+      });
+    });
+
+    const deepestRowCount = Math.max(...eventGroups.map(group => Math.ceil(group.memories.length / 3)), 1);
+    yCursor += 390 + deepestRowCount * 156;
+  });
+
+  const nodeMap = new Map(nodes.map(node => [node.id, node]));
+  return {
+    nodes,
+    edges,
+    nodeMap,
+    width: TREE_WIDTH,
+    height: yCursor + 120,
+  };
+};
+
+const getPathIds = (nodeId: string | null, nodeMap: Map<string, TreeNode>) => {
+  if (!nodeId) return new Set<string>();
+  const ids = new Set<string>();
+  let current = nodeMap.get(nodeId);
+  while (current) {
+    ids.add(current.id);
+    current = current.parentId ? nodeMap.get(current.parentId) : undefined;
+  }
+  return ids;
+};
+
+const IconButton: React.FC<{
+  label: string;
+  icon: React.ReactNode;
+  onClick?: () => void;
+  active?: boolean;
+  disabled?: boolean;
+}> = ({ label, icon, onClick, active, disabled }) => (
+  <motion.button
+    whileHover={disabled ? undefined : { y: -2 }}
+    whileTap={disabled ? undefined : { scale: 0.97 }}
+    onClick={onClick}
+    disabled={disabled}
+    className={`memory-tool-button ${active ? 'memory-tool-button-active' : ''}`}
+    title={label}
+    aria-label={label}
+  >
+    {icon}
+    <span>{label}</span>
+  </motion.button>
+);
+
+const CinematicTreeBackground: React.FC = () => (
+  <div className="memory-scene-bg" aria-hidden="true">
+    <div className="memory-mountain-layer memory-mountain-back" />
+    <div className="memory-mountain-layer memory-mountain-mid" />
+    <div className="memory-mountain-layer memory-mountain-front" />
+    <div className="memory-aurora-sweep" />
+    <div className="memory-starfield" />
+    <div className="memory-vignette" />
+  </div>
+);
+
+const MemoryNodeMediaPreview: React.FC<{ memory: Memory }> = ({ memory }) => {
+  const initialSrc = memory.thumbnail || memory.url;
+  const [src, setSrc] = useState(initialSrc);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setSrc(initialSrc);
+    setFailed(false);
+  }, [initialSrc, memory.id]);
+
+  if (failed) {
+    return (
+      <div className="memory-node-media-fallback">
+        <Camera size={20} />
+        <span>{memory.title}</span>
+      </div>
+    );
+  }
 
   return (
-    <svg width="180" height="230" viewBox="0 0 180 230" className="overflow-visible">
-      <defs>
-        <filter id={`tree-glow-${year.year}`} x="-80%" y="-80%" width="260%" height="260%">
-          <feGaussianBlur stdDeviation="4" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-        <linearGradient id={`trunk-${year.year}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.72" />
-          <stop offset="100%" stopColor="#3a241c" />
-        </linearGradient>
-      </defs>
+    <img
+      className="memory-node-image-preview"
+      src={src}
+      alt={memory.title}
+      loading="lazy"
+      onError={() => {
+        if (src !== memory.url && memory.url) {
+          setSrc(memory.url);
+          return;
+        }
+        setFailed(true);
+      }}
+    />
+  );
+};
 
-      <motion.path
-        d="M90 214 C68 200 46 210 24 226 M90 214 C112 200 136 210 158 226"
-        stroke={color}
-        strokeWidth="3"
-        strokeOpacity="0.45"
-        fill="none"
-        initial={{ pathLength: 0 }}
-        animate={{ pathLength: 1 }}
-        transition={{ duration: 1.1 }}
-      />
-      <motion.path
-        d="M90 214 C88 170 91 130 88 86 C87 62 92 44 90 22"
-        stroke={`url(#trunk-${year.year})`}
-        strokeWidth="13"
-        strokeLinecap="round"
-        fill="none"
-        filter={`url(#tree-glow-${year.year})`}
-        initial={{ pathLength: 0 }}
-        animate={{ pathLength: 1 }}
-        transition={{ duration: 1.1, ease: 'easeOut' }}
-      />
+const NodeCard: React.FC<{
+  node: TreeNode;
+  selected: boolean;
+  inPath: boolean;
+  collapsed: boolean;
+  onClick: (node: TreeNode) => void;
+  onToggle: (node: TreeNode) => void;
+}> = ({ node, selected, inPath, collapsed, onClick, onToggle }) => {
+  const isMedia = node.kind === 'media';
+  const isBranch = node.kind === 'year' || node.kind === 'event';
 
-      {branches.map((memory, index) => {
-        const left = index % 2 === 0;
-        const y = 62 + index * 17;
-        const endX = left ? 35 - (index % 3) * 4 : 145 + (index % 3) * 4;
-        const controlX = left ? 62 : 118;
-        return (
-          <g key={memory.id}>
-            <motion.path
-              d={`M90 ${y} C${controlX} ${y - 18}, ${controlX} ${y - 12}, ${endX} ${y - 26}`}
-              stroke={color}
-              strokeWidth="4"
-              strokeLinecap="round"
-              fill="none"
-              initial={{ pathLength: 0 }}
-              animate={{ pathLength: 1 }}
-              transition={{ delay: 0.25 + index * 0.08, duration: 0.55 }}
-            />
-            <motion.circle
-              cx={endX}
-              cy={y - 26}
-              r="10"
-              fill={leaf}
-              filter={`url(#tree-glow-${year.year})`}
-              initial={{ scale: 0 }}
-              animate={{ scale: [0, 1.2, 1] }}
-              transition={{ delay: 0.55 + index * 0.08, type: 'spring', bounce: 0.4 }}
-            />
-          </g>
-        );
-      })}
+  return (
+    <motion.div
+      layout={false}
+      initial={{ opacity: 0, y: 18, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: selected ? 1.035 : 1 }}
+      transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
+      className={`memory-node memory-node-${node.kind} ${selected ? 'is-selected' : ''} ${inPath ? 'is-in-path' : ''}`}
+      style={{
+        left: node.x,
+        top: node.y,
+        width: node.width,
+        height: node.height,
+        borderColor: `${node.color}${selected ? 'dd' : '66'}`,
+        boxShadow: selected ? `0 0 40px ${node.color}55, inset 0 0 18px ${node.color}1f` : `0 0 22px ${node.color}20`,
+      }}
+    >
+      <button className="memory-node-hit" onClick={() => onClick(node)} aria-label={`Open ${node.title}`}>
+        {isMedia && node.memory ? (
+          <>
+            <MemoryNodeMediaPreview memory={node.memory} />
+            <span className="memory-media-shade" />
+            {node.memory.isFavorite && <Star className="memory-favorite-star" size={14} style={{ color: '#ffd166' }} fill="currentColor" />}
+          </>
+        ) : (
+          <div className="memory-branch-face" style={{ background: `linear-gradient(135deg, ${node.color}26, ${node.accent}18)` }}>
+            {node.kind === 'root' && <img src={SAMPLE_MEMORIES[12]?.thumbnail || SAMPLE_MEMORIES[0]?.thumbnail} alt="" loading="lazy" />}
+            {node.kind === 'year' && <CalendarDays size={22} />}
+            {node.kind === 'event' && <FolderHeart size={21} />}
+          </div>
+        )}
+        <span className="memory-node-copy">
+          <span className="memory-node-title">{node.title}</span>
+          <span className="memory-node-subtitle">{node.subtitle}</span>
+        </span>
+      </button>
 
-      {[...Array(16)].map((_, index) => {
-        const angle = (index / 16) * Math.PI * 2;
-        const rx = 38 + (index % 4) * 7;
-        const cx = 90 + Math.cos(angle) * rx;
-        const cy = 42 + Math.sin(angle) * 24;
-        return (
-          <motion.ellipse
-            key={index}
-            cx={cx}
-            cy={cy}
-            rx={12 + (index % 3) * 3}
-            ry={7 + (index % 2) * 2}
-            fill={leaf}
-            fillOpacity="0.78"
-            filter={`url(#tree-glow-${year.year})`}
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ delay: 0.2 + index * 0.025, type: 'spring' }}
-          />
-        );
-      })}
-    </svg>
+      {isBranch && (
+        <button
+          className="memory-node-toggle"
+          onClick={event => {
+            event.stopPropagation();
+            onToggle(node);
+          }}
+          aria-label={collapsed ? 'Expand branch' : 'Collapse branch'}
+          title={collapsed ? 'Expand Branch' : 'Collapse Branch'}
+          style={{ borderColor: `${node.color}66`, color: node.color }}
+        >
+          {collapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+        </button>
+      )}
+    </motion.div>
+  );
+};
+
+const StudioPanel: React.FC<{
+  selectedNode: TreeNode | null;
+  memories: Memory[];
+  onOpenMemory: (memory: Memory) => void;
+  onPlayStory: (template?: SlideshowTemplate) => void;
+  onAction: (message: string) => void;
+  onDownloadAlbum: (format?: string) => void;
+  onShare: () => void;
+}> = ({ selectedNode, memories, onOpenMemory, onPlayStory, onAction, onDownloadAlbum, onShare }) => {
+  const { config } = useTheme();
+  const [editorItems, setEditorItems] = useState<Memory[]>(() => memories.slice(0, 8));
+  const [dragId, setDragId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const source = selectedNode?.memories?.length ? selectedNode.memories : memories;
+    setEditorItems(source.slice(0, 8));
+  }, [selectedNode, memories]);
+
+  const moveDragged = (targetId: string) => {
+    if (!dragId || dragId === targetId) return;
+    setEditorItems(items => {
+      const from = items.findIndex(item => item.id === dragId);
+      const to = items.findIndex(item => item.id === targetId);
+      if (from < 0 || to < 0) return items;
+      const next = [...items];
+      const [picked] = next.splice(from, 1);
+      next.splice(to, 0, picked);
+      return next;
+    });
+  };
+
+  const active = selectedNode || {
+    title: 'Memory Tree',
+    subtitle: `${memories.length} memories`,
+    memories,
+    count: memories.length,
+    color: config.primary,
+  };
+
+  return (
+    <aside className="memory-studio-panel">
+      <div className="memory-panel-section">
+        <div className="memory-panel-kicker">
+          <PanelRightOpen size={14} />
+          Branch Studio
+        </div>
+        <h2>{active.title}</h2>
+        <p>{active.subtitle}</p>
+        <div className="memory-panel-actions">
+          <button onClick={() => onPlayStory()}><Play size={14} /> Play Story</button>
+          <button onClick={onShare}><Share2 size={14} /> Share Link</button>
+          <button onClick={() => onAction('Branch marked as favorite.')}><Heart size={14} /> Favorite</button>
+          <button onClick={() => onAction('Caption editor opened for this branch.')}><PenLine size={14} /> Add Caption</button>
+          <button onClick={() => onAction('Cover image set from the current branch preview.')}><ImagePlus size={14} /> Set Cover</button>
+          <button onClick={() => onDownloadAlbum()}><Download size={14} /> Download</button>
+        </div>
+      </div>
+
+      <div className="memory-panel-section">
+        <div className="memory-panel-title">
+          <Layers3 size={15} />
+          Album Editor
+        </div>
+        <div className="memory-editor-grid">
+          {editorItems.map(item => (
+            <button
+              key={item.id}
+              draggable
+              onDragStart={() => setDragId(item.id)}
+              onDragOver={event => event.preventDefault()}
+              onDrop={() => moveDragged(item.id)}
+              onClick={() => onOpenMemory(item)}
+              className="memory-editor-tile"
+              style={{ borderColor: dragId === item.id ? config.primary : 'rgba(255,255,255,0.14)' }}
+            >
+              <img src={item.thumbnail} alt={item.title} loading="lazy" />
+              <span>{item.title}</span>
+            </button>
+          ))}
+        </div>
+        <div className="memory-compact-actions">
+          <button onClick={() => onAction('Album rename saved locally.')}>Rename Album</button>
+          <button onClick={() => onAction('Selected branch merged into the current album preview.')}>Merge</button>
+          <button onClick={() => onAction('Duplicate scan complete. No duplicates found in demo data.')}>Remove Duplicates</button>
+          <button onClick={() => onAction('Sub-album created in the editor preview.')}>Create Sub-album</button>
+        </div>
+      </div>
+
+      <div className="memory-panel-section">
+        <div className="memory-panel-title">
+          <WandSparkles size={15} />
+          Story Builder
+        </div>
+        <div className="memory-chip-row">
+          {STORY_TEMPLATES.map(template => <button key={template} onClick={() => onPlayStory(templateFromLabel(template))}>{template}</button>)}
+        </div>
+        <div className="memory-compact-actions">
+          <button onClick={() => onAction('Story draft saved.')}>Save Story</button>
+          <button onClick={() => onPlayStory()}>Preview Story</button>
+          <button onClick={() => onAction('Story published as a private preview link.')}>Publish Story</button>
+          <button onClick={() => onAction('Soundtrack attached to this story.')}>Add Music</button>
+        </div>
+      </div>
+
+      <div className="memory-panel-section">
+        <div className="memory-panel-title">
+          <Sparkles size={15} />
+          Frames
+        </div>
+        <div className="memory-chip-row">
+          {FRAME_THEMES.map(frame => <button key={frame} onClick={() => onAction(`${frame} applied to this album.`)}>{frame}</button>)}
+        </div>
+      </div>
+
+      <div className="memory-panel-section">
+        <div className="memory-panel-title">
+          <FileArchive size={15} />
+          Export
+        </div>
+        <div className="memory-export-grid">
+          {EXPORT_FORMATS.map(format => (
+            <button key={format} onClick={() => onDownloadAlbum(format)}>
+              {format === 'PDF' || format === 'Print PDF' ? <FileText size={14} /> : format === 'ZIP' ? <FileArchive size={14} /> : <FileImage size={14} />}
+              {format}
+            </button>
+          ))}
+        </div>
+        <label className="memory-toggle-row"><input type="checkbox" defaultChecked /> Include captions</label>
+        <label className="memory-toggle-row"><input type="checkbox" defaultChecked /> Print-safe quality</label>
+      </div>
+
+      <div className="memory-panel-section">
+        <div className="memory-panel-title">
+          <Bot size={15} />
+          Invitation Builder
+        </div>
+        <div className="memory-chip-row">
+          {INVITATION_TEMPLATES.map(template => <button key={template} onClick={() => onAction(`${template} invitation preview generated.`)}>{template}</button>)}
+        </div>
+        <div className="memory-invite-preview">
+          <img src={(selectedNode?.memories?.[0] || memories[0])?.thumbnail} alt="" loading="lazy" />
+          <div>
+            <strong>Family Evening</strong>
+            <span>Animated preview ready</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="memory-panel-section">
+        <div className="memory-panel-title">
+          <LockKeyhole size={15} />
+          Sharing
+        </div>
+        <div className="memory-permission-list">
+          <span>Private link</span>
+          <span>Password protected</span>
+          <span>Family-only</span>
+          <span>Expiry date</span>
+          <span>Revoke anytime</span>
+        </div>
+      </div>
+    </aside>
   );
 };
 
 const MemoryTree: React.FC = () => {
   const { config } = useTheme();
-  const [selectedYear, setSelectedYear] = useState<MemoryYear | null>(null);
+  const { isMusicOn, setMusicOn } = useUser();
+  const shellRef = useRef<HTMLElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const autoCenteredLayoutRef = useRef<string>('');
+  const userInteractedRef = useRef(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string>('root');
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
-  const years = groupMemoriesByYear(SAMPLE_MEMORIES);
+  const [viewerSequence, setViewerSequence] = useState<Memory[]>(SAMPLE_MEMORIES);
+  const [viewerAutoplay, setViewerAutoplay] = useState(false);
+  const [viewerTemplate, setViewerTemplate] = useState<SlideshowTemplate>('auto');
+  const [viewerTransition, setViewerTransition] = useState<SlideshowTransition>('branch-guided');
+  const [renderLimit, setRenderLimit] = useState(24);
+  const [zoom, setZoom] = useState(0.86);
+  const [query, setQuery] = useState('');
+  const [filterMode, setFilterMode] = useState<'all' | 'favorites' | 'photos' | 'videos'>('all');
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [journey, setJourney] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [actionToast, setActionToast] = useState('');
 
-  const yearColor = (year: number) => YEAR_COLORS[year] || { primary: config.primary, leaf: config.treeleaf };
+  const emitAction = (message: string) => {
+    setActionToast(message);
+    window.setTimeout(() => setActionToast(''), 1900);
+  };
+
+  const filteredMemories = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return SAMPLE_MEMORIES.filter(memory => {
+      if (filterMode === 'favorites' && !memory.isFavorite) return false;
+      if (filterMode === 'photos' && memory.type !== 'photo') return false;
+      if (filterMode === 'videos' && memory.type !== 'video') return false;
+      if (!needle) return true;
+      return (
+      [memory.title, memory.caption, memory.location, memory.event, memory.year, memory.month, ...(memory.tags || [])]
+        .filter(Boolean)
+        .some(value => String(value).toLowerCase().includes(needle))
+      );
+    });
+  }, [filterMode, query]);
+
+  const model = useMemo(() => buildTreeModel(filteredMemories, config.primary), [filteredMemories, config.primary]);
+  const layoutSignature = useMemo(
+    () => `${config.primary}:${filteredMemories.map(memory => memory.id).join('|')}`,
+    [config.primary, filteredMemories]
+  );
+  const pathIds = useMemo(() => getPathIds(selectedNodeId, model.nodeMap), [selectedNodeId, model.nodeMap]);
+  const selectedNode = model.nodeMap.get(selectedNodeId) || model.nodeMap.get('root') || null;
+  const favoriteCount = useMemo(() => filteredMemories.filter(memory => memory.isFavorite).length, [filteredMemories]);
+  const locationCount = useMemo(() => new Set(filteredMemories.map(memory => memory.location).filter(Boolean)).size, [filteredMemories]);
+
+  const hiddenByCollapse = useCallback((node: TreeNode) => {
+    let current = node.parentId ? model.nodeMap.get(node.parentId) : undefined;
+    while (current) {
+      if (collapsed.has(current.id)) return true;
+      current = current.parentId ? model.nodeMap.get(current.parentId) : undefined;
+    }
+    return false;
+  }, [collapsed, model.nodeMap]);
+
+  const viewportHeight = typeof window === 'undefined' ? 900 : window.innerHeight;
+  const visibleNodes = useMemo(() => {
+    const low = scrollTop / zoom - 560;
+    const high = (scrollTop + viewportHeight) / zoom + 780;
+    return model.nodes.filter(node => {
+      if (node.order > renderLimit && node.kind !== 'root') return false;
+      if (hiddenByCollapse(node)) return false;
+      if (node.kind !== 'media') return true;
+      return node.y + node.height >= low && node.y <= high;
+    });
+  }, [hiddenByCollapse, model.nodes, renderLimit, scrollTop, viewportHeight, zoom]);
+
+  const visibleNodeIds = useMemo(() => new Set(visibleNodes.map(node => node.id)), [visibleNodes]);
+  const visibleEdges = useMemo(() => model.edges.filter(edge => edge.order <= renderLimit && visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to)), [model.edges, renderLimit, visibleNodeIds]);
+
+  useEffect(() => {
+    autoCenteredLayoutRef.current = '';
+    userInteractedRef.current = false;
+  }, [layoutSignature]);
+
+  useEffect(() => {
+    const root = model.nodeMap.get('root');
+    if (!root || autoCenteredLayoutRef.current === layoutSignature) return;
+    const positionRoot = () => {
+      const scroller = scrollerRef.current;
+      if (!scroller || userInteractedRef.current) return;
+      const left = root.x * zoom - scroller.clientWidth / 2 + (root.width * zoom) / 2;
+      const top = root.y * zoom - 28;
+      scroller.scrollLeft = Math.max(0, left);
+      scroller.scrollTop = Math.max(0, top);
+      autoCenteredLayoutRef.current = layoutSignature;
+    };
+    const frame = window.requestAnimationFrame(positionRoot);
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [layoutSignature, model.nodeMap, zoom]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const scroller = scrollerRef.current;
+    if (!sentinel || !scroller) return;
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          setRenderLimit(limit => Math.min(model.nodes.length, limit + 18));
+        }
+      },
+      { root: scroller, rootMargin: '650px' }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [model.nodes.length]);
+
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return;
+
+    const handleShellWheel = (event: WheelEvent) => {
+      const scroller = scrollerRef.current;
+      const target = event.target as HTMLElement | null;
+      if (!scroller || target?.closest('input, textarea, select')) return;
+
+      const verticalLimit = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      const horizontalLimit = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+      const horizontalDelta = event.shiftKey ? event.deltaY : event.deltaX;
+      let handled = false;
+
+      if (verticalLimit > 0 && event.deltaY !== 0) {
+        scroller.scrollTop = clamp(scroller.scrollTop + event.deltaY, 0, verticalLimit);
+        handled = true;
+      }
+
+      if (horizontalLimit > 0 && horizontalDelta !== 0) {
+        scroller.scrollLeft = clamp(scroller.scrollLeft + horizontalDelta, 0, horizontalLimit);
+        handled = true;
+      }
+
+      if (handled) {
+        userInteractedRef.current = true;
+        event.preventDefault();
+      }
+    };
+
+    shell.addEventListener('wheel', handleShellWheel, { passive: false });
+    return () => shell.removeEventListener('wheel', handleShellWheel);
+  }, []);
+
+  const centerNode = (node: TreeNode) => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const left = node.x * zoom - scroller.clientWidth / 2 + (node.width * zoom) / 2;
+    const top = node.y * zoom - scroller.clientHeight / 2 + (node.height * zoom) / 2;
+    scroller.scrollTo({ left: Math.max(0, left), top: Math.max(0, top), behavior: 'smooth' });
+  };
+
+  const getSequenceForNode = (node: TreeNode) => {
+    if (node.kind === 'media' && node.memory) {
+      const parentMemories = node.parentId ? model.nodeMap.get(node.parentId)?.memories : undefined;
+      return parentMemories?.length ? parentMemories : [node.memory];
+    }
+    return node.memories.length ? node.memories : filteredMemories;
+  };
+
+  const handleNodeClick = (node: TreeNode) => {
+    setSelectedNodeId(node.id);
+    centerNode(node);
+    if (node.kind === 'media' && node.memory) {
+      setViewerSequence(getSequenceForNode(node));
+      setViewerAutoplay(false);
+      setViewerTemplate('auto');
+      setViewerTransition('crossfade');
+      setSelectedMemory(node.memory);
+    }
+  };
+
+  const toggleBranch = (node: TreeNode) => {
+    setCollapsed(current => {
+      const next = new Set(current);
+      if (next.has(node.id)) next.delete(node.id);
+      else next.add(node.id);
+      return next;
+    });
+  };
+
+  const resetView = () => {
+    setSelectedNodeId('root');
+    setCollapsed(new Set());
+    setRenderLimit(24);
+    setZoom(0.86);
+    const root = model.nodeMap.get('root');
+    if (root) window.setTimeout(() => centerNode(root), 40);
+  };
+
+  const cycleFilter = () => {
+    const order: Array<typeof filterMode> = ['all', 'favorites', 'photos', 'videos'];
+    const next = order[(order.indexOf(filterMode) + 1) % order.length];
+    setFilterMode(next);
+    emitAction(`Filter: ${next}`);
+  };
+
+  const startCinematicJourney = (template: SlideshowTemplate = 'auto') => {
+    const source = selectedNode?.memories?.length ? selectedNode.memories : filteredMemories;
+    const sequence = source.length ? source : SAMPLE_MEMORIES;
+    const first = selectedNode?.kind === 'media' && selectedNode.memory ? selectedNode.memory : sequence[0];
+    setViewerSequence(sequence);
+    setViewerTemplate(template);
+    setViewerTransition(template === 'travel' ? 'ken-burns' : template === 'wedding' ? 'dream-dissolve' : 'branch-guided');
+    setViewerAutoplay(true);
+    setJourney(true);
+    setSelectedMemory(first);
+    const firstNode = model.nodeMap.get(`media-${first.id}`);
+    if (firstNode) {
+      setSelectedNodeId(firstNode.id);
+      centerNode(firstNode);
+    }
+  };
+
+  const openFullscreenViewer = () => {
+    const source = selectedNode?.memories?.length ? selectedNode.memories : filteredMemories;
+    const first = selectedNode?.kind === 'media' && selectedNode.memory ? selectedNode.memory : source[0] || SAMPLE_MEMORIES[0];
+    setViewerSequence(source.length ? source : SAMPLE_MEMORIES);
+    setViewerAutoplay(false);
+    setViewerTemplate('auto');
+    setViewerTransition('crossfade');
+    setSelectedMemory(first);
+  };
+
+  const handleViewerIndexChange = (memory: Memory) => {
+    const node = model.nodeMap.get(`media-${memory.id}`);
+    if (!node) return;
+    setSelectedNodeId(node.id);
+    centerNode(node);
+  };
+
+  const closeViewer = () => {
+    setSelectedMemory(null);
+    setViewerAutoplay(false);
+    setJourney(false);
+  };
+
+  const downloadAlbum = (format = 'ZIP') => {
+    const source = selectedNode?.memories?.length ? selectedNode.memories : filteredMemories;
+    const content = source.map((memory, index) => `${index + 1}. ${memory.title}\n${memory.caption}\n${memory.url}`).join('\n\n');
+    downloadTextFile(`memory-tree-${format.toLowerCase().replace(/\s+/g, '-')}-export.txt`, content || 'No memories selected.');
+    emitAction(`${format} export package prepared.`);
+  };
+
+  const shareBranch = async () => {
+    const title = selectedNode?.title || 'Memory Tree';
+    const text = `Shared memory branch: ${title}`;
+    try {
+      if (navigator.share) await navigator.share({ title, text });
+      else if (navigator.clipboard) await navigator.clipboard.writeText(text);
+      emitAction('Private share link ready.');
+    } catch {
+      emitAction('Share cancelled.');
+    }
+  };
+
+  const jumpToRandom = () => {
+    const mediaNodes = model.nodes.filter(node => node.kind === 'media' && node.order <= renderLimit);
+    const node = mediaNodes[Math.floor(Math.random() * mediaNodes.length)];
+    if (node) handleNodeClick(node);
+  };
+
+  const jumpToYear = () => {
+    const yearNode = model.nodes.find(node => node.kind === 'year' && node.order <= renderLimit);
+    if (yearNode) handleNodeClick(yearNode);
+  };
 
   return (
-    <div className="mx-auto min-h-screen max-w-7xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
-      <motion.header initial={{ opacity: 0, y: -18 }} animate={{ opacity: 1, y: 0 }} className="mb-9 text-center">
-        <div className="mx-auto mb-4 flex w-fit items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-[0.22em]" style={{ borderColor: config.primary + '40', color: config.accent }}>
-          <TreePine size={14} />
-          Memory Tree
+    <div className="memory-tree-page">
+      <CinematicTreeBackground />
+
+      <section className="memory-tree-hero">
+        <div className="memory-hero-copy">
+          <div className="memory-kicker">
+            <TreePine size={15} />
+            Memory Tree
+          </div>
+          <h1><span>Cinematic</span> Archive</h1>
+          <p className="memory-hero-lead">
+            Explore your moments without scroll jumps, open photos faster, and move through the archive like a living map.
+          </p>
+          <div className="memory-hero-stats">
+            <div className="memory-hero-stat">
+              <strong>{filteredMemories.length}</strong>
+              <span>memories in view</span>
+            </div>
+            <div className="memory-hero-stat">
+              <strong>{favoriteCount}</strong>
+              <span>favorites highlighted</span>
+            </div>
+            <div className="memory-hero-stat">
+              <strong>{locationCount}</strong>
+              <span>places remembered</span>
+            </div>
+          </div>
         </div>
-        <h1 className="neon-title text-4xl font-black md:text-6xl">A living archive of years.</h1>
-        <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/58 md:text-base">
-          Choose a year to open its branches, then click any memory node for the full lightbox.
-        </p>
-      </motion.header>
 
-      <AnimatePresence mode="wait">
-        {!selectedYear ? (
-          <motion.section key="forest" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -18 }} className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-            {years.map((year, index) => {
-              const colors = yearColor(year.year);
-              return (
-                <motion.button
-                  key={year.year}
-                  initial={{ opacity: 0, y: 30 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.08, duration: 0.55 }}
-                  whileHover={{ y: -8, scale: 1.015 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setSelectedYear(year)}
-                  className="neon-card p-5 text-center"
-                  style={{ borderColor: colors.primary + '44' }}
-                >
-                  <MiniTree year={year} color={colors.primary} leaf={colors.leaf} />
-                  <div className="mt-2 text-3xl font-black" style={{ color: colors.primary, textShadow: `0 0 20px ${colors.primary}88` }}>
-                    {year.year}
-                  </div>
-                  <p className="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-white/44">{year.memories.length} memories</p>
-                  <div className="mt-4 flex justify-center -space-x-2">
-                    {year.memories.slice(0, 4).map(memory => (
-                      <img key={memory.id} src={memory.thumbnail} alt="" className="h-9 w-9 rounded-lg border border-black object-cover" loading="lazy" />
-                    ))}
-                  </div>
-                </motion.button>
-              );
-            })}
-          </motion.section>
-        ) : (
-          <motion.section key="year" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -18 }}>
-            <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <button onClick={() => setSelectedYear(null)} className="neon-button flex w-fit items-center gap-2 px-4 py-2 text-sm font-bold" style={{ color: config.primary, borderColor: config.primary + '44' }}>
-                <ArrowLeft size={16} />
-                Back to Forest
-              </button>
-              <div className="text-left md:text-right">
-                <h2 className="text-3xl font-black" style={{ color: yearColor(selectedYear.year).primary }}>
-                  {selectedYear.year}
-                </h2>
-                <p className="text-sm text-white/48">{selectedYear.memories.length} memories across {selectedYear.months.length} months</p>
-              </div>
+        <div className="memory-hero-actions">
+          <IconButton label="Landing" icon={<Archive size={14} />} onClick={resetView} />
+          <IconButton label="Get Started" icon={<Sparkles size={14} />} onClick={resetView} />
+          <IconButton label="Explore Memory Tree" icon={<TreePine size={14} />} onClick={resetView} active />
+          <IconButton label="Shared Memories" icon={<Share2 size={14} />} onClick={shareBranch} />
+          <IconButton label="Settings" icon={<LockKeyhole size={14} />} onClick={() => emitAction('Slideshow settings are available inside fullscreen playback.')} />
+          <IconButton label="Toggle Theme" icon={<RefreshCcw size={14} />} onClick={() => emitAction('Use the navbar palette button to switch global theme.')} />
+          <IconButton label={isMusicOn ? 'Toggle Music' : 'Toggle Music'} icon={<Music2 size={14} />} onClick={() => setMusicOn(!isMusicOn)} active={isMusicOn} />
+        </div>
+      </section>
+
+      <section ref={shellRef} className="memory-tree-shell">
+        <div className="memory-tree-toolbar">
+          <label className="memory-search">
+            <Search size={15} />
+            <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search memories" />
+          </label>
+          <div className="memory-toolbar-group">
+            <IconButton label={`Filter: ${filterMode}`} icon={<Filter size={14} />} onClick={cycleFilter} active={filterMode !== 'all'} />
+            <IconButton label="View Tree" icon={<TreePine size={14} />} onClick={resetView} active />
+            <IconButton label="View Timeline" icon={<CalendarDays size={14} />} onClick={() => emitAction('Timeline view is synced with this tree in the top navigation.')} />
+            <IconButton label="View Grid" icon={<Layers3 size={14} />} onClick={() => emitAction('Grid preview is available in the album editor below.')} />
+            <IconButton label="Zoom In" icon={<Plus size={14} />} onClick={() => setZoom(value => clamp(value + 0.08, 0.62, 1.2))} />
+            <IconButton label="Zoom Out" icon={<Minus size={14} />} onClick={() => setZoom(value => clamp(value - 0.08, 0.62, 1.2))} />
+            <IconButton label="Reset View" icon={<RefreshCcw size={14} />} onClick={resetView} />
+            <IconButton label={journey ? 'Pause Journey' : 'Play Tree Journey'} icon={journey ? <Pause size={14} /> : <Play size={14} />} onClick={() => journey ? setViewerAutoplay(value => !value) : startCinematicJourney()} active={journey} />
+            <IconButton label="Random Memory" icon={<Shuffle size={14} />} onClick={jumpToRandom} />
+            <IconButton label="Fullscreen" icon={<Maximize2 size={14} />} onClick={openFullscreenViewer} />
+            <IconButton label="Back to Root" icon={<ArrowDownToLine size={14} />} onClick={resetView} />
+            <IconButton label="Jump to Year" icon={<CalendarDays size={14} />} onClick={jumpToYear} />
+          </div>
+        </div>
+
+        <div
+          ref={scrollerRef}
+          className="memory-tree-viewport"
+          onWheel={() => {
+            userInteractedRef.current = true;
+          }}
+          onPointerDown={() => {
+            userInteractedRef.current = true;
+          }}
+          onScroll={event => {
+            userInteractedRef.current = true;
+            setScrollTop(event.currentTarget.scrollTop);
+          }}
+        >
+          <div
+            className="memory-tree-canvas"
+            style={{
+              width: model.width * zoom,
+              height: model.height * zoom,
+            }}
+          >
+            <div
+              className="memory-tree-world"
+              style={{
+                width: model.width,
+                height: model.height,
+                transform: `scale(${zoom})`,
+              }}
+            >
+              <svg className="memory-branch-svg" width={model.width} height={model.height} viewBox={`0 0 ${model.width} ${model.height}`} aria-hidden="true">
+                <defs>
+                  <filter id="memory-branch-bloom" x="-60%" y="-60%" width="220%" height="220%">
+                    <feGaussianBlur stdDeviation="4" result="blur" />
+                    <feMerge>
+                      <feMergeNode in="blur" />
+                      <feMergeNode in="SourceGraphic" />
+                    </feMerge>
+                  </filter>
+                  {visibleEdges.map(edge => (
+                    <linearGradient key={`gradient-${edge.id}`} id={`gradient-${edge.id}`} x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" stopColor={edge.color} stopOpacity="0.08" />
+                      <stop offset="42%" stopColor={edge.color} stopOpacity="0.86" />
+                      <stop offset="72%" stopColor="#ffffff" stopOpacity="0.72" />
+                      <stop offset="100%" stopColor={edge.color} stopOpacity="0.18" />
+                    </linearGradient>
+                  ))}
+                </defs>
+                {visibleEdges.map(edge => {
+                  const active = pathIds.has(edge.from) && pathIds.has(edge.to);
+                  return (
+                    <g key={edge.id}>
+                      <motion.path
+                        d={edge.d}
+                        stroke={active ? edge.color : 'rgba(255,255,255,0.13)'}
+                        strokeWidth={active ? 4.5 : 2.2}
+                        strokeLinecap="round"
+                        fill="none"
+                        filter={active ? 'url(#memory-branch-bloom)' : undefined}
+                        initial={{ pathLength: 0, opacity: 0 }}
+                        animate={{ pathLength: 1, opacity: active ? 0.95 : 0.58 }}
+                        transition={{ duration: 0.72, ease: 'easeOut' }}
+                      />
+                      <path
+                        d={edge.d}
+                        stroke={`url(#gradient-${edge.id})`}
+                        strokeWidth={active ? 3.2 : 2}
+                        strokeLinecap="round"
+                        fill="none"
+                        className="memory-path-flow"
+                        style={{ animationDuration: active ? '1.9s' : '4.6s' }}
+                      />
+                    </g>
+                  );
+                })}
+              </svg>
+
+              <AnimatePresence>
+                {visibleNodes.map(node => (
+                  <NodeCard
+                    key={node.id}
+                    node={node}
+                    selected={selectedNodeId === node.id}
+                    inPath={pathIds.has(node.id)}
+                    collapsed={collapsed.has(node.id)}
+                    onClick={handleNodeClick}
+                    onToggle={toggleBranch}
+                  />
+                ))}
+              </AnimatePresence>
+              <div ref={sentinelRef} className="memory-tree-sentinel" style={{ top: model.height - 780 }} />
             </div>
+          </div>
+        </div>
 
-            <div className="neon-card overflow-hidden p-0">
-              <div className="grid gap-0 lg:grid-cols-[360px_1fr]">
-                <div className="flex items-center justify-center border-b p-6 lg:border-b-0 lg:border-r" style={{ borderColor: config.primary + '18' }}>
-                  <MiniTree year={selectedYear} color={yearColor(selectedYear.year).primary} leaf={yearColor(selectedYear.year).leaf} />
-                </div>
+        <div className="memory-mobile-controls">
+          <button onClick={() => setZoom(value => clamp(value - 0.08, 0.62, 1.2))}><Minus size={16} /></button>
+          <button onClick={() => journey ? setViewerAutoplay(value => !value) : startCinematicJourney()}>{journey ? <Pause size={16} /> : <Play size={16} />}</button>
+          <button onClick={() => setZoom(value => clamp(value + 0.08, 0.62, 1.2))}><Plus size={16} /></button>
+          <button onClick={resetView}><RefreshCcw size={16} /></button>
+        </div>
+      </section>
 
-                <div className="p-4 md:p-6">
-                  <div className="mb-5 flex flex-wrap gap-2">
-                    {selectedYear.months.map(month => (
-                      <span key={month.label} className="rounded-lg border px-3 py-1.5 text-xs font-bold" style={{ borderColor: yearColor(selectedYear.year).primary + '44', color: yearColor(selectedYear.year).primary, background: yearColor(selectedYear.year).primary + '12' }}>
-                        {month.label} ({month.memories.length})
-                      </span>
-                    ))}
-                  </div>
+      <section className="memory-workspace">
+        <StudioPanel
+          selectedNode={selectedNode}
+          memories={filteredMemories}
+          onOpenMemory={memory => {
+            setViewerSequence(selectedNode?.memories?.length ? selectedNode.memories : filteredMemories);
+            setViewerAutoplay(false);
+            setSelectedMemory(memory);
+          }}
+          onPlayStory={startCinematicJourney}
+          onAction={emitAction}
+          onDownloadAlbum={downloadAlbum}
+          onShare={shareBranch}
+        />
 
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {selectedYear.memories.map((memory, index) => (
-                      <motion.button
-                        key={memory.id}
-                        initial={{ opacity: 0, y: 16 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: index * 0.035 }}
-                        whileHover={{ y: -4 }}
-                        onClick={() => setSelectedMemory(memory)}
-                        className="neon-card grid grid-cols-[86px_1fr] gap-3 p-3 text-left"
-                        style={{ borderColor: yearColor(selectedYear.year).primary + '24' }}
-                      >
-                        <img src={memory.thumbnail} alt={memory.title} className="h-24 w-full rounded-lg object-cover" loading="lazy" />
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <Sparkles size={13} style={{ color: yearColor(selectedYear.year).primary }} />
-                            <p className="truncate text-sm font-black text-white">{memory.title}</p>
-                          </div>
-                          <p className="mt-2 line-clamp-2 text-xs leading-5 text-white/52">{memory.caption}</p>
-                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-white/45">
-                            <span className="flex items-center gap-1"><CalendarDays size={12} /> {MONTH_NAMES[memory.month]} {memory.year}</span>
-                            {memory.location && <span className="flex items-center gap-1"><MapPin size={12} /> {memory.location}</span>}
-                          </div>
-                        </div>
-                      </motion.button>
-                    ))}
-                  </div>
-                </div>
-              </div>
+        <div className="memory-summary-grid">
+          {[
+            { label: 'Virtual Nodes', value: `${Math.min(renderLimit, model.nodes.length)} / ${model.nodes.length}`, icon: <Eye size={16} /> },
+            { label: 'Albums', value: groupByEvent(filteredMemories).length, icon: <FolderHeart size={16} /> },
+            { label: 'Exports', value: EXPORT_FORMATS.length, icon: <Download size={16} /> },
+            { label: 'Protected Shares', value: '5 modes', icon: <LockKeyhole size={16} /> },
+          ].map(item => (
+            <div key={item.label} className="memory-stat-card">
+              {item.icon}
+              <strong>{item.value}</strong>
+              <span>{item.label}</span>
             </div>
-          </motion.section>
+          ))}
+        </div>
+      </section>
+
+      <p className="memory-tree-quote">"Memories are the stories we tell our future."</p>
+
+      <AnimatePresence>
+        {actionToast && (
+          <motion.div
+            className="memory-page-toast"
+            initial={{ opacity: 0, y: 16, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.96 }}
+          >
+            {actionToast}
+          </motion.div>
         )}
       </AnimatePresence>
 
-      <MemoryLightbox memory={selectedMemory} memories={selectedYear?.memories || SAMPLE_MEMORIES} onClose={() => setSelectedMemory(null)} />
+      <MemoryLightbox
+        memory={selectedMemory}
+        memories={viewerSequence}
+        autoplay={viewerAutoplay}
+        mode={journey ? 'tree' : 'viewer'}
+        template={viewerTemplate}
+        transitionStyle={viewerTransition}
+        showTreeOverlay={journey}
+        onIndexChange={handleViewerIndexChange}
+        onAutoplayChange={setViewerAutoplay}
+        onClose={closeViewer}
+      />
     </div>
   );
 };

@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Clock3,
   FolderHeart,
+  Images,
   Film,
   Home,
   LogOut,
@@ -23,6 +24,7 @@ interface NavbarProps {
 }
 
 const NAV_ITEMS = [
+  { id: 'memoriya', label: 'Memoriya', Icon: Images },
   { id: 'dashboard', label: 'Home', Icon: Home },
   { id: 'tree', label: 'Memory Tree', Icon: TreePine },
   { id: 'timeline', label: 'Timeline', Icon: Clock3 },
@@ -33,7 +35,7 @@ const NAV_ITEMS = [
 
 const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
   const { config, theme, setTheme } = useTheme();
-  const { user, setUser } = useUser();
+  const { logout, user } = useUser();
   const [themeOpen, setThemeOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -68,9 +70,9 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
           <Sparkles size={19} />
         </span>
         <span className="text-left">
-          <span className="block text-lg font-black tracking-[0.18em] text-white">MEMORIA</span>
+          <span className="block text-lg font-black tracking-[0.18em] text-white">MEMORIYA</span>
           <span className="block text-[10px] font-semibold uppercase tracking-[0.28em]" style={{ color: config.accent }}>
-            Neon Archive
+            Photo Social
           </span>
         </span>
       </motion.button>
@@ -157,7 +159,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
         <motion.button
           whileHover={{ scale: 1.03 }}
           whileTap={{ scale: 0.96 }}
-          onClick={() => setUser(null)}
+          onClick={logout}
           className="neon-button hidden items-center gap-2 px-3 py-2 text-xs font-semibold md:flex"
         >
           <LogOut size={14} />
@@ -198,7 +200,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
                   {label}
                 </button>
               ))}
-              <button onClick={() => setUser(null)} className="flex items-center gap-3 px-4 py-3 text-left text-sm text-white/50">
+              <button onClick={logout} className="flex items-center gap-3 px-4 py-3 text-left text-sm text-white/50">
                 <LogOut size={17} />
                 Sign Out
               </button>

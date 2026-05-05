@@ -39,7 +39,7 @@ const AnimatedBackground: React.FC = () => {
     let tick = 0;
 
     const seedParticles = () => {
-      const count = Math.min(95, Math.max(46, Math.floor((width * height) / 17000)));
+      const count = Math.min(54, Math.max(26, Math.floor((width * height) / 32000)));
       particlesRef.current = Array.from({ length: count }, (_, i) => ({
         x: Math.random() * width,
         y: Math.random() * height,

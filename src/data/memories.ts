@@ -8,6 +8,9 @@ export interface Memory {
   type: 'photo' | 'video';
   url: string;
   thumbnail: string;
+  authToken?: string;
+  driveFileId?: string;
+  mimeType?: string;
   location?: string;
   emotion?: 'joy' | 'nostalgia' | 'love' | 'adventure' | 'friendship' | 'celebration' | 'farewell';
   tags?: string[];
