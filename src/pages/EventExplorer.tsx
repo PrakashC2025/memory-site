@@ -3,7 +3,8 @@ import { motion } from 'framer-motion';
 import { CalendarDays, Film, Heart, Search, Sparkles, Star } from 'lucide-react';
 import MemoryLightbox from '../components/MemoryLightbox';
 import { useTheme } from '../context/ThemeContext';
-import { SAMPLE_MEMORIES, type Memory } from '../data/memories';
+import type { Memory } from '../data/memories';
+import { readDriveMemories } from '../services/driveLibrary';
 import { buildRecapSections, getMemoryHeatmap, groupMemoriesByEvent } from '../services/memoryOrganizer';
 
 const EMOTION_COLORS: Record<string, string> = {
@@ -20,10 +21,11 @@ const EventExplorer: React.FC = () => {
   const { config } = useTheme();
   const [query, setQuery] = useState('');
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
+  const driveMemories = readDriveMemories();
 
-  const events = useMemo(() => groupMemoriesByEvent(SAMPLE_MEMORIES), []);
-  const recaps = useMemo(() => buildRecapSections(SAMPLE_MEMORIES), []);
-  const heatmap = useMemo(() => getMemoryHeatmap(SAMPLE_MEMORIES), []);
+  const events = useMemo(() => groupMemoriesByEvent(driveMemories), [driveMemories]);
+  const recaps = useMemo(() => buildRecapSections(driveMemories), [driveMemories]);
+  const heatmap = useMemo(() => getMemoryHeatmap(driveMemories), [driveMemories]);
 
   const filteredEvents = events.filter(event => {
     const needle = query.trim().toLowerCase();
@@ -44,6 +46,14 @@ const EventExplorer: React.FC = () => {
           Auto-detected moments become chapters, recaps, and emotional clusters instead of a plain gallery.
         </p>
       </motion.header>
+
+      {driveMemories.length === 0 && (
+        <div className="neon-card mx-auto mb-8 max-w-xl p-8 text-center">
+          <Sparkles className="mx-auto mb-3" size={28} style={{ color: config.primary }} />
+          <p className="font-black text-white">No Drive events yet.</p>
+          <p className="mt-2 text-sm leading-6 text-white/56">Connect Google Drive in Memoriya to build events from your own media.</p>
+        </div>
+      )}
 
       <section className="mb-6 grid gap-3 md:grid-cols-[1fr_340px]">
         <div className="neon-card p-5">
@@ -157,7 +167,7 @@ const EventExplorer: React.FC = () => {
         )}
       </section>
 
-      <MemoryLightbox memory={selectedMemory} memories={selectedMemory ? SAMPLE_MEMORIES : []} onClose={() => setSelectedMemory(null)} />
+      <MemoryLightbox memory={selectedMemory} memories={selectedMemory ? driveMemories : []} onClose={() => setSelectedMemory(null)} />
     </div>
   );
 };

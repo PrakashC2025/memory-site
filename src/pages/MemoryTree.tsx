@@ -40,8 +40,9 @@ import MemoryLightbox from '../components/MemoryLightbox';
 import type { SlideshowTemplate, SlideshowTransition } from '../components/MemoryLightbox';
 import { useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
-import { SAMPLE_MEMORIES, groupMemoriesByYear } from '../data/memories';
+import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
+import { readDriveMemories } from '../services/driveLibrary';
 
 type TreeNodeKind = 'root' | 'year' | 'event' | 'media';
 
@@ -417,7 +418,7 @@ const NodeCard: React.FC<{
           </>
         ) : (
           <div className="memory-branch-face" style={{ background: `linear-gradient(135deg, ${node.color}26, ${node.accent}18)` }}>
-            {node.kind === 'root' && <img src={SAMPLE_MEMORIES[12]?.thumbnail || SAMPLE_MEMORIES[0]?.thumbnail} alt="" loading="lazy" />}
+            {node.kind === 'root' && node.memory && <img src={node.memory.thumbnail} alt="" loading="lazy" />}
             {node.kind === 'year' && <CalendarDays size={22} />}
             {node.kind === 'event' && <FolderHeart size={21} />}
           </div>
@@ -621,7 +622,8 @@ const MemoryTree: React.FC = () => {
   const userInteractedRef = useRef(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string>('root');
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
-  const [viewerSequence, setViewerSequence] = useState<Memory[]>(SAMPLE_MEMORIES);
+  const driveMemories = readDriveMemories();
+  const [viewerSequence, setViewerSequence] = useState<Memory[]>(driveMemories);
   const [viewerAutoplay, setViewerAutoplay] = useState(false);
   const [viewerTemplate, setViewerTemplate] = useState<SlideshowTemplate>('auto');
   const [viewerTransition, setViewerTransition] = useState<SlideshowTransition>('branch-guided');
@@ -641,7 +643,7 @@ const MemoryTree: React.FC = () => {
 
   const filteredMemories = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return SAMPLE_MEMORIES.filter(memory => {
+    return driveMemories.filter(memory => {
       if (filterMode === 'favorites' && !memory.isFavorite) return false;
       if (filterMode === 'photos' && memory.type !== 'photo') return false;
       if (filterMode === 'videos' && memory.type !== 'video') return false;
@@ -652,7 +654,7 @@ const MemoryTree: React.FC = () => {
         .some(value => String(value).toLowerCase().includes(needle))
       );
     });
-  }, [filterMode, query]);
+  }, [driveMemories, filterMode, query]);
 
   const model = useMemo(() => buildTreeModel(filteredMemories, config.primary), [filteredMemories, config.primary]);
   const layoutSignature = useMemo(
@@ -816,7 +818,11 @@ const MemoryTree: React.FC = () => {
 
   const startCinematicJourney = (template: SlideshowTemplate = 'auto') => {
     const source = selectedNode?.memories?.length ? selectedNode.memories : filteredMemories;
-    const sequence = source.length ? source : SAMPLE_MEMORIES;
+    const sequence = source.length ? source : driveMemories;
+    if (!sequence.length) {
+      emitAction('Connect Google Drive in Memoriya first');
+      return;
+    }
     const first = selectedNode?.kind === 'media' && selectedNode.memory ? selectedNode.memory : sequence[0];
     setViewerSequence(sequence);
     setViewerTemplate(template);
@@ -833,8 +839,13 @@ const MemoryTree: React.FC = () => {
 
   const openFullscreenViewer = () => {
     const source = selectedNode?.memories?.length ? selectedNode.memories : filteredMemories;
-    const first = selectedNode?.kind === 'media' && selectedNode.memory ? selectedNode.memory : source[0] || SAMPLE_MEMORIES[0];
-    setViewerSequence(source.length ? source : SAMPLE_MEMORIES);
+    const sequence = source.length ? source : driveMemories;
+    const first = selectedNode?.kind === 'media' && selectedNode.memory ? selectedNode.memory : sequence[0];
+    if (!first) {
+      emitAction('Connect Google Drive in Memoriya first');
+      return;
+    }
+    setViewerSequence(sequence);
     setViewerAutoplay(false);
     setViewerTemplate('auto');
     setViewerTransition('crossfade');

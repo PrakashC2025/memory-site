@@ -26,6 +26,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { Memory } from '../data/memories';
+import { DRIVE_SESSION_KEY } from '../services/driveLibrary';
 import { googleDriveService, type DriveConnectionState, type DriveMediaFile } from '../services/googleDriveService';
 
 type ViewMode = 'timeline' | 'places' | 'albums' | 'chat';
@@ -55,7 +56,6 @@ interface ChatMessage {
 const formatDate = new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' });
 const monthLabel = new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' });
 const CHAT_STORAGE_KEY = 'memoriya-chat-v2';
-const DRIVE_SESSION_KEY = 'memoriya-drive-session-v1';
 const DRIVE_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
 
 interface DriveSessionSnapshot {

@@ -3,8 +3,9 @@ import { motion } from 'framer-motion';
 import { CalendarDays, Heart, MapPin, Sparkles, Star } from 'lucide-react';
 import MemoryLightbox from '../components/MemoryLightbox';
 import { useTheme } from '../context/ThemeContext';
-import { SAMPLE_MEMORIES, groupMemoriesByYear } from '../data/memories';
+import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
+import { readDriveMemories } from '../services/driveLibrary';
 
 const MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -30,7 +31,8 @@ const Timeline: React.FC = () => {
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [filterYear, setFilterYear] = useState<number | null>(null);
 
-  const years = groupMemoriesByYear(SAMPLE_MEMORIES);
+  const driveMemories = readDriveMemories();
+  const years = groupMemoriesByYear(driveMemories);
   const filteredYears = filterYear ? years.filter(year => year.year === filterYear) : years;
 
   return (
@@ -77,6 +79,14 @@ const Timeline: React.FC = () => {
           );
         })}
       </motion.div>
+
+      {driveMemories.length === 0 && (
+        <div className="neon-card mx-auto max-w-xl p-8 text-center">
+          <Sparkles className="mx-auto mb-3" size={28} style={{ color: config.primary }} />
+          <p className="font-black text-white">No Drive timeline yet.</p>
+          <p className="mt-2 text-sm leading-6 text-white/56">Connect Google Drive in Memoriya to show your own photos and videos here.</p>
+        </div>
+      )}
 
       <div className="relative">
         <div
@@ -182,7 +192,7 @@ const Timeline: React.FC = () => {
         </motion.div>
       </div>
 
-      <MemoryLightbox memory={selectedMemory} memories={SAMPLE_MEMORIES} onClose={() => setSelectedMemory(null)} />
+      <MemoryLightbox memory={selectedMemory} memories={driveMemories} onClose={() => setSelectedMemory(null)} />
     </div>
   );
 };

@@ -28,7 +28,7 @@ let app: FirebaseApp | null = null;
 
 export const getFirebaseAuth = () => {
   if (!isFirebaseConfigured) {
-    throw new Error('Firebase is not configured. Add your VITE_FIREBASE_* values in .env and restart the dev server.');
+    throw new Error('Firebase is not configured for this deployment. Add VITE_FIREBASE_* values in the hosting environment and redeploy.');
   }
 
   app ||= initializeApp(firebaseConfig);

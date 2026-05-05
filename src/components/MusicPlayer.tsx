@@ -23,7 +23,7 @@ const MusicPlayer: React.FC = () => {
   const prevTrack = () => setCurrentTrack((currentTrack - 1 + TRACKS.length) % TRACKS.length);
 
   return (
-    <div className="fixed bottom-4 right-4 z-50" style={{ fontFamily: 'Inter, sans-serif' }}>
+    <div className="music-player fixed bottom-4 right-4 z-50" style={{ fontFamily: 'Inter, sans-serif' }}>
       <AnimatePresence>
         {expanded && (
           <motion.div initial={{ opacity: 0, y: 18, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 18, scale: 0.95 }} className="neon-card mb-3 min-w-[280px] p-4">

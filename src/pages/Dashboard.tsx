@@ -5,8 +5,9 @@ import DriveConnectPanel from '../components/DriveConnectPanel';
 import MemoryLightbox from '../components/MemoryLightbox';
 import { useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
-import { SAMPLE_MEMORIES, groupMemoriesByYear } from '../data/memories';
+import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
+import { readDriveMemories } from '../services/driveLibrary';
 import { buildRecapSections } from '../services/memoryOrganizer';
 
 interface Props {
@@ -23,21 +24,22 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
   const { config } = useTheme();
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [query, setQuery] = useState('');
+  const driveMemories = readDriveMemories();
 
-  const years = groupMemoriesByYear(SAMPLE_MEMORIES);
-  const favorites = SAMPLE_MEMORIES.filter(memory => memory.isFavorite);
-  const places = new Set(SAMPLE_MEMORIES.map(memory => memory.location).filter(Boolean)).size;
-  const recaps = useMemo(() => buildRecapSections(SAMPLE_MEMORIES), []);
+  const years = groupMemoriesByYear(driveMemories);
+  const favorites = driveMemories.filter(memory => memory.isFavorite);
+  const places = new Set(driveMemories.map(memory => memory.location).filter(Boolean)).size;
+  const recaps = useMemo(() => buildRecapSections(driveMemories), [driveMemories]);
 
   const filteredMemories = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return SAMPLE_MEMORIES;
-    return SAMPLE_MEMORIES.filter(memory =>
+    if (!needle) return driveMemories;
+    return driveMemories.filter(memory =>
       [memory.title, memory.caption, memory.location, memory.event, ...(memory.tags || [])]
         .filter(Boolean)
         .some(value => String(value).toLowerCase().includes(needle))
     );
-  }, [query]);
+  }, [driveMemories, query]);
 
   const quickModes = [
     { id: 'tree', label: 'Memory Tree', desc: 'Branch into every year and open each glowing photo node.', Icon: TreePine, color: '#36f1cd' },
@@ -58,7 +60,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
             Welcome back, {user?.name?.split(' ')[0] || 'friend'}.
           </h1>
           <p className="mt-4 max-w-2xl text-sm leading-7 text-white/64 md:text-base">
-            {SAMPLE_MEMORIES.length} moments are ready. Search, open favorites, jump into the tree, or let the story mode run.
+            {driveMemories.length} Drive moments are ready. Search, open favorites, jump into the tree, or let story mode run.
           </p>
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">
@@ -79,7 +81,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
 
         <div className="grid grid-cols-2 gap-3">
           {[
-            { label: 'Memories', value: SAMPLE_MEMORIES.length, Icon: Camera },
+            { label: 'Memories', value: driveMemories.length, Icon: Camera },
             { label: 'Favorites', value: favorites.length, Icon: Heart },
             { label: 'Years', value: years.length, Icon: CalendarDays },
             { label: 'Places', value: places, Icon: MapPin },
@@ -137,6 +139,11 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
           </button>
         </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {recaps.length === 0 && (
+            <div className="neon-card p-6 text-center text-sm text-white/56 md:col-span-2 xl:col-span-4">
+              Connect Google Drive in Memoriya to generate Drive recaps.
+            </div>
+          )}
           {recaps.map(recap => (
             <motion.button key={recap.id} whileHover={{ y: -5 }} onClick={() => setSelectedMemory(recap.memories[0])} className="neon-card overflow-hidden p-0 text-left">
               <img src={recap.memories[0].thumbnail} alt={recap.title} className="h-36 w-full object-cover" loading="lazy" />
@@ -208,7 +215,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
         </div>
       </motion.section>
 
-      <MemoryLightbox memory={selectedMemory} memories={SAMPLE_MEMORIES} onClose={() => setSelectedMemory(null)} />
+      <MemoryLightbox memory={selectedMemory} memories={driveMemories} onClose={() => setSelectedMemory(null)} />
     </div>
   );
 };

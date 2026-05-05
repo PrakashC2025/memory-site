@@ -19,7 +19,7 @@ const Login: React.FC = () => {
   const submit = async () => {
     setLocalError('');
     if (!firebaseReady) {
-      setLocalError('Firebase is not configured. Add your VITE_FIREBASE_* values in .env and restart the server.');
+      setLocalError('Firebase is not configured for this deployment. Add VITE_FIREBASE_* values in Vercel Environment Variables, then redeploy.');
       return;
     }
     if (!email.trim() || !password) {
@@ -46,7 +46,7 @@ const Login: React.FC = () => {
   const googleLogin = async () => {
     setLocalError('');
     if (!firebaseReady) {
-      setLocalError('Firebase is not configured. Add your VITE_FIREBASE_* values in .env and restart the server.');
+      setLocalError('Firebase is not configured for this deployment. Add VITE_FIREBASE_* values in Vercel Environment Variables, then redeploy.');
       return;
     }
     try {
