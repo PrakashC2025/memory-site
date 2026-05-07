@@ -67,7 +67,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
       <img
         src={src}
         alt={alt ?? memory.title}
-        className={className}
+        className={`${className} drive-media-preview`}
         loading={eager ? 'eager' : 'lazy'}
         decoding="async"
         referrerPolicy="no-referrer"
@@ -79,7 +79,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   }
 
   return (
-    <span className={`drive-preview-fallback ${className}`}>
+    <span className={`drive-preview-fallback ${className} drive-media-preview`}>
       {memory.type === 'video' ? <Play size={24} /> : <Image size={24} />}
       <strong>{memory.title}</strong>
       <small>{memory.type === 'video' ? 'Video from Drive' : 'Photo from Drive'}</small>

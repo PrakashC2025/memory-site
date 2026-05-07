@@ -1,16 +1,12 @@
-const CACHE_NAME = "memoriya-shell-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHE_NAME = "memoriya-runtime-v4";
 
 self.addEventListener("install", event => {
-  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)));
   self.skipWaiting();
 });
 
 self.addEventListener("activate", event => {
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)))
-    )
+    caches.keys().then(keys => Promise.all(keys.map(key => caches.delete(key))))
   );
   self.clients.claim();
 });
@@ -19,16 +15,19 @@ self.addEventListener("fetch", event => {
   const { request } = event;
   if (request.method !== "GET") return;
 
+  if (request.mode === "navigate") {
+    event.respondWith(
+      fetch(request, { cache: "no-store" }).catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  if (request.url.includes("googleusercontent.com") || request.url.includes("google.com/thumbnail") || request.url.includes("googleapis.com/drive")) {
+    event.respondWith(fetch(request));
+    return;
+  }
+
   event.respondWith(
-    caches.match(request).then(cached => {
-      if (cached) return cached;
-      return fetch(request).then(response => {
-        const copy = response.clone();
-        if (request.destination === "image" || request.mode === "navigate") {
-          caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
-        }
-        return response;
-      });
-    })
+    fetch(request).catch(() => caches.match(request))
   );
 });
