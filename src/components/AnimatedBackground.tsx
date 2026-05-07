@@ -30,6 +30,29 @@ const AnimatedBackground: React.FC = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
+    const lowMemory = 'deviceMemory' in navigator && Number(navigator.deviceMemory) <= 4;
+    if (reduceMotion || coarsePointer || lowMemory || window.innerWidth < 820) {
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const background = ctx.createLinearGradient(0, 0, width, height);
+      background.addColorStop(0, config.gradientFrom);
+      background.addColorStop(0.62, config.gradientVia);
+      background.addColorStop(1, config.gradientTo);
+      ctx.fillStyle = background;
+      ctx.fillRect(0, 0, width, height);
+      return;
+    }
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -39,12 +62,12 @@ const AnimatedBackground: React.FC = () => {
     let tick = 0;
 
     const seedParticles = () => {
-      const count = Math.min(54, Math.max(26, Math.floor((width * height) / 32000)));
+      const count = Math.min(28, Math.max(14, Math.floor((width * height) / 76000)));
       particlesRef.current = Array.from({ length: count }, (_, i) => ({
         x: Math.random() * width,
         y: Math.random() * height,
-        vx: (Math.random() - 0.5) * 0.34,
-        vy: (Math.random() - 0.5) * 0.28,
+        vx: (Math.random() - 0.5) * 0.18,
+        vy: (Math.random() - 0.5) * 0.14,
         size: Math.random() * 1.9 + 0.6,
         alpha: Math.random() * 0.52 + 0.18,
         phase: Math.random() * Math.PI * 2,
@@ -53,7 +76,7 @@ const AnimatedBackground: React.FC = () => {
     };
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       width = window.innerWidth;
       height = window.innerHeight;
       canvas.width = Math.floor(width * dpr);
@@ -76,10 +99,8 @@ const AnimatedBackground: React.FC = () => {
       ctx.globalCompositeOperation = 'screen';
       ctx.strokeStyle = gradient;
       ctx.lineWidth = 34 + Math.sin(tick * 0.013 + index) * 10;
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 28;
       ctx.beginPath();
-      for (let x = -80; x <= width + 80; x += 24) {
+      for (let x = -80; x <= width + 80; x += 40) {
         const y =
           yBase +
           Math.sin(x * 0.006 + tick * 0.012 + offset) * 56 +
@@ -101,7 +122,7 @@ const AnimatedBackground: React.FC = () => {
       ctx.fillStyle = background;
       ctx.fillRect(0, 0, width, height);
 
-      for (let i = 0; i < 4; i += 1) {
+      for (let i = 0; i < 2; i += 1) {
         drawRibbon(i, colors[i % colors.length], i * 1.7);
       }
 
@@ -136,13 +157,13 @@ const AnimatedBackground: React.FC = () => {
         if (p.y < -10) p.y = height + 10;
         if (p.y > height + 10) p.y = -10;
 
-        for (let j = i + 1; j < particles.length; j += 1) {
+        for (let j = i + 1; j < particles.length; j += 2) {
           const other = particles[j];
           const dx = p.x - other.x;
           const dy = p.y - other.y;
           const dist = Math.hypot(dx, dy);
-          if (dist < 118) {
-            const alpha = (1 - dist / 118) * 0.13;
+          if (dist < 82) {
+            const alpha = (1 - dist / 82) * 0.08;
             ctx.strokeStyle = hexToRgba(p.color, alpha);
             ctx.lineWidth = 1;
             ctx.beginPath();
@@ -156,8 +177,6 @@ const AnimatedBackground: React.FC = () => {
         ctx.save();
         ctx.globalCompositeOperation = 'screen';
         ctx.fillStyle = hexToRgba(p.color, pulse);
-        ctx.shadowColor = p.color;
-        ctx.shadowBlur = 12;
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
         ctx.fill();
@@ -171,7 +190,7 @@ const AnimatedBackground: React.FC = () => {
       ctx.fillRect(0, 0, width, height);
 
       tick += 1;
-      frameRef.current = requestAnimationFrame(draw);
+      frameRef.current = window.setTimeout(() => requestAnimationFrame(draw), 1000 / 30);
     };
 
     resize();
@@ -180,7 +199,7 @@ const AnimatedBackground: React.FC = () => {
 
     return () => {
       window.removeEventListener('resize', resize);
-      cancelAnimationFrame(frameRef.current);
+      window.clearTimeout(frameRef.current);
     };
   }, [config]);
 

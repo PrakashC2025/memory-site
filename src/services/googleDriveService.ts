@@ -218,6 +218,11 @@ export class GoogleDriveService {
   toMemory(file: DriveMediaFile, accessToken?: string): import('../data/memories').Memory {
     const date = normalizeDriveDate(this.extractBestDate(file));
     const parsed = new Date(date);
+    const isVideo = file.mimeType.startsWith('video/');
+    const mediaUrl = file.id
+      ? `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media${accessToken ? `&access_token=${encodeURIComponent(accessToken)}` : ''}`
+      : file.webContentLink || file.thumbnailUrl;
+    const previewUrl = sharpenDriveThumbnail(file.thumbnailUrl, accessToken) || mediaUrl;
     return {
       id: `drive-${file.id}`,
       title: file.name.replace(/\.[^.]+$/, ''),
@@ -225,14 +230,14 @@ export class GoogleDriveService {
       date,
       year: parsed.getFullYear(),
       month: parsed.getMonth() + 1,
-      type: file.mimeType.startsWith('video/') ? 'video' : 'photo',
-      url: file.webContentLink || file.thumbnailUrl,
-      thumbnail: file.thumbnailUrl,
+      type: isVideo ? 'video' : 'photo',
+      url: mediaUrl,
+      thumbnail: previewUrl,
       authToken: accessToken,
       driveFileId: file.id,
       mimeType: file.mimeType,
       location: file.imageMediaMetadata?.location ? 'Drive GPS metadata' : undefined,
-      tags: ['drive', file.mimeType.startsWith('video/') ? 'video' : 'photo'],
+      tags: ['drive', isVideo ? 'video' : 'photo'],
       event: 'Google Drive Import',
     };
   }
@@ -264,3 +269,10 @@ export const normalizeDriveDate = (value?: string) => {
 };
 
 export const googleDriveService = new GoogleDriveService();
+
+const sharpenDriveThumbnail = (url: string, _accessToken?: string) => {
+  if (!url) return url;
+  return url
+    .replace(/=s\d+(-[cp])?$/i, '=s1600')
+    .replace(/sz=w\d+/i, 'sz=w1600');
+};

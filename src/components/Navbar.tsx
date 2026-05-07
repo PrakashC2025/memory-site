@@ -42,6 +42,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
   const handleNavigate = (page: string) => {
     onNavigate(page);
     setMenuOpen(false);
+    setThemeOpen(false);
   };
 
   return (
@@ -51,20 +52,19 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
       transition={{ duration: 0.55, ease: 'easeOut' }}
       className="fixed left-0 right-0 top-0 z-40 flex items-center justify-between px-4 py-3 md:px-8"
       style={{
-        background: 'linear-gradient(180deg, rgba(3,4,7,0.88), rgba(3,4,7,0.58))',
-        backdropFilter: 'blur(22px) saturate(150%)',
+        background: 'linear-gradient(180deg, rgba(3,4,7,0.9), rgba(3,4,7,0.72))',
+        backdropFilter: 'blur(14px) saturate(130%)',
         borderBottom: `1px solid ${config.primary}24`,
-        boxShadow: `0 18px 80px rgba(0,0,0,0.36), 0 0 34px ${config.glow}`,
+        boxShadow: '0 10px 28px rgba(0,0,0,0.24)',
       }}
     >
-      <motion.button onClick={() => handleNavigate('dashboard')} className="flex items-center gap-3" whileHover={{ scale: 1.02 }}>
+      <motion.button onClick={() => handleNavigate('memoriya')} className="navbar-brand" whileHover={{ scale: 1.01 }}>
         <span
           className="flex h-10 w-10 items-center justify-center rounded-lg border"
           style={{
             borderColor: config.primary + '55',
             color: config.primary,
             background: `linear-gradient(135deg, ${config.primary}22, ${config.secondary}12)`,
-            boxShadow: `0 0 24px ${config.glow}`,
           }}
         >
           <Sparkles size={19} />
@@ -77,14 +77,14 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
         </span>
       </motion.button>
 
-      <div className="hidden items-center gap-1 md:flex">
+      <div className="navbar-links hidden items-center gap-1 md:flex">
         {NAV_ITEMS.map(({ id, label, Icon }) => {
           const active = currentPage === id;
           return (
             <button
               key={id}
               onClick={() => handleNavigate(id)}
-              className="relative flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-all"
+              className="navbar-link relative flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-all"
               style={{
                 color: active ? config.primary : 'rgba(255,255,255,0.66)',
                 background: active ? config.primary + '14' : 'transparent',
@@ -94,7 +94,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
                 <motion.span
                   layoutId="nav-indicator"
                   className="absolute inset-0 rounded-lg border"
-                  style={{ borderColor: config.primary + '4d', boxShadow: `inset 0 0 18px ${config.primary}18` }}
+                  style={{ borderColor: config.primary + '4d' }}
                 />
               )}
               <Icon className="relative z-10" size={16} />
@@ -104,14 +104,14 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
         })}
       </div>
 
-      <div className="flex items-center gap-2 md:gap-3">
+      <div className="navbar-actions flex items-center gap-2 md:gap-3">
         <div className="relative">
           <motion.button
             whileHover={{ scale: 1.06 }}
             whileTap={{ scale: 0.95 }}
             onClick={() => setThemeOpen(v => !v)}
             className="neon-button flex h-10 w-10 items-center justify-center"
-            style={{ color: config.primary, borderColor: config.primary + '55', boxShadow: `0 0 18px ${config.glow}` }}
+            style={{ color: config.primary, borderColor: config.primary + '55' }}
             aria-label="Change theme"
           >
             <Palette size={17} />
@@ -123,7 +123,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
                 initial={{ opacity: 0, scale: 0.92, y: -8 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.92, y: -8 }}
-                className="neon-card absolute right-0 top-12 z-50 min-w-[220px] p-3"
+                className="navbar-theme-menu neon-card absolute right-0 top-12 z-50 min-w-[220px] p-3"
               >
                 {(Object.entries(THEMES) as [Theme, typeof THEMES[Theme]][]).map(([key, item]) => (
                   <button
@@ -139,7 +139,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
                       border: `1px solid ${theme === key ? item.primary + '55' : 'transparent'}`,
                     }}
                   >
-                    <span className="h-3 w-3 rounded-full" style={{ background: item.primary, boxShadow: `0 0 14px ${item.primary}` }} />
+                    <span className="h-3 w-3 rounded-full" style={{ background: item.primary }} />
                     {item.label}
                   </button>
                 ))}
@@ -149,7 +149,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
         </div>
 
         <div
-          className="hidden items-center gap-2 rounded-lg border px-3 py-2 text-sm md:flex"
+          className="navbar-user hidden items-center gap-2 rounded-lg border px-3 py-2 text-sm md:flex"
           style={{ borderColor: config.primary + '33', background: 'rgba(255,255,255,0.06)', color: config.accent }}
         >
           <User size={15} />
@@ -160,7 +160,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
           whileHover={{ scale: 1.03 }}
           whileTap={{ scale: 0.96 }}
           onClick={logout}
-          className="neon-button hidden items-center gap-2 px-3 py-2 text-xs font-semibold md:flex"
+          className="navbar-signout neon-button hidden items-center gap-2 px-3 py-2 text-xs font-semibold md:flex"
         >
           <LogOut size={14} />
           Sign Out

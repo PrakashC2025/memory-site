@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import AppErrorBoundary from './components/AppErrorBoundary';
 import AnimatedBackground from './components/AnimatedBackground';
@@ -6,22 +6,30 @@ import MusicPlayer from './components/MusicPlayer';
 import Navbar from './components/Navbar';
 import { ThemeProvider } from './context/ThemeContext';
 import { UserProvider, useUser } from './context/UserContext';
-import Dashboard from './pages/Dashboard';
-import EventExplorer from './pages/EventExplorer';
 import Login from './pages/Login';
-import Memoriya from './pages/Memoriya';
-import MemoryTree from './pages/MemoryTree';
-import Settings from './pages/Settings';
-import StoryMode from './pages/StoryMode';
-import Timeline from './pages/Timeline';
+
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const EventExplorer = lazy(() => import('./pages/EventExplorer'));
+const Memoriya = lazy(() => import('./pages/Memoriya'));
+const MemoryTree = lazy(() => import('./pages/MemoryTree'));
+const Settings = lazy(() => import('./pages/Settings'));
+const StoryMode = lazy(() => import('./pages/StoryMode'));
+const Timeline = lazy(() => import('./pages/Timeline'));
 
 type Page = 'dashboard' | 'memoriya' | 'tree' | 'timeline' | 'events' | 'story' | 'settings';
 
 const PAGE_TRANSITIONS = {
-  initial: { opacity: 0, y: 18, filter: 'blur(8px)' },
-  animate: { opacity: 1, y: 0, filter: 'blur(0px)' },
-  exit: { opacity: 0, y: -18, filter: 'blur(8px)' },
+  initial: { opacity: 0, y: 12 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -8 },
 };
+
+const PageLoader: React.FC = () => (
+  <div className="memoriya-page-loader" role="status" aria-label="Loading page">
+    <span />
+    <strong>Preparing memories</strong>
+  </div>
+);
 
 const AppContent: React.FC = () => {
   const { authLoading, user } = useUser();
@@ -68,43 +76,45 @@ const AppContent: React.FC = () => {
       {currentPage !== 'story' && <Navbar currentPage={currentPage} onNavigate={navigate} />}
 
       <main className={`relative ${currentPage === 'story' ? '' : 'z-10'}`}>
-        <AnimatePresence mode="wait">
-          {currentPage === 'dashboard' && (
-            <motion.div key="dashboard" {...PAGE_TRANSITIONS} transition={{ duration: 0.45 }}>
-              <Dashboard onNavigate={navigate} />
-            </motion.div>
-          )}
-          {currentPage === 'memoriya' && (
-            <motion.div key="memoriya" {...PAGE_TRANSITIONS} transition={{ duration: 0.45 }}>
-              <Memoriya />
-            </motion.div>
-          )}
-          {currentPage === 'tree' && (
-            <motion.div key="tree" {...PAGE_TRANSITIONS} transition={{ duration: 0.45 }}>
-              <MemoryTree />
-            </motion.div>
-          )}
-          {currentPage === 'timeline' && (
-            <motion.div key="timeline" {...PAGE_TRANSITIONS} transition={{ duration: 0.45 }}>
-              <Timeline />
-            </motion.div>
-          )}
-          {currentPage === 'events' && (
-            <motion.div key="events" {...PAGE_TRANSITIONS} transition={{ duration: 0.45 }}>
-              <EventExplorer />
-            </motion.div>
-          )}
-          {currentPage === 'story' && (
-            <motion.div key="story" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.55 }}>
-              <StoryMode onExit={() => navigate('dashboard')} />
-            </motion.div>
-          )}
-          {currentPage === 'settings' && (
-            <motion.div key="settings" {...PAGE_TRANSITIONS} transition={{ duration: 0.45 }}>
-              <Settings />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <Suspense fallback={<PageLoader />}>
+          <AnimatePresence mode="wait">
+            {currentPage === 'dashboard' && (
+              <motion.div key="dashboard" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+                <Dashboard onNavigate={navigate} />
+              </motion.div>
+            )}
+            {currentPage === 'memoriya' && (
+              <motion.div key="memoriya" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+                <Memoriya />
+              </motion.div>
+            )}
+            {currentPage === 'tree' && (
+              <motion.div key="tree" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+                <MemoryTree />
+              </motion.div>
+            )}
+            {currentPage === 'timeline' && (
+              <motion.div key="timeline" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+                <Timeline />
+              </motion.div>
+            )}
+            {currentPage === 'events' && (
+              <motion.div key="events" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+                <EventExplorer />
+              </motion.div>
+            )}
+            {currentPage === 'story' && (
+              <motion.div key="story" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.28 }}>
+                <StoryMode onExit={() => navigate('dashboard')} />
+              </motion.div>
+            )}
+            {currentPage === 'settings' && (
+              <motion.div key="settings" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+                <Settings />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </Suspense>
       </main>
 
       {currentPage !== 'story' && <MusicPlayer />}

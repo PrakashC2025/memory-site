@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { CalendarDays, Heart, MapPin, Sparkles, Star } from 'lucide-react';
 import MemoryLightbox from '../components/MemoryLightbox';
+import DriveMediaPreview from '../components/DriveMediaPreview';
 import { useTheme } from '../context/ThemeContext';
 import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
@@ -149,13 +150,12 @@ const Timeline: React.FC = () => {
                           style={{ borderColor: yearColor + '33', maxWidth: '100%' }}
                         >
                           <div className="relative bg-black/35">
-                            <img
-                              src={memory.thumbnail}
+                            <DriveMediaPreview
+                              memory={memory}
                               alt={memory.title}
-                              className="block max-h-[340px] min-h-[170px] w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                              loading="lazy"
+                              className="block aspect-[16/10] w-full object-cover transition-transform duration-500 group-hover:scale-[1.025]"
                             />
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/72 via-black/10 to-transparent" />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/44 via-transparent to-transparent" />
                             {memory.isFavorite && (
                               <span className="absolute right-3 top-3 rounded-lg border bg-black/45 p-2" style={{ color: yearColor, borderColor: yearColor + '55' }}>
                                 <Star size={14} className="fill-current" />

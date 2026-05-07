@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CalendarDays, Film, Heart, Search, Sparkles, Star } from 'lucide-react';
+import DriveMediaPreview from '../components/DriveMediaPreview';
 import MemoryLightbox from '../components/MemoryLightbox';
 import { useTheme } from '../context/ThemeContext';
 import type { Memory } from '../data/memories';
@@ -93,7 +94,7 @@ const EventExplorer: React.FC = () => {
               className="neon-card overflow-hidden p-0 text-left"
             >
               <div className="relative h-40">
-                <img src={recap.memories[0].thumbnail} alt={recap.title} className="h-full w-full object-cover" loading="lazy" />
+                <DriveMediaPreview memory={recap.memories[0]} alt={recap.title} className="h-full w-full object-cover" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
                 <div className="absolute bottom-3 left-3 right-3">
                   <p className="text-lg font-black text-white">{recap.title}</p>
@@ -128,7 +129,7 @@ const EventExplorer: React.FC = () => {
                 >
                   <div className="grid md:grid-cols-[190px_1fr]">
                     <button onClick={() => setSelectedMemory(event.cover)} className="relative min-h-[190px] overflow-hidden text-left">
-                      <img src={event.cover.thumbnail} alt={event.title} className="h-full w-full object-cover transition-transform duration-500 hover:scale-105" loading="lazy" />
+                      <DriveMediaPreview memory={event.cover} alt={event.title} className="h-full w-full object-cover transition-transform duration-500 hover:scale-105" />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent" />
                       {event.cover.type === 'video' && <Film className="absolute right-3 top-3" size={18} style={{ color }} />}
                     </button>
@@ -148,7 +149,7 @@ const EventExplorer: React.FC = () => {
                       <div className="mt-4 flex -space-x-2">
                         {event.memories.slice(0, 5).map(memory => (
                           <button key={memory.id} onClick={() => setSelectedMemory(memory)} className="h-10 w-10 overflow-hidden rounded-lg border border-black">
-                            <img src={memory.thumbnail} alt={memory.title} className="h-full w-full object-cover" loading="lazy" />
+                            <DriveMediaPreview memory={memory} alt={memory.title} className="h-full w-full object-cover" />
                           </button>
                         ))}
                         {event.memories.some(memory => memory.isFavorite) && (

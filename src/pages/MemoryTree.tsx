@@ -37,6 +37,7 @@ import {
   WandSparkles,
 } from 'lucide-react';
 import MemoryLightbox from '../components/MemoryLightbox';
+import DriveMediaPreview from '../components/DriveMediaPreview';
 import type { SlideshowTemplate, SlideshowTransition } from '../components/MemoryLightbox';
 import { useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
@@ -346,41 +347,9 @@ const CinematicTreeBackground: React.FC = () => (
   </div>
 );
 
-const MemoryNodeMediaPreview: React.FC<{ memory: Memory }> = ({ memory }) => {
-  const initialSrc = memory.thumbnail || memory.url;
-  const [src, setSrc] = useState(initialSrc);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    setSrc(initialSrc);
-    setFailed(false);
-  }, [initialSrc, memory.id]);
-
-  if (failed) {
-    return (
-      <div className="memory-node-media-fallback">
-        <Camera size={20} />
-        <span>{memory.title}</span>
-      </div>
-    );
-  }
-
-  return (
-    <img
-      className="memory-node-image-preview"
-      src={src}
-      alt={memory.title}
-      loading="lazy"
-      onError={() => {
-        if (src !== memory.url && memory.url) {
-          setSrc(memory.url);
-          return;
-        }
-        setFailed(true);
-      }}
-    />
-  );
-};
+const MemoryNodeMediaPreview: React.FC<{ memory: Memory }> = ({ memory }) => (
+  <DriveMediaPreview memory={memory} className="memory-node-image-preview" />
+);
 
 const NodeCard: React.FC<{
   node: TreeNode;
@@ -418,7 +387,7 @@ const NodeCard: React.FC<{
           </>
         ) : (
           <div className="memory-branch-face" style={{ background: `linear-gradient(135deg, ${node.color}26, ${node.accent}18)` }}>
-            {node.kind === 'root' && node.memory && <img src={node.memory.thumbnail} alt="" loading="lazy" />}
+            {node.kind === 'root' && node.memory && <img src={node.memory.thumbnail} alt="" loading="lazy" decoding="async" />}
             {node.kind === 'year' && <CalendarDays size={22} />}
             {node.kind === 'event' && <FolderHeart size={21} />}
           </div>
@@ -522,7 +491,7 @@ const StudioPanel: React.FC<{
               className="memory-editor-tile"
               style={{ borderColor: dragId === item.id ? config.primary : 'rgba(255,255,255,0.14)' }}
             >
-              <img src={item.thumbnail} alt={item.title} loading="lazy" />
+              <DriveMediaPreview memory={item} alt={item.title} />
               <span>{item.title}</span>
             </button>
           ))}
@@ -587,7 +556,7 @@ const StudioPanel: React.FC<{
           {INVITATION_TEMPLATES.map(template => <button key={template} onClick={() => onAction(`${template} invitation preview generated.`)}>{template}</button>)}
         </div>
         <div className="memory-invite-preview">
-          <img src={(selectedNode?.memories?.[0] || memories[0])?.thumbnail} alt="" loading="lazy" />
+          {(selectedNode?.memories?.[0] || memories[0]) && <DriveMediaPreview memory={(selectedNode?.memories?.[0] || memories[0])} alt="" />}
           <div>
             <strong>Family Evening</strong>
             <span>Animated preview ready</span>
@@ -627,8 +596,8 @@ const MemoryTree: React.FC = () => {
   const [viewerAutoplay, setViewerAutoplay] = useState(false);
   const [viewerTemplate, setViewerTemplate] = useState<SlideshowTemplate>('auto');
   const [viewerTransition, setViewerTransition] = useState<SlideshowTransition>('branch-guided');
-  const [renderLimit, setRenderLimit] = useState(24);
-  const [zoom, setZoom] = useState(0.86);
+  const [renderLimit, setRenderLimit] = useState(48);
+  const [zoom, setZoom] = useState(0.72);
   const [query, setQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'favorites' | 'photos' | 'videos'>('all');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -729,40 +698,6 @@ const MemoryTree: React.FC = () => {
     return () => observer.disconnect();
   }, [model.nodes.length]);
 
-  useEffect(() => {
-    const shell = shellRef.current;
-    if (!shell) return;
-
-    const handleShellWheel = (event: WheelEvent) => {
-      const scroller = scrollerRef.current;
-      const target = event.target as HTMLElement | null;
-      if (!scroller || target?.closest('input, textarea, select')) return;
-
-      const verticalLimit = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-      const horizontalLimit = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
-      const horizontalDelta = event.shiftKey ? event.deltaY : event.deltaX;
-      let handled = false;
-
-      if (verticalLimit > 0 && event.deltaY !== 0) {
-        scroller.scrollTop = clamp(scroller.scrollTop + event.deltaY, 0, verticalLimit);
-        handled = true;
-      }
-
-      if (horizontalLimit > 0 && horizontalDelta !== 0) {
-        scroller.scrollLeft = clamp(scroller.scrollLeft + horizontalDelta, 0, horizontalLimit);
-        handled = true;
-      }
-
-      if (handled) {
-        userInteractedRef.current = true;
-        event.preventDefault();
-      }
-    };
-
-    shell.addEventListener('wheel', handleShellWheel, { passive: false });
-    return () => shell.removeEventListener('wheel', handleShellWheel);
-  }, []);
-
   const centerNode = (node: TreeNode) => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
@@ -803,8 +738,8 @@ const MemoryTree: React.FC = () => {
   const resetView = () => {
     setSelectedNodeId('root');
     setCollapsed(new Set());
-    setRenderLimit(24);
-    setZoom(0.86);
+    setRenderLimit(48);
+    setZoom(0.72);
     const root = model.nodeMap.get('root');
     if (root) window.setTimeout(() => centerNode(root), 40);
   };

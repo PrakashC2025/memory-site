@@ -37,7 +37,13 @@ const UserContext = createContext<UserContextType>({
 });
 
 export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => isFirebaseConfigured ? null : {
+    name: 'Memoriya Guest',
+    email: 'guest@memoriya.local',
+    driveConnected: false,
+    accessLevel: 'owner',
+    memorySpaceId: 'local-demo',
+  });
   const [authLoading, setAuthLoading] = useState(isFirebaseConfigured);
   const [authError, setAuthError] = useState('');
   const [isMusicOn, setMusicOn] = useState(false);
@@ -70,6 +76,10 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let unsubscribe = () => undefined;
     try {
+      if (!isFirebaseConfigured) {
+        setAuthLoading(false);
+        return unsubscribe;
+      }
       unsubscribe = authService.onChange(firebaseUser => {
         setUser(firebaseUser ? mapFirebaseUser(firebaseUser) : null);
         setAuthLoading(false);

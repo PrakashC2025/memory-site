@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CalendarDays, Camera, Clock3, Film, FolderHeart, Heart, MapPin, Search, Sparkles, Star, TreePine } from 'lucide-react';
 import DriveConnectPanel from '../components/DriveConnectPanel';
+import DriveMediaPreview from '../components/DriveMediaPreview';
 import MemoryLightbox from '../components/MemoryLightbox';
 import { useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
@@ -146,7 +147,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
           )}
           {recaps.map(recap => (
             <motion.button key={recap.id} whileHover={{ y: -5 }} onClick={() => setSelectedMemory(recap.memories[0])} className="neon-card overflow-hidden p-0 text-left">
-              <img src={recap.memories[0].thumbnail} alt={recap.title} className="h-36 w-full object-cover" loading="lazy" />
+              <DriveMediaPreview memory={recap.memories[0]} alt={recap.title} className="h-44 w-full object-cover" />
               <div className="p-4">
                 <p className="text-base font-black text-white">{recap.title}</p>
                 <p className="mt-1 text-xs leading-5 text-white/52">{recap.subtitle}</p>
@@ -185,7 +186,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
               onClick={() => setSelectedMemory(memory)}
               className="neon-card group mb-3 block w-full overflow-hidden p-0 text-left"
             >
-              <img src={memory.thumbnail} alt={memory.title} className="block h-auto w-full object-cover transition-transform duration-500 group-hover:scale-105" loading="lazy" />
+              <DriveMediaPreview memory={memory} alt={memory.title} className="block aspect-[4/3] w-full object-cover transition-transform duration-500 group-hover:scale-[1.025]" />
               <div className="p-3">
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="text-sm font-black leading-tight text-white">{memory.title}</h3>
@@ -207,7 +208,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
               <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-white/44">{year.memories.length} memories</p>
               <div className="mt-4 flex -space-x-2">
                 {year.memories.slice(0, 4).map(memory => (
-                  <img key={memory.id} src={memory.thumbnail} alt="" className="h-9 w-9 rounded-lg border border-black object-cover" loading="lazy" />
+                  <DriveMediaPreview key={memory.id} memory={memory} alt="" className="h-9 w-9 rounded-lg border border-black object-cover" />
                 ))}
               </div>
             </motion.button>
