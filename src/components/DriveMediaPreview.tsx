@@ -10,79 +10,100 @@ interface Props {
 }
 
 const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager }) => {
-  const candidates = useMemo(() => buildImageCandidates(memory), [memory]);
-  const [src, setSrc] = useState('');
+  const imageCandidates = useMemo(() => buildImageCandidates(memory), [memory]);
+  const [blobSrc, setBlobSrc] = useState('');
+  const [imageIndex, setImageIndex] = useState(0);
+  const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    let objectUrl = '';
-    const controller = new AbortController();
-    setSrc('');
+    setBlobSrc('');
+    setImageIndex(0);
+    setLoaded(false);
     setFailed(false);
 
-    const load = async () => {
-      for (const candidate of candidates) {
-        try {
-          if (!memory.authToken || candidate.startsWith('blob:') || !candidate.startsWith('http')) {
-            setSrc(candidate);
-            return;
-          }
+    if (memory.type !== 'photo' || !memory.authToken || !memory.driveFileId) return undefined;
 
-          const response = await fetch(candidate, {
-            headers: { Authorization: `Bearer ${memory.authToken}` },
-            signal: controller.signal,
-          });
-          if (!response.ok) throw new Error(`Preview failed ${response.status}`);
-          const blob = await response.blob();
-          objectUrl = URL.createObjectURL(blob);
-          setSrc(objectUrl);
-          return;
-        } catch {
-          // Try next candidate.
-        }
+    let objectUrl = '';
+    const controller = new AbortController();
+    const loadFullPhoto = async () => {
+      try {
+        const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(memory.driveFileId || '')}?alt=media`, {
+          headers: { Authorization: `Bearer ${memory.authToken}` },
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        setBlobSrc(objectUrl);
+      } catch {
+        // Direct thumbnail candidates below still get a chance.
       }
-      setFailed(true);
     };
 
-    void load();
+    void loadFullPhoto();
     return () => {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [candidates, memory.authToken]);
+  }, [memory.authToken, memory.driveFileId, memory.id, memory.type]);
 
-  if (failed || !src) {
+  const src = blobSrc || imageCandidates[imageIndex] || '';
+
+  const tryNextImage = () => {
+    if (blobSrc) {
+      setBlobSrc('');
+      return;
+    }
+    if (imageIndex + 1 < imageCandidates.length) {
+      setImageIndex(index => index + 1);
+      return;
+    }
+    setFailed(true);
+  };
+
+  if (!failed && src) {
     return (
-      <span className={`drive-preview-fallback ${className}`}>
-        {memory.type === 'video' ? <Play size={24} /> : <Image size={24} />}
-        <strong>{memory.title}</strong>
-        <small>{memory.type === 'video' ? 'Video from Drive' : 'Photo from Drive'}</small>
-      </span>
+      <img
+        src={src}
+        alt={alt ?? memory.title}
+        className={className}
+        loading={eager ? 'eager' : 'lazy'}
+        decoding="async"
+        referrerPolicy="no-referrer"
+        onLoad={() => setLoaded(true)}
+        onError={tryNextImage}
+        style={loaded ? undefined : { opacity: 0.01 }}
+      />
     );
   }
 
   return (
-    <img
-      src={src}
-      alt={alt ?? memory.title}
-      className={className}
-      loading={eager ? 'eager' : 'lazy'}
-      decoding="async"
-    />
+    <span className={`drive-preview-fallback ${className}`}>
+      {memory.type === 'video' ? <Play size={24} /> : <Image size={24} />}
+      <strong>{memory.title}</strong>
+      <small>{memory.type === 'video' ? 'Video from Drive' : 'Photo from Drive'}</small>
+    </span>
   );
 };
 
 const buildImageCandidates = (memory: Memory) => {
   const id = memory.driveFileId ? encodeURIComponent(memory.driveFileId) : '';
-  const thumb = memory.thumbnail;
-  const size = 1600;
-
-  return Array.from(new Set([
-    thumb,
-    id ? `https://drive.google.com/thumbnail?id=${id}&sz=w${size}` : '',
-    id ? `https://lh3.googleusercontent.com/d/${id}=w${size}` : '',
+  const thumbnail = sharpenThumbnail(memory.thumbnail);
+  const candidates = [
+    thumbnail,
+    id ? `https://drive.google.com/thumbnail?id=${id}&sz=w1600` : '',
+    id ? `https://lh3.googleusercontent.com/d/${id}=w1600` : '',
     memory.type === 'photo' ? memory.url : '',
-  ].filter(Boolean)));
+  ];
+  return Array.from(new Set(candidates.filter(Boolean)));
+};
+
+const sharpenThumbnail = (url: string) => {
+  if (!url) return '';
+  return url
+    .replace(/=s\d+(-[cp])?$/i, '=s1600')
+    .replace(/sz=w\d+/i, 'sz=w1600');
 };
 
 export default DriveMediaPreview;
