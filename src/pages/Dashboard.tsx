@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { CalendarDays, Camera, Clock3, Film, FolderHeart, Heart, MapPin, Search, Sparkles, Star, TreePine } from 'lucide-react';
 import DriveConnectPanel from '../components/DriveConnectPanel';
 import DriveMediaPreview from '../components/DriveMediaPreview';
+import DomeGallery from '../components/DomeGallery';
 import MemoryLightbox from '../components/MemoryLightbox';
 import { useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
@@ -20,6 +21,13 @@ const fadeUp = {
   animate: { opacity: 1, y: 0 },
 };
 
+const optimizeDomeImageUrl = (url: string) =>
+  url
+    .replace(/=s\d+(-[cp])?$/i, '=s720')
+    .replace(/sz=w\d+/i, 'sz=w720')
+    .replace(/w=\d+/i, 'w=900')
+    .replace(/q=\d+/i, 'q=82');
+
 const Dashboard: React.FC<Props> = ({ onNavigate }) => {
   const { user } = useUser();
   const { config } = useTheme();
@@ -30,6 +38,17 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
   const years = groupMemoriesByYear(driveMemories);
   const favorites = driveMemories.filter(memory => memory.isFavorite);
   const places = new Set(driveMemories.map(memory => memory.location).filter(Boolean)).size;
+  const domeImages = useMemo(
+    () =>
+      driveMemories
+        .filter(memory => memory.type === 'photo' && (memory.thumbnail || memory.url))
+        .slice(0, 48)
+        .map(memory => ({
+          src: optimizeDomeImageUrl(memory.thumbnail || memory.url),
+          alt: memory.title,
+        })),
+    [driveMemories],
+  );
   const recaps = useMemo(() => buildRecapSections(driveMemories), [driveMemories]);
 
   const filteredMemories = useMemo(() => {
@@ -128,6 +147,48 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
       <motion.section {...fadeUp} transition={{ duration: 0.6, delay: 0.18 }} className="mt-5">
         <DriveConnectPanel />
       </motion.section>
+
+      {domeImages.length > 0 && (
+        <motion.section {...fadeUp} transition={{ duration: 0.6, delay: 0.19 }} className="mt-8">
+          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div>
+              <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em]" style={{ color: config.primary }}>
+                <Camera size={15} />
+                Drive Photo Dome
+              </div>
+              <h2 className="text-2xl font-black text-white">Your photos, floating in one living gallery</h2>
+            </div>
+            <p className="max-w-md text-sm leading-6 text-white/52 md:text-right">
+              Drag to rotate the dome, tap a photo to open it, then tap outside to return.
+            </p>
+          </div>
+          <div
+            className="neon-card overflow-hidden p-0"
+            style={{ borderColor: `${config.primary}30`, boxShadow: `0 24px 90px rgba(0,0,0,.42), 0 0 48px ${config.glow}` }}
+          >
+            <div className="h-[430px] sm:h-[540px] lg:h-[680px]">
+              <DomeGallery
+                images={domeImages}
+                fit={0.72}
+                fitBasis="width"
+                minRadius={420}
+                maxRadius={980}
+                padFactor={0.18}
+                segments={25}
+                overlayBlurColor="#030407"
+                maxVerticalRotationDeg={6}
+                dragSensitivity={18}
+                dragDampening={0.82}
+                openedImageWidth="min(92vw, 1180px)"
+                openedImageHeight="min(78vh, 780px)"
+                imageBorderRadius="22px"
+                openedImageBorderRadius="24px"
+                grayscale={false}
+              />
+            </div>
+          </div>
+        </motion.section>
+      )}
 
       <motion.section {...fadeUp} transition={{ duration: 0.6, delay: 0.2 }} className="mt-8">
         <div className="mb-4 flex items-end justify-between gap-3">

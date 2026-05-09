@@ -29,7 +29,6 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         autoplay
         mode="story"
         template="auto"
-        transitionStyle="dream-dissolve"
         speed="slow"
         intensity="premium"
         onClose={onExit}

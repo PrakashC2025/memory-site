@@ -149,11 +149,16 @@ const Timeline: React.FC = () => {
                           className={`neon-card group w-full overflow-hidden p-0 text-left ${isLeft ? 'md:mr-auto' : 'md:ml-auto'}`}
                           style={{ borderColor: yearColor + '33', maxWidth: '100%' }}
                         >
-                          <div className="relative bg-black/35">
+                          <div className="timeline-memory-media relative bg-black/35">
+                            <DriveMediaPreview
+                              memory={memory}
+                              alt=""
+                              className="timeline-memory-backdrop"
+                            />
                             <DriveMediaPreview
                               memory={memory}
                               alt={memory.title}
-                              className="block aspect-[16/10] w-full object-cover transition-transform duration-500 group-hover:scale-[1.025]"
+                              className="timeline-memory-photo transition-transform duration-500 group-hover:scale-[1.018]"
                             />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/44 via-transparent to-transparent" />
                             {memory.isFavorite && (

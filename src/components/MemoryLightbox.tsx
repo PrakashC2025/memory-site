@@ -14,9 +14,11 @@ import {
   MapPin,
   Maximize2,
   Minimize2,
+  Music,
   Pause,
   Play,
   RotateCw,
+  Search,
   Share2,
   SlidersHorizontal,
   Sparkles,
@@ -39,7 +41,11 @@ export type SlideshowTransition =
   | 'dust-reveal'
   | 'branch-guided'
   | 'vertical-reveal'
-  | 'dream-dissolve';
+  | 'dream-dissolve'
+  | 'prism-wipe'
+  | 'flash-burn'
+  | 'cinema-zoom'
+  | 'split-scan';
 
 export type SlideshowTemplate =
   | 'auto'
@@ -214,7 +220,37 @@ const transitionVariants: Record<SlideshowTransition, any> = {
     animate: { opacity: 1, scale: 1, filter: 'blur(0px) saturate(1)' },
     exit: { opacity: 0, scale: 1.04, filter: 'blur(18px) saturate(1.3)' },
   },
+  'prism-wipe': {
+    initial: { opacity: 0, x: 96, scale: 1.08, rotateZ: 1.8, filter: 'hue-rotate(36deg) saturate(1.8) blur(8px)' },
+    animate: { opacity: 1, x: 0, scale: 1, rotateZ: 0, filter: 'hue-rotate(0deg) saturate(1) blur(0px)' },
+    exit: { opacity: 0, x: -72, scale: 1.04, rotateZ: -1.2, filter: 'hue-rotate(-28deg) saturate(1.5) blur(8px)' },
+  },
+  'flash-burn': {
+    initial: { opacity: 0, scale: 1.16, filter: 'brightness(2.3) contrast(1.45) saturate(1.7)' },
+    animate: { opacity: 1, scale: 1, filter: 'brightness(1) contrast(1) saturate(1)' },
+    exit: { opacity: 0, scale: 0.96, filter: 'brightness(0.45) contrast(1.8) saturate(0.72)' },
+  },
+  'cinema-zoom': {
+    initial: { opacity: 0, scale: 0.72, rotateX: 9, y: 72, filter: 'blur(10px) brightness(0.72)' },
+    animate: { opacity: 1, scale: 1, rotateX: 0, y: 0, filter: 'blur(0px) brightness(1)' },
+    exit: { opacity: 0, scale: 1.28, rotateX: -7, y: -54, filter: 'blur(12px) brightness(0.82)' },
+  },
+  'split-scan': {
+    initial: { opacity: 0, clipPath: 'polygon(0 0, 48% 0, 42% 100%, 0 100%)', x: -64, filter: 'contrast(1.6) saturate(1.25)' },
+    animate: { opacity: 1, clipPath: 'polygon(0 0, 100% 0, 100% 100%, 0 100%)', x: 0, filter: 'contrast(1) saturate(1)' },
+    exit: { opacity: 0, clipPath: 'polygon(58% 0, 100% 0, 100% 100%, 52% 100%)', x: 64, filter: 'contrast(1.4) saturate(0.9)' },
+  },
 };
+
+const STORY_TRANSITIONS: SlideshowTransition[] = [
+  'prism-wipe',
+  'flash-burn',
+  'cinema-zoom',
+  'split-scan',
+  'dust-reveal',
+  'parallax',
+  'dream-dissolve',
+];
 
 const transitionOptions: SlideshowTransition[] = [
   'crossfade',
@@ -228,6 +264,10 @@ const transitionOptions: SlideshowTransition[] = [
   'branch-guided',
   'vertical-reveal',
   'dream-dissolve',
+  'prism-wipe',
+  'flash-burn',
+  'cinema-zoom',
+  'split-scan',
 ];
 
 const templateOptions: Exclude<SlideshowTemplate, 'auto'>[] = ['wedding', 'kids-birthday', 'birthday', 'baby', 'travel', 'college', 'family', 'nostalgia'];
@@ -235,6 +275,87 @@ const templateOptions: Exclude<SlideshowTemplate, 'auto'>[] = ['wedding', 'kids-
 const labelize = (value: string) => value.replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
 
 const isVideoMemory = (memory: Memory) => memory.type === 'video';
+
+const canFetchDriveMedia = (memory: Memory) => Boolean(memory.driveFileId && memory.authToken);
+
+const buildDriveMediaEndpoint = (memory: Memory) =>
+  memory.driveFileId ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(memory.driveFileId)}?alt=media` : '';
+
+const STORY_MUSIC_SUGGESTIONS = [
+  { label: '96 Movie', query: '96 movie song' },
+  { label: 'Romantic', query: 'romantic instrumental song' },
+  { label: 'Birthday', query: 'happy birthday celebration song' },
+  { label: 'Travel', query: 'travel vlog cinematic music' },
+  { label: 'Family', query: 'family memories emotional music' },
+];
+
+type StoryMusicTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  query: string;
+  videoId?: string;
+  previewUrl?: string;
+};
+
+const NINETY_SIX_TRACKS: StoryMusicTrack[] = [
+  { id: '96-life-of-ram', title: 'The Life Of Ram', artist: 'Pradeep Kumar', query: '96 The Life Of Ram Pradeep Kumar Think Music', videoId: 'SwRSS5BT3V4' },
+  { id: '96-yean', title: 'Yean', artist: 'Gowri T.P.', query: '96 Yean Gowri TP Govind Vasantha' },
+  { id: '96-vasantha-kaalangal', title: 'Vasantha Kaalangal', artist: 'Chinmayi Sripaada', query: '96 Vasantha Kaalangal Think Music', videoId: '622tpLBfntI' },
+  { id: '96-thaabangale', title: 'Thaabangale', artist: 'Chinmayi Sripaada, Pradeep Kumar', query: '96 Thaabangale Think Music', videoId: 'Hpf5zGodMUk' },
+  { id: '96-iravingu-theevai', title: 'Iravingu Theevai', artist: 'Chinmayi Sripaada, Pradeep Kumar', query: '96 Iravingu Theevai Think Music', videoId: 'b3-lyX9O6kY' },
+  { id: '96-kaathalae-v1', title: 'Kaathalae Kaathalae', artist: 'Chinmayi, Govind Vasantha', query: '96 Kaathalae Kaathalae Think Music', videoId: 'vukt6c__-mw' },
+  { id: '96-anthaathi', title: 'Anthaathi', artist: 'Chinmayi, Govind Vasantha, Bhadra Rajin', query: '96 Anthaathi Think Music', videoId: 'BkVBlhChVVk' },
+  { id: '96-kaathalae-v2', title: 'Kaathalae Kaathalae Version 2', artist: 'Kalyani Menon, Chinmayi, Govind Vasantha', query: '96 Kaathalae Kaathalae Kalyani Menon' },
+];
+
+const getYouTubeVideoId = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{11})/,
+    /^[A-Za-z0-9_-]{11}$/,
+  ];
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    if (match) return match[1] || match[0];
+  }
+  return '';
+};
+
+const buildYouTubeAudioSrc = (track: StoryMusicTrack) => {
+  const origin = typeof window === 'undefined' ? '' : `&origin=${encodeURIComponent(window.location.origin)}`;
+  if (track.videoId) {
+    return `https://www.youtube.com/embed/${track.videoId}?autoplay=1&loop=1&playlist=${track.videoId}&controls=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1${origin}`;
+  }
+  return `https://www.youtube.com/embed?listType=search&list=${encodeURIComponent(track.query)}&autoplay=1&controls=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1${origin}`;
+};
+
+const buildStoryMusicResults = (value: string): StoryMusicTrack[] => {
+  const query = value.trim();
+  if (!query) return [];
+  const normalized = query.toLowerCase();
+  if (normalized.includes('96') || normalized.includes('life of ram') || normalized.includes('kaathalae')) {
+    return NINETY_SIX_TRACKS;
+  }
+  return [
+    {
+      id: `search-${normalized}`,
+      title: query,
+      artist: 'YouTube search',
+      query,
+      videoId: getYouTubeVideoId(query) || undefined,
+    },
+  ];
+};
+
+type ITunesTrack = {
+  trackId?: number;
+  trackName?: string;
+  artistName?: string;
+  collectionName?: string;
+  previewUrl?: string;
+};
 
 const makeDownloadFile = (memory: Memory) => {
   const payload = [
@@ -269,6 +390,7 @@ const MemoryLightbox: React.FC<Props> = ({
   const [imageLoaded, setImageLoaded] = useState(false);
   const [previewSrc, setPreviewSrc] = useState('');
   const [mediaSrc, setMediaSrc] = useState('');
+  const [driveObjectSrc, setDriveObjectSrc] = useState('');
   const [mediaFailed, setMediaFailed] = useState(false);
   const [highResReady, setHighResReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(autoplay);
@@ -278,6 +400,14 @@ const MemoryLightbox: React.FC<Props> = ({
   const [treeOverlayOn, setTreeOverlayOn] = useState(showTreeOverlay);
   const [muted, setMuted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [musicOpen, setMusicOpen] = useState(false);
+  const [musicQuery, setMusicQuery] = useState('');
+  const [youtubeSrc, setYoutubeSrc] = useState('');
+  const [audioSrc, setAudioSrc] = useState('');
+  const [youtubeLabel, setYoutubeLabel] = useState('');
+  const [musicResults, setMusicResults] = useState<StoryMusicTrack[]>([]);
+  const [activeMusicId, setActiveMusicId] = useState('');
+  const [musicSearching, setMusicSearching] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [currentSpeed, setCurrentSpeed] = useState<SpeedMode>(speed);
@@ -317,10 +447,12 @@ const MemoryLightbox: React.FC<Props> = ({
   const current = sequence[currentIdx] || memory;
   const resolvedTemplate = useMemo(() => selectedTemplate || detectTemplate(current || null, template), [current, selectedTemplate, template]);
   const templateStyle = TEMPLATE_STYLES[resolvedTemplate];
-  const activeTransition = selectedTransition || transitionStyle || templateStyle.defaultTransition;
+  const storyAutoTransition = STORY_TRANSITIONS[currentIdx % STORY_TRANSITIONS.length];
+  const activeTransition = selectedTransition || transitionStyle || (mode === 'story' ? storyAutoTransition : templateStyle.defaultTransition);
   const colors = templateStyle.colors;
   const duration = SPEED_MS[currentSpeed];
-  const transitionDuration = currentIntensity === 'dramatic' ? 0.95 : currentIntensity === 'soft' ? 0.48 : 0.68;
+  const transitionDuration = mode === 'story' ? (currentIntensity === 'dramatic' ? 1.08 : currentIntensity === 'soft' ? 0.62 : 0.82) : currentIntensity === 'dramatic' ? 0.95 : currentIntensity === 'soft' ? 0.48 : 0.68;
+  const hasStoryMusic = mode === 'story' && Boolean(youtubeSrc);
 
   const emitToast = (message: string) => {
     setToast(message);
@@ -332,6 +464,7 @@ const MemoryLightbox: React.FC<Props> = ({
     setImageLoaded(false);
     setMediaFailed(false);
     setHighResReady(false);
+    setDriveObjectSrc('');
     if (isVideoMemory(current)) {
       setPreviewSrc('');
       setMediaSrc(current.url);
@@ -341,6 +474,42 @@ const MemoryLightbox: React.FC<Props> = ({
     setPreviewSrc(quickPreview);
     setMediaSrc(current.url);
   }, [current?.id, current?.url]);
+
+  useEffect(() => {
+    if (!current || !canFetchDriveMedia(current)) return undefined;
+
+    let objectUrl = '';
+    const controller = new AbortController();
+
+    const loadDriveMedia = async () => {
+      try {
+        const endpoint = buildDriveMediaEndpoint(current);
+        if (!endpoint) return;
+        const response = await fetch(endpoint, {
+          headers: { Authorization: `Bearer ${current.authToken}` },
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        setDriveObjectSrc(objectUrl);
+        setMediaSrc(objectUrl);
+        setMediaFailed(false);
+        setHighResReady(true);
+      } catch {
+        if (!controller.signal.aborted && !previewSrc && !current.thumbnail) {
+          setMediaFailed(true);
+        }
+      }
+    };
+
+    void loadDriveMedia();
+
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [current?.authToken, current?.driveFileId, current?.id, current?.thumbnail]);
 
   useEffect(() => {
     if (!current || isVideoMemory(current) || mediaFailed || !current.url) {
@@ -388,6 +557,17 @@ const MemoryLightbox: React.FC<Props> = ({
   };
 
   const handleVideoError = () => {
+    if (driveObjectSrc && mediaSrc !== driveObjectSrc) {
+      setMediaSrc(driveObjectSrc);
+      setMediaFailed(false);
+      return;
+    }
+    if (current?.thumbnail) {
+      setImageLoaded(true);
+      setMediaFailed(true);
+      emitToast('Video preview is available, but this video format could not play in the browser.');
+      return;
+    }
     setImageLoaded(true);
     setMediaFailed(true);
     emitToast('This memory media could not be loaded.');
@@ -498,9 +678,9 @@ const MemoryLightbox: React.FC<Props> = ({
   }, [memory, stopAmbientMusic]);
 
   useEffect(() => {
-    if (memory && isPlaying && !muted) startAmbientMusic();
+    if (memory && isPlaying && !muted && !hasStoryMusic) startAmbientMusic();
     else stopAmbientMusic();
-  }, [isPlaying, memory, muted, startAmbientMusic, stopAmbientMusic]);
+  }, [hasStoryMusic, isPlaying, memory, muted, startAmbientMusic, stopAmbientMusic]);
 
   useEffect(() => {
     if (!isPlaying || !current) {
@@ -567,6 +747,71 @@ const MemoryLightbox: React.FC<Props> = ({
     });
   };
 
+  const searchStoryMusic = async (value = musicQuery) => {
+    const query = value.trim();
+    if (!query) {
+      emitToast('Search a song or paste a YouTube link.');
+      return;
+    }
+    setMusicSearching(true);
+    setMusicOpen(true);
+    try {
+      const searchTerm = query.toLowerCase().includes('96') ? '96 Govind Vasantha' : query;
+      const response = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(searchTerm)}&media=music&entity=song&limit=12`);
+      if (!response.ok) throw new Error(`Music search failed ${response.status}`);
+      const payload = (await response.json()) as { results?: ITunesTrack[] };
+      const onlineTracks = (payload.results || [])
+        .filter(track => track.previewUrl && track.trackName)
+        .map(track => ({
+          id: `itunes-${track.trackId || track.previewUrl}`,
+          title: `${track.trackName || 'Untitled song'} (30 sec preview)`,
+          artist: track.artistName || track.collectionName || 'Internet preview',
+          query: `${track.trackName || query} ${track.artistName || ''}`.trim(),
+          previewUrl: track.previewUrl,
+        }));
+
+      const fallback = buildStoryMusicResults(query);
+      const results = query.toLowerCase().includes('96') ? fallback : onlineTracks.length ? onlineTracks : fallback;
+      if (!results.length) {
+        emitToast('No playable songs found.');
+        return;
+      }
+      setMusicResults(results);
+      emitToast(tracks.length ? 'Audio results ready. Pick one to play.' : 'Song list ready. Pick one to play.');
+    } catch {
+      const results = buildStoryMusicResults(query);
+      setMusicResults(results);
+      emitToast(results.length ? 'Online audio search failed, showing fallback results.' : 'No playable songs found.');
+    } finally {
+      setMusicSearching(false);
+    }
+  };
+
+  const playStoryMusic = (value = musicQuery) => {
+    void searchStoryMusic(value);
+  };
+
+  const playStoryTrack = (track: StoryMusicTrack) => {
+    const shouldUseYouTube = Boolean(track.videoId);
+    setAudioSrc(!shouldUseYouTube && track.previewUrl ? track.previewUrl : '');
+    setYoutubeSrc(shouldUseYouTube ? buildYouTubeAudioSrc(track) : '');
+    setYoutubeLabel(`${track.title} - ${track.artist}`);
+    setActiveMusicId(track.id);
+    setMusicOpen(true);
+    setMuted(true);
+    setIsPlaying(true);
+    stopAmbientMusic();
+    emitToast(track.previewUrl ? 'Audio started.' : 'YouTube fallback started.');
+  };
+
+  const stopStoryMusic = () => {
+    setAudioSrc('');
+    setYoutubeSrc('');
+    setYoutubeLabel('');
+    setActiveMusicId('');
+    emitToast('Story soundtrack stopped.');
+  };
+
   const downloadCurrent = () => {
     if (!current) return;
     const url = makeDownloadFile(current);
@@ -626,10 +871,11 @@ const MemoryLightbox: React.FC<Props> = ({
   const variant = transitionVariants[activeTransition];
   const objectFit = fitMode === 'cover' ? 'cover' : 'contain';
   const mediaClass = `cinema-media cinema-media-${fitMode} cinema-frame-${templateStyle.frame}`;
+  const storyEffectClass = mode === 'story' ? `cinema-story-effect cinema-story-effect-${currentIdx % 5}` : '';
   const zoomScale = zoom * (activeTransition === 'ken-burns' && isPlaying ? 1.035 : 1);
   const counter = `${currentIdx + 1} / ${sequence.length}`;
   const isStoryMode = mode === 'story';
-  const baseImageSrc = previewSrc || current.thumbnail || current.url;
+  const baseImageSrc = previewSrc || current.thumbnail || driveObjectSrc || current.url;
   const showHighResLayer = !isVideoMemory(current) && !mediaFailed && highResReady && mediaSrc && mediaSrc !== baseImageSrc;
   const progressSegments = sequence.map((_, index) => (index < currentIdx ? 100 : index === currentIdx ? progress : 0));
   const mediaMotion = (() => {
@@ -769,6 +1015,11 @@ const MemoryLightbox: React.FC<Props> = ({
             <button onClick={() => setSettingsOpen(value => !value)} aria-label="Toggle effects panel" title="Toggle effects panel">
               <SlidersHorizontal size={17} />
             </button>
+            {mode === 'story' && (
+              <button onClick={() => setMusicOpen(value => !value)} aria-label="YouTube music" title="YouTube music">
+                <Music size={17} />
+              </button>
+            )}
             <button onClick={toggleFullscreen} aria-label="Fullscreen" title="Fullscreen">
               {isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
             </button>
@@ -818,7 +1069,7 @@ const MemoryLightbox: React.FC<Props> = ({
               animate="animate"
               exit="exit"
               transition={{ duration: transitionDuration, ease: [0.16, 1, 0.3, 1] }}
-              className={mediaClass}
+              className={`${mediaClass} ${storyEffectClass}`}
               style={{
                 borderColor: `${colors[0]}66`,
                 boxShadow: `0 0 90px ${colors[0]}33, 0 36px 120px rgba(0,0,0,0.72)`,
@@ -826,7 +1077,14 @@ const MemoryLightbox: React.FC<Props> = ({
             >
               <div className="cinema-frame-glow" style={{ background: `radial-gradient(circle at 50% 18%, ${colors[0]}36 0%, transparent 72%)` }} />
               <div className="cinema-frame-reflection" style={{ background: `linear-gradient(125deg, rgba(255,255,255,0.22), transparent 30%, transparent 62%, ${colors[1]}18 100%)` }} />
-              {!imageLoaded && (
+              {mode === 'story' && (
+                <>
+                  <div className="cinema-edit-flash" style={{ background: `linear-gradient(110deg, transparent, ${colors[0]}88, ${colors[1]}44, transparent)` }} />
+                  <div className="cinema-prism-shift" aria-hidden="true" />
+                  <div className="cinema-speed-lines" aria-hidden="true" />
+                </>
+              )}
+              {!imageLoaded && !baseImageSrc && !driveObjectSrc && (
                 <div className="cinema-loader">
                   <motion.div animate={{ rotate: 360 }} transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}>
                     <Sparkles size={34} />
@@ -845,12 +1103,15 @@ const MemoryLightbox: React.FC<Props> = ({
                 ) : isVideoMemory(current) ? (
                   <video
                     ref={videoRef}
-                    src={mediaSrc || current.url}
+                    src={driveObjectSrc || mediaSrc || current.url}
                     poster={current.thumbnail}
                     controls
                     autoPlay={isPlaying}
                     muted={muted}
                     playsInline
+                    preload="metadata"
+                    crossOrigin="anonymous"
+                    onLoadedMetadata={markMediaLoaded}
                     onLoadedData={markMediaLoaded}
                     onError={handleVideoError}
                     onEnded={goNext}
@@ -911,6 +1172,107 @@ const MemoryLightbox: React.FC<Props> = ({
         </AnimatePresence>
 
         <AnimatePresence>
+          {musicOpen && mode === 'story' && (
+            <motion.aside
+              initial={{ opacity: 0, x: 24, scale: 0.96 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 24, scale: 0.96 }}
+              className="cinema-story-music-panel"
+              aria-label="YouTube story music"
+              onClick={event => event.stopPropagation()}
+            >
+              <div className="cinema-story-music-head">
+                <Music size={16} />
+                <span>YouTube Soundtrack</span>
+              </div>
+              <form
+                onSubmit={event => {
+                  event.preventDefault();
+                  playStoryMusic();
+                }}
+              >
+                <Search size={15} />
+                <input
+                  value={musicQuery}
+                  onChange={event => setMusicQuery(event.target.value)}
+                  placeholder="Search song or paste YouTube link"
+                />
+                <button type="submit">{musicSearching ? '...' : 'Find'}</button>
+              </form>
+              <div className="cinema-story-music-chips">
+                {STORY_MUSIC_SUGGESTIONS.map(item => (
+                  <button
+                    key={item.label}
+                    onClick={() => {
+                      setMusicQuery(item.query);
+                      playStoryMusic(item.query);
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              {musicResults.length > 0 && (
+                <div className="cinema-story-music-results">
+                  {musicResults.map(track => (
+                    <button
+                      key={track.id}
+                      className={activeMusicId === track.id ? 'is-active' : ''}
+                      onClick={() => playStoryTrack(track)}
+                    >
+                      <span>
+                        <strong>{track.title}</strong>
+                        <small>{track.artist}</small>
+                      </span>
+                      <Play size={14} />
+                    </button>
+                  ))}
+                </div>
+              )}
+              {audioSrc || youtubeSrc ? (
+                <div className="cinema-audio-stage">
+                  {audioSrc ? (
+                    <audio
+                      src={audioSrc}
+                      controls
+                      autoPlay
+                      onPlay={() => {
+                        setMuted(true);
+                        setIsPlaying(true);
+                      }}
+                      onEnded={event => {
+                        event.currentTarget.currentTime = 0;
+                        void event.currentTarget.play().catch(() => {});
+                      }}
+                    />
+                  ) : (
+                    <iframe
+                      src={youtubeSrc}
+                      title="YouTube story audio"
+                      allow="autoplay; encrypted-media; picture-in-picture"
+                      allowFullScreen
+                      onLoad={event => {
+                        const frameWindow = event.currentTarget.contentWindow;
+                        window.setTimeout(() => {
+                          frameWindow?.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
+                        }, 350);
+                      }}
+                    />
+                  )}
+                  <div className="cinema-audio-visualizer" aria-hidden="true">
+                    {Array.from({ length: 24 }).map((_, index) => <span key={index} style={{ '--i': index } as React.CSSProperties} />)}
+                  </div>
+                  <div className="cinema-story-music-now">
+                    <span>{youtubeLabel || 'YouTube soundtrack'}</span>
+                    <button onClick={stopStoryMusic}>Stop</button>
+                  </div>
+                </div>
+              ) : (
+                <p className="cinema-story-music-note">Search "96 movie song" to see the 96 soundtrack list, then click any song to play audio.</p>
+              )}
+            </motion.aside>
+          )}
+
           {settingsOpen && (
             <motion.aside
               initial={{ opacity: 0, x: 24, scale: 0.96 }}
@@ -985,7 +1347,11 @@ const MemoryLightbox: React.FC<Props> = ({
                 style={{ borderColor: index === currentIdx ? colors[0] : 'rgba(255,255,255,0.16)' }}
                 aria-label={`Jump to slide ${index + 1}`}
               >
-                <img src={item.thumbnail} alt={item.title} loading="lazy" />
+                {item.thumbnail ? (
+                  <img src={item.thumbnail} alt={item.title} loading="lazy" />
+                ) : (
+                  <div className="cinema-filmstrip-fallback">{item.type === 'video' ? <Play size={16} /> : <ImageIcon size={16} />}</div>
+                )}
                 <span>{index + 1}</span>
               </button>
             ))}
