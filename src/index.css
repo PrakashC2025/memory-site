@@ -1232,6 +1232,44 @@ input[type="number"]::-webkit-inner-spin-button {
   color: #ffffff;
 }
 
+.cinema-auto-chrome,
+.cinema-caption,
+.cinema-story-music-panel {
+  transition:
+    opacity 240ms ease,
+    transform 240ms ease,
+    visibility 240ms ease;
+}
+
+.cinema-mode-story.cinema-ui-hidden {
+  cursor: none;
+}
+
+.cinema-mode-story.cinema-ui-hidden .cinema-auto-chrome,
+.cinema-mode-story.cinema-ui-hidden .cinema-caption,
+.cinema-mode-story.cinema-ui-hidden .cinema-story-music-panel {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.cinema-mode-story.cinema-ui-hidden .cinema-topbar,
+.cinema-mode-story.cinema-ui-hidden .cinema-story-music-panel {
+  transform: translateY(-12px);
+}
+
+.cinema-mode-story.cinema-ui-hidden .cinema-controls,
+.cinema-mode-story.cinema-ui-hidden .cinema-filmstrip,
+.cinema-mode-story.cinema-ui-hidden .cinema-caption {
+  transform: translate(-50%, 14px);
+}
+
+.cinema-mode-story.cinema-ui-hidden .cinema-stage-atmosphere span,
+.cinema-mode-story.cinema-ui-hidden .cinema-particles span,
+.cinema-mode-story.cinema-ui-hidden .cinema-sweep {
+  animation-play-state: paused;
+}
+
 .cinema-progress-rail {
   position: absolute;
   left: 1rem;
@@ -1778,6 +1816,25 @@ input[type="number"]::-webkit-inner-spin-button {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.075);
   padding: 0.48rem;
+}
+
+.cinema-local-audio-input {
+  display: none;
+}
+
+.cinema-local-audio-button {
+  display: inline-flex;
+  min-height: 2.45rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 1px solid rgba(155, 255, 236, 0.26);
+  border-radius: 8px;
+  background: rgba(155, 255, 236, 0.12);
+  color: #ffffff;
+  padding: 0.48rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 900;
 }
 
 .cinema-story-music-panel form svg {

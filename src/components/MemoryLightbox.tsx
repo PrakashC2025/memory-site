@@ -22,6 +22,7 @@ import {
   Share2,
   SlidersHorizontal,
   Sparkles,
+  Upload,
   Volume2,
   VolumeX,
   X,
@@ -75,6 +76,7 @@ interface Props {
   showTreeOverlay?: boolean;
   onIndexChange?: (memory: Memory, index: number) => void;
   onAutoplayChange?: (playing: boolean) => void;
+  onImportLocalMedia?: () => void;
 }
 
 const EMPTY_MEMORIES: Memory[] = [];
@@ -385,6 +387,7 @@ const MemoryLightbox: React.FC<Props> = ({
   showTreeOverlay = false,
   onIndexChange,
   onAutoplayChange,
+  onImportLocalMedia,
 }) => {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -405,6 +408,7 @@ const MemoryLightbox: React.FC<Props> = ({
   const [youtubeSrc, setYoutubeSrc] = useState('');
   const [audioSrc, setAudioSrc] = useState('');
   const [youtubeLabel, setYoutubeLabel] = useState('');
+  const [localAudioName, setLocalAudioName] = useState('');
   const [musicResults, setMusicResults] = useState<StoryMusicTrack[]>([]);
   const [activeMusicId, setActiveMusicId] = useState('');
   const [musicSearching, setMusicSearching] = useState(false);
@@ -417,11 +421,15 @@ const MemoryLightbox: React.FC<Props> = ({
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => new Set(memories.filter(item => item.isFavorite).map(item => item.id)));
   const [toast, setToast] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [chromeVisible, setChromeVisible] = useState(true);
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const frameRef = useRef<number>(0);
+  const chromeTimerRef = useRef<number | null>(null);
   const startedAtRef = useRef<number>(0);
   const pausedAtRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const localAudioInputRef = useRef<HTMLInputElement>(null);
+  const localAudioObjectRef = useRef('');
   const audioRef = useRef<{
     context: AudioContext;
     gain: GainNode;
@@ -673,9 +681,27 @@ const MemoryLightbox: React.FC<Props> = ({
     return () => {
       document.body.style.overflow = '';
       cancelAnimationFrame(frameRef.current);
+      if (chromeTimerRef.current) window.clearTimeout(chromeTimerRef.current);
+      if (localAudioObjectRef.current) URL.revokeObjectURL(localAudioObjectRef.current);
       stopAmbientMusic();
     };
   }, [memory, stopAmbientMusic]);
+
+  const showChrome = useCallback((keepOpen = false) => {
+    setChromeVisible(true);
+    if (chromeTimerRef.current) window.clearTimeout(chromeTimerRef.current);
+    if (mode !== 'story' || keepOpen) return;
+    chromeTimerRef.current = window.setTimeout(() => {
+      setChromeVisible(false);
+      setSettingsOpen(false);
+      setMusicOpen(false);
+    }, 2600);
+  }, [mode]);
+
+  useEffect(() => {
+    if (!memory) return;
+    showChrome();
+  }, [memory, showChrome]);
 
   useEffect(() => {
     if (memory && isPlaying && !muted && !hasStoryMusic) startAmbientMusic();
@@ -808,8 +834,25 @@ const MemoryLightbox: React.FC<Props> = ({
     setAudioSrc('');
     setYoutubeSrc('');
     setYoutubeLabel('');
+    setLocalAudioName('');
     setActiveMusicId('');
     emitToast('Story soundtrack stopped.');
+  };
+
+  const playLocalAudioFile = (file: File) => {
+    if (localAudioObjectRef.current) URL.revokeObjectURL(localAudioObjectRef.current);
+    const objectUrl = URL.createObjectURL(file);
+    localAudioObjectRef.current = objectUrl;
+    setAudioSrc(objectUrl);
+    setYoutubeSrc('');
+    setYoutubeLabel(file.name.replace(/\.[^.]+$/, ''));
+    setLocalAudioName(file.name);
+    setActiveMusicId('local-audio');
+    setMusicOpen(true);
+    setMuted(true);
+    setIsPlaying(true);
+    stopAmbientMusic();
+    emitToast('Local music started.');
   };
 
   const downloadCurrent = () => {
@@ -963,7 +1006,7 @@ const MemoryLightbox: React.FC<Props> = ({
     };
   })();
   const mediaMotionTransition = {
-    duration: isPlaying ? Math.max(duration / 1000, 4.8) : 0.42,
+    duration: isPlaying ? (mode === 'story' ? Math.max(duration / 1000, 5.2) : Math.max(duration / 1000, 4.8)) : 0.42,
     ease: [0.22, 1, 0.36, 1] as const,
     times: [0, 0.58, 1],
   };
@@ -975,10 +1018,15 @@ const MemoryLightbox: React.FC<Props> = ({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className={`cinema-viewer cinema-template-${resolvedTemplate} cinema-mode-${mode}`}
+        className={`cinema-viewer cinema-template-${resolvedTemplate} cinema-mode-${mode} ${chromeVisible ? 'cinema-ui-visible' : 'cinema-ui-hidden'}`}
         onClick={event => {
+          if (mode === 'story') {
+            showChrome();
+            return;
+          }
           if (event.target === event.currentTarget) onClose();
         }}
+        onMouseMove={() => showChrome()}
         onTouchStart={event => setTouchStart({ x: event.touches[0].clientX, y: event.touches[0].clientY })}
         onTouchEnd={event => handleTouchEnd(event.changedTouches[0].clientX, event.changedTouches[0].clientY)}
       >
@@ -988,7 +1036,7 @@ const MemoryLightbox: React.FC<Props> = ({
         </div>
 
         <div className={`cinema-particles cinema-particles-${templateStyle.particle}`} aria-hidden="true">
-          {Array.from({ length: 12 }).map((_, index) => <span key={index} style={{ '--i': index } as React.CSSProperties} />)}
+          {Array.from({ length: mode === 'story' ? 6 : 12 }).map((_, index) => <span key={index} style={{ '--i': index } as React.CSSProperties} />)}
         </div>
 
         {treeOverlayOn && (
@@ -999,7 +1047,7 @@ const MemoryLightbox: React.FC<Props> = ({
           </div>
         )}
 
-        <div className="cinema-topbar">
+        <div className="cinema-topbar cinema-auto-chrome">
           <div className="cinema-breadcrumb">
             <Sparkles size={15} />
             <span>{templateStyle.label}</span>
@@ -1020,6 +1068,11 @@ const MemoryLightbox: React.FC<Props> = ({
                 <Music size={17} />
               </button>
             )}
+            {mode === 'story' && onImportLocalMedia && (
+              <button onClick={onImportLocalMedia} aria-label="Use local photos or videos" title="Use local photos or videos">
+                <Upload size={17} />
+              </button>
+            )}
             <button onClick={toggleFullscreen} aria-label="Fullscreen" title="Fullscreen">
               {isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
             </button>
@@ -1029,7 +1082,7 @@ const MemoryLightbox: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="cinema-progress-rail">
+        <div className="cinema-progress-rail cinema-auto-chrome">
           {isStoryMode && sequence.length > 1 ? (
             progressSegments.map((value, index) => (
               <div key={sequence[index]?.id || index} className={`cinema-progress-segment ${index === currentIdx ? 'is-active' : ''}`}>
@@ -1045,10 +1098,10 @@ const MemoryLightbox: React.FC<Props> = ({
           )}
         </div>
 
-        <button className="cinema-nav cinema-nav-left" onClick={goPrev} aria-label="Previous memory">
+        <button className="cinema-nav cinema-nav-left cinema-auto-chrome" onClick={goPrev} aria-label="Previous memory">
           <ChevronLeft size={26} />
         </button>
-        <button className="cinema-nav cinema-nav-right" onClick={goNext} aria-label="Next memory">
+        <button className="cinema-nav cinema-nav-right cinema-auto-chrome" onClick={goNext} aria-label="Next memory">
           <ChevronRight size={26} />
         </button>
 
@@ -1077,7 +1130,7 @@ const MemoryLightbox: React.FC<Props> = ({
             >
               <div className="cinema-frame-glow" style={{ background: `radial-gradient(circle at 50% 18%, ${colors[0]}36 0%, transparent 72%)` }} />
               <div className="cinema-frame-reflection" style={{ background: `linear-gradient(125deg, rgba(255,255,255,0.22), transparent 30%, transparent 62%, ${colors[1]}18 100%)` }} />
-              {mode === 'story' && (
+              {mode === 'story' && chromeVisible && (
                 <>
                   <div className="cinema-edit-flash" style={{ background: `linear-gradient(110deg, transparent, ${colors[0]}88, ${colors[1]}44, transparent)` }} />
                   <div className="cinema-prism-shift" aria-hidden="true" />
@@ -1179,12 +1232,30 @@ const MemoryLightbox: React.FC<Props> = ({
               exit={{ opacity: 0, x: 24, scale: 0.96 }}
               className="cinema-story-music-panel"
               aria-label="YouTube story music"
-              onClick={event => event.stopPropagation()}
+              onClick={event => {
+                event.stopPropagation();
+                showChrome(true);
+              }}
             >
               <div className="cinema-story-music-head">
                 <Music size={16} />
-                <span>YouTube Soundtrack</span>
+                <span>Story Soundtrack</span>
               </div>
+              <input
+                ref={localAudioInputRef}
+                className="cinema-local-audio-input"
+                type="file"
+                accept="audio/*"
+                onChange={event => {
+                  const file = event.currentTarget.files?.[0];
+                  if (file) playLocalAudioFile(file);
+                  event.currentTarget.value = '';
+                }}
+              />
+              <button className="cinema-local-audio-button" onClick={() => localAudioInputRef.current?.click()}>
+                <Upload size={15} />
+                Use Local Music
+              </button>
               <form
                 onSubmit={event => {
                   event.preventDefault();
@@ -1263,7 +1334,7 @@ const MemoryLightbox: React.FC<Props> = ({
                     {Array.from({ length: 24 }).map((_, index) => <span key={index} style={{ '--i': index } as React.CSSProperties} />)}
                   </div>
                   <div className="cinema-story-music-now">
-                    <span>{youtubeLabel || 'YouTube soundtrack'}</span>
+                    <span>{localAudioName || youtubeLabel || 'Story soundtrack'}</span>
                     <button onClick={stopStoryMusic}>Stop</button>
                   </div>
                 </div>
@@ -1318,7 +1389,7 @@ const MemoryLightbox: React.FC<Props> = ({
           )}
         </AnimatePresence>
 
-        <div className="cinema-controls">
+        <div className="cinema-controls cinema-auto-chrome">
           <button onClick={goPrev} aria-label="Previous"><ChevronLeft size={18} /></button>
           <button className="cinema-play-button" onClick={togglePlaying} aria-label={isPlaying ? 'Pause slideshow' : 'Play slideshow'}>
             {isPlaying ? <Pause size={20} /> : <Play size={20} />}
@@ -1338,7 +1409,7 @@ const MemoryLightbox: React.FC<Props> = ({
         </div>
 
         {sequence.length > 1 && (
-          <div className="cinema-filmstrip hide-scroll">
+          <div className="cinema-filmstrip cinema-auto-chrome hide-scroll">
             {sequence.map((item, index) => (
               <button
                 key={item.id}
