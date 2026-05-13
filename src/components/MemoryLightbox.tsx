@@ -11,6 +11,7 @@ import {
   EyeOff,
   Heart,
   Image as ImageIcon,
+  ListPlus,
   MapPin,
   Maximize2,
   Minimize2,
@@ -20,6 +21,8 @@ import {
   RotateCw,
   Search,
   Share2,
+  SkipBack,
+  SkipForward,
   SlidersHorizontal,
   Sparkles,
   Upload,
@@ -30,6 +33,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import type { Memory } from '../data/memories';
+import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 
 export type SlideshowTransition =
   | 'crossfade'
@@ -62,6 +66,7 @@ export type SlideshowTemplate =
 export type MotionIntensity = 'soft' | 'premium' | 'dramatic';
 export type SpeedMode = 'slow' | 'balanced' | 'fast';
 export type FitMode = 'contain' | 'cover' | 'smart';
+type StoryEditStyle = 'auto' | 'marriage' | 'nature' | 'family' | 'birthday' | 'cinematic';
 
 interface Props {
   memory: Memory | null;
@@ -245,13 +250,13 @@ const transitionVariants: Record<SlideshowTransition, any> = {
 };
 
 const STORY_TRANSITIONS: SlideshowTransition[] = [
-  'prism-wipe',
-  'flash-burn',
-  'cinema-zoom',
-  'split-scan',
-  'dust-reveal',
-  'parallax',
   'dream-dissolve',
+  'film-fade',
+  'ken-burns',
+  'blur-dissolve',
+  'vertical-reveal',
+  'scrapbook',
+  'glow-pulse',
 ];
 
 const transitionOptions: SlideshowTransition[] = [
@@ -276,7 +281,33 @@ const templateOptions: Exclude<SlideshowTemplate, 'auto'>[] = ['wedding', 'kids-
 
 const labelize = (value: string) => value.replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
 
+const isTypingTarget = (target: EventTarget | null) => {
+  const element = target as HTMLElement | null;
+  if (!element) return false;
+  return element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.isContentEditable;
+};
+
+const STORY_EDIT_STYLES: Array<{ id: StoryEditStyle; label: string; template?: Exclude<SlideshowTemplate, 'auto'>; speed: SpeedMode; intensity: MotionIntensity }> = [
+  { id: 'auto', label: 'Auto', speed: 'slow', intensity: 'premium' },
+  { id: 'marriage', label: 'Marriage', template: 'wedding', speed: 'slow', intensity: 'premium' },
+  { id: 'nature', label: 'Nature', template: 'travel', speed: 'slow', intensity: 'soft' },
+  { id: 'family', label: 'Family', template: 'family', speed: 'slow', intensity: 'soft' },
+  { id: 'birthday', label: 'Birthday', template: 'birthday', speed: 'balanced', intensity: 'dramatic' },
+  { id: 'cinematic', label: 'Cinematic', template: 'nostalgia', speed: 'balanced', intensity: 'premium' },
+];
+
+const EDIT_STYLE_TRANSITIONS: Record<StoryEditStyle, SlideshowTransition[]> = {
+  auto: STORY_TRANSITIONS,
+  marriage: ['dream-dissolve', 'film-fade', 'blur-dissolve', 'ken-burns'],
+  nature: ['ken-burns', 'parallax', 'dream-dissolve', 'vertical-reveal'],
+  family: ['film-fade', 'crossfade', 'scrapbook', 'dream-dissolve'],
+  birthday: ['glow-pulse', 'cinema-zoom', 'flash-burn', 'prism-wipe'],
+  cinematic: ['cinema-zoom', 'split-scan', 'film-fade', 'dream-dissolve'],
+};
+
 const isVideoMemory = (memory: Memory) => memory.type === 'video';
+
+const getDecorativeMemorySrc = (memory: Memory) => memory.thumbnail || (!isVideoMemory(memory) ? memory.url : '');
 
 const canFetchDriveMedia = (memory: Memory) => Boolean(memory.driveFileId && memory.authToken);
 
@@ -298,6 +329,7 @@ type StoryMusicTrack = {
   query: string;
   videoId?: string;
   previewUrl?: string;
+  externalUrl?: string;
 };
 
 const NINETY_SIX_TRACKS: StoryMusicTrack[] = [
@@ -325,29 +357,68 @@ const getYouTubeVideoId = (value: string) => {
   return '';
 };
 
+const getDirectAudioUrl = (value: string) => {
+  const trimmed = value.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return '';
+  try {
+    const url = new URL(trimmed);
+    return /\.(mp3|m4a|aac|ogg|oga|wav|webm)$/i.test(url.pathname) ? trimmed : '';
+  } catch {
+    return '';
+  }
+};
+
 const buildYouTubeAudioSrc = (track: StoryMusicTrack) => {
   const origin = typeof window === 'undefined' ? '' : `&origin=${encodeURIComponent(window.location.origin)}`;
   if (track.videoId) {
-    return `https://www.youtube.com/embed/${track.videoId}?autoplay=1&loop=1&playlist=${track.videoId}&controls=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1${origin}`;
+    return `https://www.youtube.com/embed/${track.videoId}?autoplay=1&controls=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1${origin}`;
   }
-  return `https://www.youtube.com/embed?listType=search&list=${encodeURIComponent(track.query)}&autoplay=1&controls=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1${origin}`;
+  return '';
+};
+
+const buildYouTubePlaylistSrc = (tracks: StoryMusicTrack[], startIndex: number) => {
+  const current = tracks[startIndex];
+  if (!current?.videoId) return current ? buildYouTubeAudioSrc(current) : '';
+  const origin = typeof window === 'undefined' ? '' : `&origin=${encodeURIComponent(window.location.origin)}`;
+  const remainingVideoIds = tracks
+    .slice(startIndex + 1)
+    .map(track => track.videoId)
+    .filter(Boolean)
+    .join(',');
+  const playlist = remainingVideoIds ? `&playlist=${encodeURIComponent(remainingVideoIds)}` : '';
+  return `https://www.youtube.com/embed/${current.videoId}?autoplay=1&controls=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1${playlist}${origin}`;
 };
 
 const buildStoryMusicResults = (value: string): StoryMusicTrack[] => {
   const query = value.trim();
   if (!query) return [];
   const normalized = query.toLowerCase();
+  const directAudioUrl = getDirectAudioUrl(query);
+  if (directAudioUrl) {
+    const fileName = decodeURIComponent(directAudioUrl.split('/').pop() || 'Online audio');
+    return [{
+      id: `audio-url-${directAudioUrl}`,
+      title: fileName.replace(/\?.*$/, ''),
+      artist: 'Direct audio link',
+      query,
+      previewUrl: directAudioUrl,
+    }];
+  }
   if (normalized.includes('96') || normalized.includes('life of ram') || normalized.includes('kaathalae')) {
     return NINETY_SIX_TRACKS;
   }
   return [
     {
-      id: `search-${normalized}`,
+      id: `youtube-${normalized}-best`,
       title: query,
-      artist: 'YouTube search',
+      artist: getYouTubeVideoId(query) ? 'YouTube playable link' : 'Open online audio search',
       query,
       videoId: getYouTubeVideoId(query) || undefined,
+      externalUrl: `https://archive.org/search?query=${encodeURIComponent(`${query} audio`)}`,
     },
+    { id: `online-${normalized}-archive`, title: `${query} audio`, artist: 'Open Internet Archive search', query: `${query} audio`, externalUrl: `https://archive.org/search?query=${encodeURIComponent(`${query} audio`)}` },
+    { id: `online-${normalized}-freemusic`, title: `${query} free music`, artist: 'Open free music search', query: `${query} free music`, externalUrl: `https://freemusicarchive.org/search?adv=1&quicksearch=${encodeURIComponent(query)}` },
+    { id: `online-${normalized}-direct`, title: `${query} mp3 link`, artist: 'Find a direct playable audio link', query: `${query} mp3`, externalUrl: `https://www.google.com/search?q=${encodeURIComponent(`${query} mp3 direct audio`)}` },
   ];
 };
 
@@ -411,6 +482,9 @@ const MemoryLightbox: React.FC<Props> = ({
   const [localAudioName, setLocalAudioName] = useState('');
   const [musicResults, setMusicResults] = useState<StoryMusicTrack[]>([]);
   const [activeMusicId, setActiveMusicId] = useState('');
+  const [storyPlaylist, setStoryPlaylist] = useState<StoryMusicTrack[]>([]);
+  const [storyPlaylistIndex, setStoryPlaylistIndex] = useState(-1);
+  const [storyMusicPlaying, setStoryMusicPlaying] = useState(false);
   const [musicSearching, setMusicSearching] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
@@ -418,6 +492,7 @@ const MemoryLightbox: React.FC<Props> = ({
   const [currentIntensity, setCurrentIntensity] = useState<MotionIntensity>(intensity);
   const [selectedTransition, setSelectedTransition] = useState<SlideshowTransition | null>(transitionStyle || null);
   const [selectedTemplate, setSelectedTemplate] = useState<Exclude<SlideshowTemplate, 'auto'> | null>(null);
+  const [editStyle, setEditStyle] = useState<StoryEditStyle>('auto');
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => new Set(memories.filter(item => item.isFavorite).map(item => item.id)));
   const [toast, setToast] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -429,7 +504,9 @@ const MemoryLightbox: React.FC<Props> = ({
   const pausedAtRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const localAudioInputRef = useRef<HTMLInputElement>(null);
-  const localAudioObjectRef = useRef('');
+  const storyAudioElementRef = useRef<HTMLAudioElement>(null);
+  const storyYouTubeFrameRef = useRef<HTMLIFrameElement>(null);
+  const localAudioObjectRef = useRef<string[]>([]);
   const audioRef = useRef<{
     context: AudioContext;
     gain: GainNode;
@@ -446,7 +523,7 @@ const MemoryLightbox: React.FC<Props> = ({
     setProgress(0);
     setZoom(1);
     setRotation(0);
-  }, [memory, sequence]);
+  }, [memory?.id]);
 
   useEffect(() => {
     setIsPlaying(autoplay);
@@ -455,12 +532,24 @@ const MemoryLightbox: React.FC<Props> = ({
   const current = sequence[currentIdx] || memory;
   const resolvedTemplate = useMemo(() => selectedTemplate || detectTemplate(current || null, template), [current, selectedTemplate, template]);
   const templateStyle = TEMPLATE_STYLES[resolvedTemplate];
-  const storyAutoTransition = STORY_TRANSITIONS[currentIdx % STORY_TRANSITIONS.length];
+  const resolvedEditStyle: StoryEditStyle = editStyle === 'auto'
+    ? resolvedTemplate === 'wedding'
+      ? 'marriage'
+      : resolvedTemplate === 'travel'
+        ? 'nature'
+        : resolvedTemplate === 'family' || resolvedTemplate === 'baby'
+          ? 'family'
+          : resolvedTemplate === 'birthday' || resolvedTemplate === 'kids-birthday'
+            ? 'birthday'
+            : 'cinematic'
+    : editStyle;
+  const editTransitions = EDIT_STYLE_TRANSITIONS[resolvedEditStyle] || STORY_TRANSITIONS;
+  const storyAutoTransition = editTransitions[currentIdx % editTransitions.length];
   const activeTransition = selectedTransition || transitionStyle || (mode === 'story' ? storyAutoTransition : templateStyle.defaultTransition);
   const colors = templateStyle.colors;
   const duration = SPEED_MS[currentSpeed];
-  const transitionDuration = mode === 'story' ? (currentIntensity === 'dramatic' ? 1.08 : currentIntensity === 'soft' ? 0.62 : 0.82) : currentIntensity === 'dramatic' ? 0.95 : currentIntensity === 'soft' ? 0.48 : 0.68;
-  const hasStoryMusic = mode === 'story' && Boolean(youtubeSrc);
+  const transitionDuration = mode === 'story' ? (currentIntensity === 'dramatic' ? 1.28 : currentIntensity === 'soft' ? 0.82 : 1.02) : currentIntensity === 'dramatic' ? 0.95 : currentIntensity === 'soft' ? 0.48 : 0.68;
+  const hasStoryMusic = mode === 'story' && Boolean(youtubeSrc || audioSrc);
 
   const emitToast = (message: string) => {
     setToast(message);
@@ -491,14 +580,27 @@ const MemoryLightbox: React.FC<Props> = ({
 
     const loadDriveMedia = async () => {
       try {
+        const cacheKey = getStoryMediaCacheKey(current);
+        const cachedBlob = await readCachedStoryMedia(cacheKey);
+        if (cachedBlob) {
+          objectUrl = URL.createObjectURL(cachedBlob);
+          setDriveObjectSrc(objectUrl);
+          setMediaSrc(objectUrl);
+          setMediaFailed(false);
+          setHighResReady(true);
+          return;
+        }
+
         const endpoint = buildDriveMediaEndpoint(current);
         if (!endpoint) return;
         const response = await fetch(endpoint, {
           headers: { Authorization: `Bearer ${current.authToken}` },
           signal: controller.signal,
+          cache: 'force-cache',
         });
         if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
         const blob = await response.blob();
+        void writeCachedStoryMedia(cacheKey, blob, current.mimeType || blob.type);
         objectUrl = URL.createObjectURL(blob);
         setDriveObjectSrc(objectUrl);
         setMediaSrc(objectUrl);
@@ -662,6 +764,7 @@ const MemoryLightbox: React.FC<Props> = ({
   useEffect(() => {
     if (!memory) return;
     const handler = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
       if (event.key === 'Escape') onClose();
       if (event.key === 'ArrowRight') goNext();
       if (event.key === 'ArrowLeft') goPrev();
@@ -682,21 +785,29 @@ const MemoryLightbox: React.FC<Props> = ({
       document.body.style.overflow = '';
       cancelAnimationFrame(frameRef.current);
       if (chromeTimerRef.current) window.clearTimeout(chromeTimerRef.current);
-      if (localAudioObjectRef.current) URL.revokeObjectURL(localAudioObjectRef.current);
+      localAudioObjectRef.current.forEach(url => URL.revokeObjectURL(url));
+      localAudioObjectRef.current = [];
       stopAmbientMusic();
     };
   }, [memory, stopAmbientMusic]);
 
+  const clearChromeTimer = useCallback(() => {
+    if (chromeTimerRef.current) {
+      window.clearTimeout(chromeTimerRef.current);
+      chromeTimerRef.current = null;
+    }
+  }, []);
+
   const showChrome = useCallback((keepOpen = false) => {
     setChromeVisible(true);
-    if (chromeTimerRef.current) window.clearTimeout(chromeTimerRef.current);
+    clearChromeTimer();
     if (mode !== 'story' || keepOpen) return;
     chromeTimerRef.current = window.setTimeout(() => {
       setChromeVisible(false);
       setSettingsOpen(false);
       setMusicOpen(false);
-    }, 2600);
-  }, [mode]);
+    }, 4800);
+  }, [clearChromeTimer, mode]);
 
   useEffect(() => {
     if (!memory) return;
@@ -719,7 +830,7 @@ const MemoryLightbox: React.FC<Props> = ({
       const elapsed = now - startedAtRef.current;
       const percent = Math.min(100, (elapsed / duration) * 100);
       setProgress(percent);
-      if (elapsed >= duration && !isVideoMemory(current)) {
+      if (elapsed >= duration && (mode === 'story' || !isVideoMemory(current))) {
         pausedAtRef.current = 0;
         goNext();
         return;
@@ -729,7 +840,23 @@ const MemoryLightbox: React.FC<Props> = ({
     };
     frameRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frameRef.current);
-  }, [current, duration, goNext, isPlaying]);
+  }, [current, duration, goNext, isPlaying, mode]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !current || !isVideoMemory(current)) return;
+    if (mode === 'story') video.muted = true;
+    if (isPlaying) {
+      void video.play().catch(() => {
+        if (mode !== 'story') {
+          setIsPlaying(false);
+          emitToast('Tap play to start this video.');
+        }
+      });
+    } else {
+      video.pause();
+    }
+  }, [current?.id, current?.url, driveObjectSrc, isPlaying, mediaSrc, mode]);
 
   useEffect(() => {
     if (!current || !sequence.length) return;
@@ -757,11 +884,34 @@ const MemoryLightbox: React.FC<Props> = ({
   };
 
   const togglePlaying = () => {
-    setIsPlaying(value => !value);
+    const next = !isPlaying;
+    setIsPlaying(next);
     if (videoRef.current) {
-      if (videoRef.current.paused) void videoRef.current.play().catch(() => emitToast('Tap play to allow video playback.'));
+      if (next) void videoRef.current.play().catch(() => emitToast('Tap play to allow video playback.'));
       else videoRef.current.pause();
     }
+  };
+
+  const toggleStoryMusicPlaying = () => {
+    if (!audioSrc && !youtubeSrc) {
+      emitToast('Choose a song first.');
+      return;
+    }
+    setStoryMusicPlaying(value => {
+      const next = !value;
+      if (audioSrc && storyAudioElementRef.current) {
+        if (next) void storyAudioElementRef.current.play().catch(() => emitToast('Tap play to allow music.'));
+        else storyAudioElementRef.current.pause();
+      }
+      if (youtubeSrc && storyYouTubeFrameRef.current?.contentWindow) {
+        storyYouTubeFrameRef.current.contentWindow.postMessage(JSON.stringify({
+          event: 'command',
+          func: next ? 'playVideo' : 'pauseVideo',
+          args: [],
+        }), '*');
+      }
+      return next;
+    });
   };
 
   const toggleMute = () => {
@@ -782,28 +932,13 @@ const MemoryLightbox: React.FC<Props> = ({
     setMusicSearching(true);
     setMusicOpen(true);
     try {
-      const searchTerm = query.toLowerCase().includes('96') ? '96 Govind Vasantha' : query;
-      const response = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(searchTerm)}&media=music&entity=song&limit=12`);
-      if (!response.ok) throw new Error(`Music search failed ${response.status}`);
-      const payload = (await response.json()) as { results?: ITunesTrack[] };
-      const onlineTracks = (payload.results || [])
-        .filter(track => track.previewUrl && track.trackName)
-        .map(track => ({
-          id: `itunes-${track.trackId || track.previewUrl}`,
-          title: `${track.trackName || 'Untitled song'} (30 sec preview)`,
-          artist: track.artistName || track.collectionName || 'Internet preview',
-          query: `${track.trackName || query} ${track.artistName || ''}`.trim(),
-          previewUrl: track.previewUrl,
-        }));
-
-      const fallback = buildStoryMusicResults(query);
-      const results = query.toLowerCase().includes('96') ? fallback : onlineTracks.length ? onlineTracks : fallback;
+      const results = buildStoryMusicResults(query);
       if (!results.length) {
         emitToast('No playable songs found.');
         return;
       }
       setMusicResults(results);
-      emitToast(tracks.length ? 'Audio results ready. Pick one to play.' : 'Song list ready. Pick one to play.');
+      emitToast('YouTube song results ready. Pick one to play or add.');
     } catch {
       const results = buildStoryMusicResults(query);
       setMusicResults(results);
@@ -817,17 +952,93 @@ const MemoryLightbox: React.FC<Props> = ({
     void searchStoryMusic(value);
   };
 
-  const playStoryTrack = (track: StoryMusicTrack) => {
+  const setActiveStoryTrack = (track: StoryMusicTrack, playlist = storyPlaylist, index = storyPlaylistIndex) => {
+    if (!track.videoId && !track.previewUrl) {
+      if (track.externalUrl) window.open(track.externalUrl, '_blank', 'noopener,noreferrer');
+      setMusicOpen(true);
+      emitToast('Open a YouTube result, then paste its link here to play inside Memoriya.');
+      return;
+    }
     const shouldUseYouTube = Boolean(track.videoId);
     setAudioSrc(!shouldUseYouTube && track.previewUrl ? track.previewUrl : '');
-    setYoutubeSrc(shouldUseYouTube ? buildYouTubeAudioSrc(track) : '');
+    setYoutubeSrc(shouldUseYouTube ? buildYouTubePlaylistSrc(playlist, index) || buildYouTubeAudioSrc(track) : '');
     setYoutubeLabel(`${track.title} - ${track.artist}`);
+    setLocalAudioName(!shouldUseYouTube ? `${track.title} - ${track.artist}` : '');
     setActiveMusicId(track.id);
     setMusicOpen(true);
+    setSettingsOpen(false);
     setMuted(true);
-    setIsPlaying(true);
+    setStoryMusicPlaying(true);
     stopAmbientMusic();
-    emitToast(track.previewUrl ? 'Audio started.' : 'YouTube fallback started.');
+    showChrome(true);
+  };
+
+  const addStoryTrackToPlaylist = (track: StoryMusicTrack, playNow = false) => {
+    if (!track.videoId && !track.previewUrl) {
+      if (track.externalUrl) window.open(track.externalUrl, '_blank', 'noopener,noreferrer');
+      emitToast('Open a result, then paste a playable link here to add it.');
+      return;
+    }
+    setStoryPlaylist(previous => {
+      const existingIndex = previous.findIndex(item => item.id === track.id);
+      const next = existingIndex >= 0 ? previous : [...previous, track];
+      const index = existingIndex >= 0 ? existingIndex : next.length - 1;
+      if (playNow) {
+        setStoryPlaylistIndex(index);
+        setActiveStoryTrack(track, next, index);
+      }
+      return next;
+    });
+    emitToast(playNow ? 'Playlist started.' : 'Song added to playlist.');
+  };
+
+  const playStoryTrack = (track: StoryMusicTrack, index = musicResults.findIndex(item => item.id === track.id)) => {
+    if (!track.videoId && !track.previewUrl) {
+      setActiveStoryTrack(track);
+      return;
+    }
+    const playlist = musicResults.length ? musicResults : [track];
+    const playablePlaylist = playlist.filter(item => item.videoId || item.previewUrl);
+    const safeIndex = Math.max(0, playablePlaylist.findIndex(item => item.id === track.id));
+    setStoryPlaylist(playablePlaylist);
+    setStoryPlaylistIndex(safeIndex);
+    setActiveStoryTrack(track, playablePlaylist, safeIndex);
+    emitToast(track.previewUrl ? 'Playlist started.' : 'YouTube playlist started.');
+  };
+
+  const playPlaylistTrack = (index: number) => {
+    const track = storyPlaylist[index];
+    if (!track) return;
+    setStoryPlaylistIndex(index);
+    setActiveStoryTrack(track, storyPlaylist, index);
+    emitToast('Playing playlist song.');
+  };
+
+  const movePlaylistTrack = (index: number, direction: -1 | 1) => {
+    setStoryPlaylist(previous => {
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= previous.length) return previous;
+      const next = [...previous];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      setStoryPlaylistIndex(current => {
+        if (current === index) return nextIndex;
+        if (current === nextIndex) return index;
+        return current;
+      });
+      return next;
+    });
+  };
+
+  const playPreviousStoryTrack = () => {
+    if (!storyPlaylist.length) return;
+    const previousIndex = storyPlaylistIndex <= 0 ? storyPlaylist.length - 1 : storyPlaylistIndex - 1;
+    playPlaylistTrack(previousIndex);
+  };
+
+  const playNextStoryTrack = () => {
+    if (!storyPlaylist.length) return;
+    const nextIndex = storyPlaylistIndex < 0 || storyPlaylistIndex + 1 >= storyPlaylist.length ? 0 : storyPlaylistIndex + 1;
+    playPlaylistTrack(nextIndex);
   };
 
   const stopStoryMusic = () => {
@@ -836,23 +1047,35 @@ const MemoryLightbox: React.FC<Props> = ({
     setYoutubeLabel('');
     setLocalAudioName('');
     setActiveMusicId('');
+    setStoryPlaylistIndex(-1);
+    setStoryMusicPlaying(false);
     emitToast('Story soundtrack stopped.');
   };
 
-  const playLocalAudioFile = (file: File) => {
-    if (localAudioObjectRef.current) URL.revokeObjectURL(localAudioObjectRef.current);
-    const objectUrl = URL.createObjectURL(file);
-    localAudioObjectRef.current = objectUrl;
-    setAudioSrc(objectUrl);
-    setYoutubeSrc('');
-    setYoutubeLabel(file.name.replace(/\.[^.]+$/, ''));
-    setLocalAudioName(file.name);
-    setActiveMusicId('local-audio');
+  const addLocalAudioFiles = (files: FileList | File[]) => {
+    const tracks = Array.from(files).map((file, index) => {
+      const objectUrl = URL.createObjectURL(file);
+      localAudioObjectRef.current.push(objectUrl);
+      return {
+        id: `local-audio-${Date.now()}-${index}-${file.name}`,
+        title: file.name.replace(/\.[^.]+$/, ''),
+        artist: 'Local music',
+        query: file.name,
+        previewUrl: objectUrl,
+      };
+    });
+    if (!tracks.length) return;
+    setStoryPlaylist(previous => {
+      const next = [...previous, ...tracks];
+      if (storyPlaylistIndex < 0) {
+        setStoryPlaylistIndex(previous.length);
+        setActiveStoryTrack(tracks[0], next, previous.length);
+      }
+      return next;
+    });
     setMusicOpen(true);
-    setMuted(true);
-    setIsPlaying(true);
-    stopAmbientMusic();
-    emitToast('Local music started.');
+    setSettingsOpen(false);
+    emitToast(tracks.length === 1 ? 'Local song added.' : `${tracks.length} local songs added.`);
   };
 
   const downloadCurrent = () => {
@@ -912,15 +1135,31 @@ const MemoryLightbox: React.FC<Props> = ({
 
   const isFavorite = favoriteIds.has(current.id);
   const variant = transitionVariants[activeTransition];
+  const displayVariant = mode === 'story'
+    ? {
+        initial: { ...variant.initial, opacity: 0.22 },
+        animate: { ...variant.animate, opacity: 1 },
+        exit: { ...variant.exit, opacity: 0.22 },
+      }
+    : variant;
   const objectFit = fitMode === 'cover' ? 'cover' : 'contain';
   const mediaClass = `cinema-media cinema-media-${fitMode} cinema-frame-${templateStyle.frame}`;
-  const storyEffectClass = mode === 'story' ? `cinema-story-effect cinema-story-effect-${currentIdx % 5}` : '';
+  const storyEffectClass = mode === 'story' ? `cinema-story-effect cinema-story-effect-${currentIdx % 5} cinema-story-edit-${resolvedEditStyle}` : '';
   const zoomScale = zoom * (activeTransition === 'ken-burns' && isPlaying ? 1.035 : 1);
   const counter = `${currentIdx + 1} / ${sequence.length}`;
   const isStoryMode = mode === 'story';
   const baseImageSrc = previewSrc || current.thumbnail || driveObjectSrc || current.url;
   const showHighResLayer = !isVideoMemory(current) && !mediaFailed && highResReady && mediaSrc && mediaSrc !== baseImageSrc;
   const progressSegments = sequence.map((_, index) => (index < currentIdx ? 100 : index === currentIdx ? progress : 0));
+  const sideMemories = isStoryMode && sequence.length > 2
+    ? [-1, 1]
+        .map(offset => {
+          const item = sequence[(currentIdx + offset + sequence.length) % sequence.length];
+          return item ? { item, offset, src: getDecorativeMemorySrc(item) } : null;
+        })
+        .filter((entry): entry is { item: Memory; offset: number; src: string } => Boolean(entry?.src && entry.item.type === 'photo' && entry.item.id !== current.id))
+        .slice(0, 2)
+    : [];
   const mediaMotion = (() => {
     if (!isPlaying) {
       return {
@@ -946,6 +1185,38 @@ const MemoryLightbox: React.FC<Props> = ({
       'brightness(1.04) saturate(1.12)',
       'brightness(1) saturate(1.06)',
     ];
+
+    if (resolvedEditStyle === 'marriage') {
+      scaleFrames = [zoomScale * 1.01, zoomScale * 1.075, zoomScale * 1.035];
+      xFrames = [direction * 4, direction * -12, direction * 7];
+      yFrames = [6, -10, -4];
+      rotateFrames = [rotation + direction * 0.18, rotation + direction * 0.65, rotation + direction * 0.28];
+      filterFrames = ['brightness(0.98) saturate(1.08)', 'brightness(1.06) saturate(1.16)', 'brightness(1.01) saturate(1.1)'];
+    } else if (resolvedEditStyle === 'nature') {
+      scaleFrames = [zoomScale * 1.02, zoomScale * 1.09, zoomScale * 1.045];
+      xFrames = [direction * -10, direction * 18, direction * 6];
+      yFrames = [8, -14, -6];
+      rotateFrames = [rotation, rotation + direction * 0.34, rotation + direction * 0.16];
+      filterFrames = ['brightness(0.96) saturate(1.14)', 'brightness(1.04) saturate(1.28)', 'brightness(1) saturate(1.18)'];
+    } else if (resolvedEditStyle === 'family') {
+      scaleFrames = [zoomScale * 1.005, zoomScale * 1.045, zoomScale * 1.018];
+      xFrames = [direction * 3, direction * -8, direction * 4];
+      yFrames = [4, -7, -2];
+      rotateFrames = [rotation, rotation + direction * 0.42, rotation + direction * 0.12];
+      filterFrames = ['brightness(0.98) saturate(1.02)', 'brightness(1.035) saturate(1.1)', 'brightness(1) saturate(1.06)'];
+    } else if (resolvedEditStyle === 'birthday') {
+      scaleFrames = [zoomScale * 0.99, zoomScale * 1.095, zoomScale * 1.025];
+      xFrames = [direction * 10, direction * -16, direction * 8];
+      yFrames = [10, -18, 2];
+      rotateFrames = [rotation + direction * 0.4, rotation + direction * 1.2, rotation + direction * 0.25];
+      filterFrames = ['brightness(0.94) saturate(1.2)', 'brightness(1.12) saturate(1.36)', 'brightness(1.02) saturate(1.2)'];
+    } else if (resolvedEditStyle === 'cinematic') {
+      scaleFrames = [zoomScale * 1.018, zoomScale * 1.085, zoomScale * 1.032];
+      xFrames = [direction * 14, direction * -20, direction * 9];
+      yFrames = [lift * 0.72, -lift, -lift * 0.42];
+      rotateFrames = [rotation + direction * 0.24, rotation + direction * 0.82, rotation + direction * 0.18];
+      filterFrames = ['brightness(0.88) contrast(1.08) saturate(1.06)', 'brightness(1.06) contrast(1.02) saturate(1.12)', 'brightness(0.98) contrast(1.04) saturate(1.08)'];
+    }
 
     switch (activeTransition) {
       case 'ken-burns':
@@ -1018,7 +1289,7 @@ const MemoryLightbox: React.FC<Props> = ({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className={`cinema-viewer cinema-template-${resolvedTemplate} cinema-mode-${mode} ${chromeVisible ? 'cinema-ui-visible' : 'cinema-ui-hidden'}`}
+        className={`cinema-viewer cinema-template-${resolvedTemplate} cinema-mode-${mode} cinema-edit-${resolvedEditStyle} ${chromeVisible ? 'cinema-ui-visible' : 'cinema-ui-hidden'}`}
         onClick={event => {
           if (mode === 'story') {
             showChrome();
@@ -1060,11 +1331,19 @@ const MemoryLightbox: React.FC<Props> = ({
             <button onClick={toggleMute} aria-label="Mute / Unmute" title="Mute / Unmute">
               {muted ? <VolumeX size={17} /> : <Volume2 size={17} />}
             </button>
-            <button onClick={() => setSettingsOpen(value => !value)} aria-label="Toggle effects panel" title="Toggle effects panel">
+            <button onClick={() => {
+              setSettingsOpen(value => !value);
+              setMusicOpen(false);
+              showChrome(true);
+            }} aria-label="Toggle effects panel" title="Toggle effects panel">
               <SlidersHorizontal size={17} />
             </button>
             {mode === 'story' && (
-              <button onClick={() => setMusicOpen(value => !value)} aria-label="YouTube music" title="YouTube music">
+              <button onClick={() => {
+                setMusicOpen(value => !value);
+                setSettingsOpen(false);
+                showChrome(true);
+              }} aria-label="YouTube music" title="YouTube music">
                 <Music size={17} />
               </button>
             )}
@@ -1114,10 +1393,53 @@ const MemoryLightbox: React.FC<Props> = ({
             <span style={{ borderColor: `${colors[0]}22` }} />
             <span style={{ borderColor: `${colors[1]}18` }} />
           </div>
-          <AnimatePresence mode="wait">
+          {isStoryMode && (
+            <div className="cinema-empty-spark-rain" aria-hidden="true">
+              {Array.from({ length: 34 }).map((_, index) => (
+                <span
+                  key={index}
+                  style={{
+                    '--i': index,
+                    '--x': `${(index * 23) % 100}%`,
+                    '--y': `${10 + ((index * 17) % 78)}%`,
+                    '--d': `${(index % 9) * 0.42}s`,
+                    '--s': `${0.55 + (index % 5) * 0.12}`,
+                    background: index % 3 === 0 ? colors[0] : index % 3 === 1 ? colors[1] : colors[2],
+                  } as React.CSSProperties}
+                />
+              ))}
+            </div>
+          )}
+          {sideMemories.length > 0 && (
+            <div className="cinema-side-memories" aria-hidden="true">
+              {sideMemories.map(({ item, offset, src }, index) => (
+                <motion.img
+                  key={`${item.id}-${offset}`}
+                  src={src}
+                  alt=""
+                  className={`cinema-side-memory ${offset < 0 ? 'is-left' : 'is-right'} ${Math.abs(offset) === 1 ? 'is-near' : 'is-far'}`}
+                  initial={{ opacity: 0, scale: 0.94, x: offset < 0 ? -36 : 36 }}
+                  animate={{
+                    opacity: [0.96, 1, 0.98],
+                    scale: [0.98, 1.02, 1],
+                    x: offset < 0 ? [-8, -14, -6] : [8, 14, 6],
+                    y: [-5, 7, -3],
+                  }}
+                  exit={{ opacity: 0.12, scale: 0.94, x: offset < 0 ? -34 : 34 }}
+                  transition={{ duration: Math.max(transitionDuration * 1.35, 1.35), ease: [0.16, 1, 0.3, 1] }}
+                  style={{
+                    top: '50%',
+                    [offset < 0 ? 'left' : 'right']: '5.4%',
+                    animationDelay: `${index * -1.3}s`,
+                  } as React.CSSProperties}
+                />
+              ))}
+            </div>
+          )}
+          <AnimatePresence mode={mode === 'story' ? 'sync' : 'wait'} initial={mode !== 'story'}>
             <motion.figure
               key={`${current.id}-${activeTransition}-${fitMode}`}
-              variants={variant}
+              variants={displayVariant}
               initial="initial"
               animate="animate"
               exit="exit"
@@ -1130,7 +1452,7 @@ const MemoryLightbox: React.FC<Props> = ({
             >
               <div className="cinema-frame-glow" style={{ background: `radial-gradient(circle at 50% 18%, ${colors[0]}36 0%, transparent 72%)` }} />
               <div className="cinema-frame-reflection" style={{ background: `linear-gradient(125deg, rgba(255,255,255,0.22), transparent 30%, transparent 62%, ${colors[1]}18 100%)` }} />
-              {mode === 'story' && chromeVisible && (
+              {mode === 'story' && !settingsOpen && !musicOpen && (
                 <>
                   <div className="cinema-edit-flash" style={{ background: `linear-gradient(110deg, transparent, ${colors[0]}88, ${colors[1]}44, transparent)` }} />
                   <div className="cinema-prism-shift" aria-hidden="true" />
@@ -1155,19 +1477,38 @@ const MemoryLightbox: React.FC<Props> = ({
                   </div>
                 ) : isVideoMemory(current) ? (
                   <video
+                    key={`${current.id}-${driveObjectSrc || mediaSrc || current.url}`}
                     ref={videoRef}
                     src={driveObjectSrc || mediaSrc || current.url}
                     poster={current.thumbnail}
                     controls
                     autoPlay={isPlaying}
-                    muted={muted}
+                    muted={mode === 'story' ? true : muted}
                     playsInline
-                    preload="metadata"
-                    crossOrigin="anonymous"
+                    preload={mode === 'story' ? 'auto' : 'metadata'}
                     onLoadedMetadata={markMediaLoaded}
-                    onLoadedData={markMediaLoaded}
+                    onLoadedData={event => {
+                      markMediaLoaded();
+                      if (isPlaying) void event.currentTarget.play().catch(() => {});
+                    }}
+                    onCanPlay={event => {
+                      if (isPlaying) void event.currentTarget.play().catch(() => {});
+                    }}
+                    onPlay={() => {
+                      if (mode !== 'story') setIsPlaying(true);
+                    }}
+                    onPause={() => {
+                      if (mode !== 'story') setIsPlaying(false);
+                    }}
                     onError={handleVideoError}
-                    onEnded={goNext}
+                    onEnded={() => {
+                      if (mode === 'story') {
+                        goNext();
+                        return;
+                      }
+                      setIsPlaying(false);
+                      goNext();
+                    }}
                     style={{ objectFit }}
                   />
                 ) : (
@@ -1178,7 +1519,9 @@ const MemoryLightbox: React.FC<Props> = ({
                       alt={current.title}
                       onLoad={markMediaLoaded}
                       onError={handlePreviewError}
-                      style={{ objectFit, opacity: imageLoaded ? 1 : 0 }}
+                      decoding="async"
+                      loading="eager"
+                      style={{ objectFit, opacity: 1 }}
                     />
                     {showHighResLayer && (
                       <img
@@ -1236,6 +1579,16 @@ const MemoryLightbox: React.FC<Props> = ({
                 event.stopPropagation();
                 showChrome(true);
               }}
+              onMouseEnter={clearChromeTimer}
+              onMouseMove={event => {
+                event.stopPropagation();
+                clearChromeTimer();
+              }}
+              onMouseLeave={() => showChrome()}
+              onTouchStart={event => {
+                event.stopPropagation();
+                showChrome(true);
+              }}
             >
               <div className="cinema-story-music-head">
                 <Music size={16} />
@@ -1246,9 +1599,10 @@ const MemoryLightbox: React.FC<Props> = ({
                 className="cinema-local-audio-input"
                 type="file"
                 accept="audio/*"
+                multiple
                 onChange={event => {
-                  const file = event.currentTarget.files?.[0];
-                  if (file) playLocalAudioFile(file);
+                  const files = event.currentTarget.files;
+                  if (files?.length) addLocalAudioFiles(files);
                   event.currentTarget.value = '';
                 }}
               />
@@ -1285,63 +1639,149 @@ const MemoryLightbox: React.FC<Props> = ({
               </div>
               {musicResults.length > 0 && (
                 <div className="cinema-story-music-results">
-                  {musicResults.map(track => (
-                    <button
+                  {musicResults.map((track, index) => (
+                    <div
                       key={track.id}
                       className={activeMusicId === track.id ? 'is-active' : ''}
-                      onClick={() => playStoryTrack(track)}
                     >
-                      <span>
+                      <button
+                        type="button"
+                        className="cinema-story-music-play"
+                        onClick={() => playStoryTrack(track, index)}
+                        aria-label={track.videoId || track.previewUrl ? `Play ${track.title}` : `Open ${track.title} on YouTube`}
+                        title={track.videoId || track.previewUrl ? 'Play song' : 'Open YouTube search'}
+                      >
+                        {track.videoId || track.previewUrl ? <Play size={14} /> : <Search size={14} />}
+                      </button>
+                      <button type="button" onClick={() => playStoryTrack(track, index)}>
                         <strong>{track.title}</strong>
                         <small>{track.artist}</small>
-                      </span>
-                      <Play size={14} />
-                    </button>
+                      </button>
+                      <button
+                        type="button"
+                        className="cinema-story-music-add"
+                        onClick={() => addStoryTrackToPlaylist(track)}
+                        disabled={!track.videoId && !track.previewUrl}
+                        aria-label={`Add ${track.title} to playlist`}
+                        title={track.videoId || track.previewUrl ? 'Add to playlist' : 'Paste a YouTube video link to add it'}
+                      >
+                        <ListPlus size={14} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
-              {audioSrc || youtubeSrc ? (
-                <div className="cinema-audio-stage">
-                  {audioSrc ? (
-                    <audio
-                      src={audioSrc}
-                      controls
-                      autoPlay
-                      onPlay={() => {
-                        setMuted(true);
-                        setIsPlaying(true);
-                      }}
-                      onEnded={event => {
-                        event.currentTarget.currentTime = 0;
-                        void event.currentTarget.play().catch(() => {});
-                      }}
-                    />
-                  ) : (
-                    <iframe
-                      src={youtubeSrc}
-                      title="YouTube story audio"
-                      allow="autoplay; encrypted-media; picture-in-picture"
-                      allowFullScreen
-                      onLoad={event => {
-                        const frameWindow = event.currentTarget.contentWindow;
-                        window.setTimeout(() => {
-                          frameWindow?.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
-                        }, 350);
-                      }}
-                    />
-                  )}
-                  <div className="cinema-audio-visualizer" aria-hidden="true">
-                    {Array.from({ length: 24 }).map((_, index) => <span key={index} style={{ '--i': index } as React.CSSProperties} />)}
+              {storyPlaylist.length > 0 && (
+                <div className="cinema-story-playlist" aria-label="Story music playlist">
+                  <div className="cinema-story-playlist-head">
+                    <span>Playlist</span>
+                    <small>{storyPlaylist.length} song{storyPlaylist.length === 1 ? '' : 's'}</small>
                   </div>
-                  <div className="cinema-story-music-now">
-                    <span>{localAudioName || youtubeLabel || 'Story soundtrack'}</span>
-                    <button onClick={stopStoryMusic}>Stop</button>
+                  <div className="cinema-story-playlist-controls" aria-label="Playlist controls">
+                    <button type="button" onClick={playPreviousStoryTrack} title="Previous song" aria-label="Previous song">
+                      <SkipBack size={14} />
+                    </button>
+                    <button type="button" onClick={toggleStoryMusicPlaying} title={storyMusicPlaying ? 'Pause song' : 'Play song'} aria-label={storyMusicPlaying ? 'Pause song' : 'Play song'}>
+                      {storyMusicPlaying ? <Pause size={15} /> : <Play size={15} />}
+                    </button>
+                    <button type="button" onClick={playNextStoryTrack} title="Next song" aria-label="Next song">
+                      <SkipForward size={14} />
+                    </button>
                   </div>
+                  {storyPlaylist.map((track, index) => (
+                    <div
+                      key={`${track.id}-${index}`}
+                      className={`cinema-story-playlist-row ${index === storyPlaylistIndex ? 'is-active' : ''}`}
+                    >
+                      <span>{index + 1}</span>
+                      <button type="button" onClick={() => playPlaylistTrack(index)} title={`Play ${track.title}`}>
+                        <strong>{track.title}</strong>
+                      </button>
+                      <button type="button" onClick={() => movePlaylistTrack(index, -1)} disabled={index === 0} title="Move up" aria-label="Move song up">
+                        <ChevronLeft size={13} />
+                      </button>
+                      <button type="button" onClick={() => movePlaylistTrack(index, 1)} disabled={index === storyPlaylist.length - 1} title="Move down" aria-label="Move song down">
+                        <ChevronRight size={13} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ) : (
+              )}
+              {!audioSrc && !youtubeSrc && (
                 <p className="cinema-story-music-note">Search "96 movie song" to see the 96 soundtrack list, then click any song to play audio.</p>
               )}
             </motion.aside>
+          )}
+
+          {(audioSrc || youtubeSrc) && (
+            <div
+              className={`cinema-story-player-dock ${musicOpen ? 'is-with-panel' : 'is-floating'}`}
+              onClick={event => {
+                event.stopPropagation();
+                showChrome();
+              }}
+              onMouseEnter={clearChromeTimer}
+              onMouseMove={event => {
+                event.stopPropagation();
+                clearChromeTimer();
+              }}
+              onMouseLeave={() => showChrome()}
+              onTouchStart={event => {
+                event.stopPropagation();
+                showChrome();
+              }}
+            >
+              <div className="cinema-audio-stage">
+                {audioSrc ? (
+                  <audio
+                    ref={storyAudioElementRef}
+                    src={audioSrc}
+                    controls
+                    autoPlay
+                      onPlay={() => {
+                        setMuted(true);
+                        setStoryMusicPlaying(true);
+                      }}
+                      onPause={() => setStoryMusicPlaying(false)}
+                    onEnded={event => {
+                      event.currentTarget.currentTime = 0;
+                      playNextStoryTrack();
+                    }}
+                  />
+                ) : (
+                  <iframe
+                    ref={storyYouTubeFrameRef}
+                    src={youtubeSrc}
+                    title="YouTube story audio"
+                    allow="autoplay; encrypted-media; picture-in-picture"
+                    allowFullScreen
+                    onLoad={event => {
+                      const frameWindow = event.currentTarget.contentWindow;
+                      window.setTimeout(() => {
+                        frameWindow?.postMessage(JSON.stringify({ event: 'command', func: 'unMute', args: [] }), '*');
+                        frameWindow?.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
+                      }, 350);
+                    }}
+                  />
+                )}
+                <div className="cinema-audio-visualizer" aria-hidden="true">
+                  {Array.from({ length: 24 }).map((_, index) => <span key={index} style={{ '--i': index } as React.CSSProperties} />)}
+                </div>
+                <div className="cinema-story-music-now">
+                  <span>{localAudioName || youtubeLabel || 'Story soundtrack'}</span>
+                  <button onClick={playPreviousStoryTrack} title="Previous song" aria-label="Previous song">
+                    <SkipBack size={13} />
+                  </button>
+                  <button onClick={toggleStoryMusicPlaying} title={storyMusicPlaying ? 'Pause song' : 'Play song'} aria-label={storyMusicPlaying ? 'Pause song' : 'Play song'}>
+                    {storyMusicPlaying ? <Pause size={13} /> : <Play size={13} />}
+                  </button>
+                  <button onClick={playNextStoryTrack} title="Next song" aria-label="Next song">
+                    <SkipForward size={13} />
+                  </button>
+                  <button onClick={stopStoryMusic}>Stop</button>
+                </div>
+              </div>
+            </div>
           )}
 
           {settingsOpen && (
@@ -1351,7 +1791,35 @@ const MemoryLightbox: React.FC<Props> = ({
               exit={{ opacity: 0, x: 24, scale: 0.96 }}
               className="cinema-settings-panel"
               aria-label="Slideshow settings"
+              onMouseEnter={clearChromeTimer}
+              onMouseMove={event => {
+                event.stopPropagation();
+                clearChromeTimer();
+              }}
+              onMouseLeave={() => showChrome()}
+              onTouchStart={event => {
+                event.stopPropagation();
+                showChrome(true);
+              }}
             >
+              <div className="cinema-edit-style-grid" aria-label="Story edit style">
+                {STORY_EDIT_STYLES.map(style => (
+                  <button
+                    key={style.id}
+                    className={editStyle === style.id || (editStyle === 'auto' && style.id === resolvedEditStyle) ? 'is-active' : ''}
+                    onClick={() => {
+                      setEditStyle(style.id);
+                      if (style.template) setSelectedTemplate(style.template);
+                      setSelectedTransition(null);
+                      setCurrentSpeed(style.speed);
+                      setCurrentIntensity(style.intensity);
+                      emitToast(`${style.label} edit style applied.`);
+                    }}
+                  >
+                    {style.label}
+                  </button>
+                ))}
+              </div>
               <label>
                 Template
                 <select value={resolvedTemplate} onChange={event => {
@@ -1389,7 +1857,12 @@ const MemoryLightbox: React.FC<Props> = ({
           )}
         </AnimatePresence>
 
-        <div className="cinema-controls cinema-auto-chrome">
+        <div
+          className="cinema-controls cinema-auto-chrome"
+          onClick={event => event.stopPropagation()}
+          onTouchStart={event => event.stopPropagation()}
+          onTouchEnd={event => event.stopPropagation()}
+        >
           <button onClick={goPrev} aria-label="Previous"><ChevronLeft size={18} /></button>
           <button className="cinema-play-button" onClick={togglePlaying} aria-label={isPlaying ? 'Pause slideshow' : 'Play slideshow'}>
             {isPlaying ? <Pause size={20} /> : <Play size={20} />}
@@ -1409,7 +1882,12 @@ const MemoryLightbox: React.FC<Props> = ({
         </div>
 
         {sequence.length > 1 && (
-          <div className="cinema-filmstrip cinema-auto-chrome hide-scroll">
+          <div
+            className="cinema-filmstrip cinema-auto-chrome"
+            onClick={event => event.stopPropagation()}
+            onTouchStart={event => event.stopPropagation()}
+            onTouchEnd={event => event.stopPropagation()}
+          >
             {sequence.map((item, index) => (
               <button
                 key={item.id}

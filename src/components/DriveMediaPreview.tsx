@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image, Play } from 'lucide-react';
 import type { Memory } from '../data/memories';
+import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 
 interface Props {
   memory: Memory;
@@ -22,18 +23,30 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     setLoaded(false);
     setFailed(false);
 
-    if (memory.type !== 'photo' || !memory.authToken || !memory.driveFileId) return undefined;
+    if (memory.type !== 'photo') return undefined;
 
     let objectUrl = '';
     const controller = new AbortController();
     const loadFullPhoto = async () => {
       try {
-        const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(memory.driveFileId || '')}?alt=media`, {
+        const cacheKey = getStoryMediaCacheKey(memory);
+        const cachedBlob = await readCachedStoryMedia(cacheKey);
+        if (cachedBlob) {
+          objectUrl = URL.createObjectURL(cachedBlob);
+          setBlobSrc(objectUrl);
+          return;
+        }
+
+        if (!memory.authToken || !memory.driveFileId) return;
+
+        const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(memory.driveFileId)}?alt=media`, {
           headers: { Authorization: `Bearer ${memory.authToken}` },
           signal: controller.signal,
+          cache: 'force-cache',
         });
         if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
         const blob = await response.blob();
+        void writeCachedStoryMedia(cacheKey, blob, memory.mimeType || blob.type);
         objectUrl = URL.createObjectURL(blob);
         setBlobSrc(objectUrl);
       } catch {

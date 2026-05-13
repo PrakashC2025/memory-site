@@ -4,6 +4,7 @@ import AppErrorBoundary from './components/AppErrorBoundary';
 import AnimatedBackground from './components/AnimatedBackground';
 import MusicPlayer from './components/MusicPlayer';
 import Navbar from './components/Navbar';
+import SplashCursor from './components/SplashCursor';
 import { ThemeProvider } from './context/ThemeContext';
 import { UserProvider, useUser } from './context/UserContext';
 import Login from './pages/Login';
@@ -72,6 +73,20 @@ const AppContent: React.FC = () => {
   return (
     <>
       <AnimatedBackground />
+      {currentPage !== 'story' && (
+        <SplashCursor
+          SIM_RESOLUTION={96}
+          DYE_RESOLUTION={720}
+          SPLAT_RADIUS={0.11}
+          SPLAT_FORCE={2800}
+          DENSITY_DISSIPATION={5.2}
+          VELOCITY_DISSIPATION={3}
+          CURL={3}
+          COLOR_UPDATE_SPEED={4}
+          RAINBOW_MODE={false}
+          COLOR="#a855f7"
+        />
+      )}
 
       {currentPage !== 'story' && <Navbar currentPage={currentPage} onNavigate={navigate} />}
 

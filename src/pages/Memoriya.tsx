@@ -22,6 +22,7 @@ import {
   WandSparkles,
 } from 'lucide-react';
 import DriveMediaPreview from '../components/DriveMediaPreview';
+import MemoryLightbox from '../components/MemoryLightbox';
 import type { Memory } from '../data/memories';
 import { DRIVE_SESSION_KEY, upgradeDriveImageUrls } from '../services/driveLibrary';
 import { googleDriveService, type DriveConnectionState, type DriveMediaFile } from '../services/googleDriveService';
@@ -83,6 +84,7 @@ const Memoriya: React.FC = () => {
   const [galleryStyle, setGalleryStyle] = useState<GalleryStyle>('polaroid');
   const [memories, setMemories] = useState<Memory[]>(() => restored?.memories || []);
   const [selected, setSelected] = useState<Memory | null>(() => restored?.memories?.[0] || null);
+  const [viewerMemory, setViewerMemory] = useState<Memory | null>(null);
   const [activeReaction, setActiveReaction] = useState('Love');
   const [accessToken, setAccessToken] = useState(restored?.accessToken || '');
   const [nextPageToken, setNextPageToken] = useState(restored?.nextPageToken || '');
@@ -172,6 +174,7 @@ const Memoriya: React.FC = () => {
     try {
       const state: DriveConnectionState = await googleDriveService.connect();
       const token = state.accessToken || '';
+      if (!token) throw new Error('Google Drive authorization was cancelled.');
       setAccessToken(token);
       setMemories([]);
       setSelected(null);
@@ -185,7 +188,10 @@ const Memoriya: React.FC = () => {
         ? `Imported your first ${added} Drive memories. No demo images are shown.`
         : 'Drive connected, but no photos or videos were found.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Google Drive connection failed.');
+      const message = err instanceof Error ? err.message : 'Google Drive connection failed.';
+      const wasCancelled = /cancel|closed/i.test(message);
+      setError(wasCancelled ? '' : message);
+      setMessage(wasCancelled ? 'Google Drive connection cancelled.' : '');
     } finally {
       setLoading(false);
     }
@@ -213,6 +219,10 @@ const Memoriya: React.FC = () => {
   }, [accessToken, nextPageToken, loading]);
 
   const hasMemories = filteredMemories.length > 0;
+  const openMemory = (memory: Memory) => {
+    setSelected(memory);
+    setViewerMemory(memory);
+  };
 
   return (
     <div className="memoriya-experience">
@@ -313,6 +323,7 @@ const Memoriya: React.FC = () => {
             memories={bestMemories}
             selected={selected}
             setSelected={setSelected}
+            openMemory={openMemory}
             activeReaction={activeReaction}
             setActiveReaction={setActiveReaction}
             lightweight={lightweight || Boolean(reducedMotion)}
@@ -320,15 +331,15 @@ const Memoriya: React.FC = () => {
         )}
 
         {hasMemories && stage === 'map' && (
-          <MapStage locations={locations} setSelected={setSelected} />
+          <MapStage locations={locations} openMemory={openMemory} />
         )}
 
         {hasMemories && stage === 'albums' && (
-          <AlbumsStage albums={albums} galleryStyle={galleryStyle} setGalleryStyle={setGalleryStyle} setSelected={setSelected} lightweight={lightweight || Boolean(reducedMotion)} />
+          <AlbumsStage albums={albums} galleryStyle={galleryStyle} setGalleryStyle={setGalleryStyle} openMemory={openMemory} lightweight={lightweight || Boolean(reducedMotion)} />
         )}
 
         {hasMemories && stage === 'story' && (
-          <StoryStage timeline={timeline} setSelected={setSelected} />
+          <StoryStage timeline={timeline} openMemory={openMemory} />
         )}
 
         {hasMemories && (
@@ -350,6 +361,8 @@ const Memoriya: React.FC = () => {
           </button>
         </nav>
       )}
+
+      <MemoryLightbox memory={viewerMemory} memories={filteredMemories} onClose={() => setViewerMemory(null)} />
     </div>
   );
 };
@@ -397,14 +410,27 @@ interface ReelsStageProps {
   memories: Memory[];
   selected: Memory;
   setSelected: (memory: Memory) => void;
+  openMemory: (memory: Memory) => void;
   activeReaction: string;
   setActiveReaction: (reaction: string) => void;
   lightweight: boolean;
 }
 
-const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, activeReaction, setActiveReaction }) => (
+const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, openMemory, activeReaction, setActiveReaction }) => (
   <section className="memoriya-reel-stage">
-    <article className="memoriya-reel-phone">
+    <article
+      className="memoriya-reel-phone"
+      onClick={() => openMemory(selected)}
+      onKeyDown={event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openMemory(selected);
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${selected.title}`}
+    >
       <OptimizedImage memory={selected} width={720} eager />
       <div className="memoriya-reel-overlay">
         <span><Radio size={14} /> Memory reel</span>
@@ -412,7 +438,15 @@ const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, act
         <p>{selected.caption}</p>
         <div className="memoriya-reactions">
           {reactions.map(reaction => (
-            <button key={reaction} className={activeReaction === reaction ? 'is-active' : ''} onClick={() => setActiveReaction(reaction)} aria-label={`React with ${reaction}`}>
+            <button
+              key={reaction}
+              className={activeReaction === reaction ? 'is-active' : ''}
+              onClick={event => {
+                event.stopPropagation();
+                setActiveReaction(reaction);
+              }}
+              aria-label={`React with ${reaction}`}
+            >
               {reactionGlyphs[reaction]}
             </button>
           ))}
@@ -421,7 +455,14 @@ const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, act
     </article>
     <div className="memoriya-reel-list">
       {memories.map((memory, index) => (
-        <button key={memory.id} onClick={() => setSelected(memory)} className={selected.id === memory.id ? 'is-active' : ''}>
+        <button
+          key={memory.id}
+          onClick={() => {
+            setSelected(memory);
+            openMemory(memory);
+          }}
+          className={selected.id === memory.id ? 'is-active' : ''}
+        >
           <span>{String(index + 1).padStart(2, '0')}</span>
           <OptimizedImage memory={memory} width={180} />
           <div>
@@ -439,14 +480,14 @@ ReelsStage.displayName = 'ReelsStage';
 
 const MapStage = memo<{
   locations: [string, Memory[]][];
-  setSelected: (memory: Memory) => void;
-}>(({ locations, setSelected }) => (
+  openMemory: (memory: Memory) => void;
+}>(({ locations, openMemory }) => (
   <section className="memoriya-map-stage">
     <div className="memoriya-map">
       {locations.map(([place, items], index) => {
         const point = pointForPlace(place, index);
         return (
-          <button key={place} style={{ left: `${point.x}%`, top: `${point.y}%` }} onClick={() => setSelected(items[0])}>
+          <button key={place} style={{ left: `${point.x}%`, top: `${point.y}%` }} onClick={() => openMemory(items[0])}>
             <span>{items.length}</span>
           </button>
         );
@@ -454,7 +495,7 @@ const MapStage = memo<{
     </div>
     <div className="memoriya-place-list">
       {locations.map(([place, items]) => (
-        <button key={place} onClick={() => setSelected(items[0])}>
+        <button key={place} onClick={() => openMemory(items[0])}>
           <MapPin size={16} />
           <strong>{place}</strong>
           <span>{items.length} memories</span>
@@ -470,9 +511,9 @@ const AlbumsStage = memo<{
   albums: [string, Memory[]][];
   galleryStyle: GalleryStyle;
   setGalleryStyle: (style: GalleryStyle) => void;
-  setSelected: (memory: Memory) => void;
+  openMemory: (memory: Memory) => void;
   lightweight: boolean;
-}>(({ albums, galleryStyle, setGalleryStyle, setSelected, lightweight }) => (
+}>(({ albums, galleryStyle, setGalleryStyle, openMemory, lightweight }) => (
   <section className="memoriya-albums">
     <div className="memoriya-style-switch">
       {(['polaroid', 'scrapbook'] as GalleryStyle[]).map(style => (
@@ -483,7 +524,7 @@ const AlbumsStage = memo<{
     </div>
     <div className={`memoriya-album-wall is-${galleryStyle}`}>
       {albums.map(([title, items]) => (
-        <motion.button key={title} whileHover={lightweight ? undefined : { y: -5 }} onClick={() => setSelected(items[0])}>
+        <motion.button key={title} whileHover={lightweight ? undefined : { y: -5 }} onClick={() => openMemory(items[0])}>
           <OptimizedImage memory={items[0]} width={420} />
           <strong>{title}</strong>
           <span>{items.length} user memories</span>
@@ -497,15 +538,15 @@ AlbumsStage.displayName = 'AlbumsStage';
 
 const StoryStage = memo<{
   timeline: [string, Memory[]][];
-  setSelected: (memory: Memory) => void;
-}>(({ timeline, setSelected }) => (
+  openMemory: (memory: Memory) => void;
+}>(({ timeline, openMemory }) => (
   <section className="memoriya-storyline">
     {timeline.map(([month, items]) => (
       <article key={month}>
         <time>{month}</time>
         <div>
           {items.map(memory => (
-            <button key={memory.id} onClick={() => setSelected(memory)}>
+            <button key={memory.id} onClick={() => openMemory(memory)}>
               <OptimizedImage memory={memory} width={160} />
               <span>
                 <strong>{memory.title}</strong>

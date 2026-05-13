@@ -69,7 +69,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
   ];
 
   return (
-    <div className="mx-auto max-w-7xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
+    <div className="dashboard-page mx-auto max-w-7xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
       <motion.section {...fadeUp} transition={{ duration: 0.65 }} className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
         <div className="neon-card p-5 md:p-8">
           <div className="mb-5 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em]" style={{ color: config.accent }}>

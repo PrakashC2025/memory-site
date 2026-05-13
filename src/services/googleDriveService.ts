@@ -50,6 +50,11 @@ type GoogleTokenResponse = {
   error?: string;
 };
 
+type GoogleTokenError = {
+  type?: string;
+  message?: string;
+};
+
 type GoogleTokenClient = {
   requestAccessToken: (options?: { prompt?: string }) => void;
 };
@@ -63,6 +68,7 @@ declare global {
             client_id: string;
             scope: string;
             callback: (response: GoogleTokenResponse) => void;
+            error_callback?: (error: GoogleTokenError) => void;
           }) => GoogleTokenClient;
         };
       };
@@ -109,16 +115,28 @@ export class GoogleDriveService {
         return;
       }
 
+      let settled = false;
+      const finish = (handler: () => void) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeoutId);
+        handler();
+      };
+
+      const timeoutId = window.setTimeout(() => {
+        finish(() => reject(new Error('Google Drive authorization was cancelled.')));
+      }, 90000);
+
       const tokenClient = oauth.initTokenClient({
         client_id: clientId,
         scope: DRIVE_SCOPE,
         callback: response => {
           if (response.error || !response.access_token) {
-            reject(new Error(response.error || 'Google Drive authorization was cancelled.'));
+            finish(() => reject(new Error(response.error || 'Google Drive authorization was cancelled.')));
             return;
           }
 
-          resolve({
+          finish(() => resolve({
             connected: true,
             loading: false,
             folders: [
@@ -128,11 +146,21 @@ export class GoogleDriveService {
             lastImportedAt: new Date().toISOString(),
             mode: 'google',
             message: 'Google Drive connected with readonly access.',
-          });
+          }));
+        },
+        error_callback: error => {
+          const wasClosed = error.type === 'popup_closed' || error.type === 'popup_closed_by_user';
+          finish(() => reject(new Error(wasClosed
+            ? 'Google Drive authorization was cancelled.'
+            : error.message || 'Google Drive authorization failed.')));
         },
       });
 
-      tokenClient.requestAccessToken({ prompt: 'consent' });
+      try {
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+      } catch (err) {
+        finish(() => reject(err instanceof Error ? err : new Error('Google Drive authorization failed.')));
+      }
     });
   }
 

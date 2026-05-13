@@ -121,7 +121,7 @@ const EXPORT_FORMATS = ['JPG', 'PNG', 'WEBP', 'PDF', 'ZIP', 'MP4', 'Print PDF'];
 
 const INVITATION_TEMPLATES = ['Wedding', 'Birthday', 'Anniversary', 'Baby Shower', 'Family Reunion', 'Graduation'];
 
-const TREE_WIDTH = 1560;
+const TREE_WIDTH = 2200;
 const ROOT_WIDTH = 286;
 const ROOT_HEIGHT = 168;
 const YEAR_WIDTH = 218;
@@ -213,7 +213,7 @@ const buildTreeModel = (memories: Memory[], themePrimary: string): TreeModel => 
   years.forEach((year, yearIndex) => {
     const yearMemories = year.memories;
     const yearColor = colorForMemory(yearMemories.find(item => item.isFavorite) || yearMemories[0], themePrimary);
-    const yearOffset = yearIndex % 2 === 0 ? -360 : 360;
+    const yearOffset = yearIndex % 2 === 0 ? -520 : 520;
     const yearNode: TreeNode = {
       id: `year-${year.year}`,
       kind: 'year',
@@ -235,11 +235,11 @@ const buildTreeModel = (memories: Memory[], themePrimary: string): TreeModel => 
 
     const eventGroups = groupByEvent(yearMemories);
     const eventY = yCursor + 166;
-    const eventGap = eventGroups.length <= 1 ? 0 : (TREE_WIDTH - 360) / (eventGroups.length - 1);
+    const eventGap = eventGroups.length <= 1 ? 0 : (TREE_WIDTH - 460) / (eventGroups.length - 1);
 
     eventGroups.forEach((group, eventIndex) => {
       const eventColor = colorForMemory(group.memories.find(item => item.isFavorite) || group.memories[0], yearNode.color);
-      const rawX = eventGroups.length <= 1 ? TREE_WIDTH / 2 - EVENT_WIDTH / 2 : 180 + eventGap * eventIndex - EVENT_WIDTH / 2;
+      const rawX = eventGroups.length <= 1 ? TREE_WIDTH / 2 - EVENT_WIDTH / 2 : 230 + eventGap * eventIndex - EVENT_WIDTH / 2;
       const eventNode: TreeNode = {
         id: `event-${year.year}-${eventIndex}`,
         kind: 'event',
@@ -266,7 +266,7 @@ const buildTreeModel = (memories: Memory[], themePrimary: string): TreeModel => 
         const spread = Math.min(leaves.length, 3);
         const centeredColumn = column - (spread - 1) / 2;
         const mediaColor = colorForMemory(memory, eventNode.color);
-        const leafX = clamp(eventNode.x + EVENT_WIDTH / 2 - MEDIA_WIDTH / 2 + centeredColumn * 190, 28, TREE_WIDTH - MEDIA_WIDTH - 28);
+        const leafX = clamp(eventNode.x + EVENT_WIDTH / 2 - MEDIA_WIDTH / 2 + centeredColumn * 220, 28, TREE_WIDTH - MEDIA_WIDTH - 28);
         const leafY = eventY + 142 + row * 156;
         const mediaNode: TreeNode = {
           id: `media-${memory.id}`,
@@ -387,7 +387,7 @@ const NodeCard: React.FC<{
           </>
         ) : (
           <div className="memory-branch-face" style={{ background: `linear-gradient(135deg, ${node.color}26, ${node.accent}18)` }}>
-            {node.kind === 'root' && node.memory && <img src={node.memory.thumbnail} alt="" loading="lazy" decoding="async" />}
+            {node.kind === 'root' && node.memory && <DriveMediaPreview memory={node.memory} alt="" />}
             {node.kind === 'year' && <CalendarDays size={22} />}
             {node.kind === 'event' && <FolderHeart size={21} />}
           </div>
@@ -596,8 +596,8 @@ const MemoryTree: React.FC = () => {
   const [viewerAutoplay, setViewerAutoplay] = useState(false);
   const [viewerTemplate, setViewerTemplate] = useState<SlideshowTemplate>('auto');
   const [viewerTransition, setViewerTransition] = useState<SlideshowTransition>('branch-guided');
-  const [renderLimit, setRenderLimit] = useState(48);
-  const [zoom, setZoom] = useState(0.72);
+  const [renderLimit, setRenderLimit] = useState(10000);
+  const [zoom, setZoom] = useState(0.78);
   const [query, setQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'favorites' | 'photos' | 'videos'>('all');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -609,6 +609,10 @@ const MemoryTree: React.FC = () => {
     setActionToast(message);
     window.setTimeout(() => setActionToast(''), 1900);
   };
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, []);
 
   const filteredMemories = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -649,7 +653,6 @@ const MemoryTree: React.FC = () => {
     const low = scrollTop / zoom - 560;
     const high = (scrollTop + viewportHeight) / zoom + 780;
     return model.nodes.filter(node => {
-      if (node.order > renderLimit && node.kind !== 'root') return false;
       if (hiddenByCollapse(node)) return false;
       if (node.kind !== 'media') return true;
       return node.y + node.height >= low && node.y <= high;
@@ -657,7 +660,7 @@ const MemoryTree: React.FC = () => {
   }, [hiddenByCollapse, model.nodes, renderLimit, scrollTop, viewportHeight, zoom]);
 
   const visibleNodeIds = useMemo(() => new Set(visibleNodes.map(node => node.id)), [visibleNodes]);
-  const visibleEdges = useMemo(() => model.edges.filter(edge => edge.order <= renderLimit && visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to)), [model.edges, renderLimit, visibleNodeIds]);
+  const visibleEdges = useMemo(() => model.edges.filter(edge => visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to)), [model.edges, visibleNodeIds]);
 
   useEffect(() => {
     autoCenteredLayoutRef.current = '';
@@ -689,7 +692,7 @@ const MemoryTree: React.FC = () => {
     const observer = new IntersectionObserver(
       entries => {
         if (entries.some(entry => entry.isIntersecting)) {
-          setRenderLimit(limit => Math.min(model.nodes.length, limit + 18));
+          setRenderLimit(limit => Math.max(limit, model.nodes.length));
         }
       },
       { root: scroller, rootMargin: '650px' }
@@ -738,8 +741,8 @@ const MemoryTree: React.FC = () => {
   const resetView = () => {
     setSelectedNodeId('root');
     setCollapsed(new Set());
-    setRenderLimit(48);
-    setZoom(0.72);
+    setRenderLimit(10000);
+    setZoom(0.78);
     const root = model.nodeMap.get('root');
     if (root) window.setTimeout(() => centerNode(root), 40);
   };
@@ -820,13 +823,13 @@ const MemoryTree: React.FC = () => {
   };
 
   const jumpToRandom = () => {
-    const mediaNodes = model.nodes.filter(node => node.kind === 'media' && node.order <= renderLimit);
+    const mediaNodes = model.nodes.filter(node => node.kind === 'media');
     const node = mediaNodes[Math.floor(Math.random() * mediaNodes.length)];
     if (node) handleNodeClick(node);
   };
 
   const jumpToYear = () => {
-    const yearNode = model.nodes.find(node => node.kind === 'year' && node.order <= renderLimit);
+    const yearNode = model.nodes.find(node => node.kind === 'year');
     if (yearNode) handleNodeClick(yearNode);
   };
 
@@ -882,8 +885,8 @@ const MemoryTree: React.FC = () => {
             <IconButton label="View Tree" icon={<TreePine size={14} />} onClick={resetView} active />
             <IconButton label="View Timeline" icon={<CalendarDays size={14} />} onClick={() => emitAction('Timeline view is synced with this tree in the top navigation.')} />
             <IconButton label="View Grid" icon={<Layers3 size={14} />} onClick={() => emitAction('Grid preview is available in the album editor below.')} />
-            <IconButton label="Zoom In" icon={<Plus size={14} />} onClick={() => setZoom(value => clamp(value + 0.08, 0.62, 1.2))} />
-            <IconButton label="Zoom Out" icon={<Minus size={14} />} onClick={() => setZoom(value => clamp(value - 0.08, 0.62, 1.2))} />
+            <IconButton label="Zoom In" icon={<Plus size={14} />} onClick={() => setZoom(value => clamp(value + 0.08, 0.5, 1.2))} />
+            <IconButton label="Zoom Out" icon={<Minus size={14} />} onClick={() => setZoom(value => clamp(value - 0.08, 0.5, 1.2))} />
             <IconButton label="Reset View" icon={<RefreshCcw size={14} />} onClick={resetView} />
             <IconButton label={journey ? 'Pause Journey' : 'Play Tree Journey'} icon={journey ? <Pause size={14} /> : <Play size={14} />} onClick={() => journey ? setViewerAutoplay(value => !value) : startCinematicJourney()} active={journey} />
             <IconButton label="Random Memory" icon={<Shuffle size={14} />} onClick={jumpToRandom} />

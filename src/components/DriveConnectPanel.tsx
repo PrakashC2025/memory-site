@@ -16,8 +16,18 @@ const DriveConnectPanel: React.FC = () => {
 
   const handleConnect = async () => {
     setState(current => ({ ...current, loading: true }));
-    const next = await googleDriveService.connect();
-    setState(next);
+    try {
+      const next = await googleDriveService.connect();
+      setState(next);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Google Drive connection failed.';
+      setState(current => ({
+        ...current,
+        loading: false,
+        error: /cancel|closed/i.test(message) ? undefined : message,
+        message: /cancel|closed/i.test(message) ? 'Google Drive connection cancelled.' : undefined,
+      }));
+    }
   };
 
   return (

@@ -1,0 +1,22 @@
+.splash-cursor {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0.36;
+  mix-blend-mode: screen;
+  filter: saturate(1.06) blur(1.25px);
+}
+
+.splash-cursor canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash-cursor {
+    display: none;
+  }
+}

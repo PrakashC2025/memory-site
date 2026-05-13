@@ -152,11 +152,6 @@ const Timeline: React.FC = () => {
                           <div className="timeline-memory-media relative bg-black/35">
                             <DriveMediaPreview
                               memory={memory}
-                              alt=""
-                              className="timeline-memory-backdrop"
-                            />
-                            <DriveMediaPreview
-                              memory={memory}
                               alt={memory.title}
                               className="timeline-memory-photo transition-transform duration-500 group-hover:scale-[1.018]"
                             />
