@@ -58,13 +58,19 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
         boxShadow: '0 10px 28px rgba(0,0,0,0.24)',
       }}
     >
+      <span
+        className="pointer-events-none absolute inset-x-0 top-0 h-px"
+        style={{ background: `linear-gradient(90deg, transparent, ${config.primary}99, ${config.secondary}99, transparent)` }}
+        aria-hidden="true"
+      />
       <motion.button onClick={() => handleNavigate('memoriya')} className="navbar-brand" whileHover={{ scale: 1.01 }}>
         <span
-          className="flex h-10 w-10 items-center justify-center rounded-lg border"
+          className="flex h-10 w-10 items-center justify-center rounded-xl border"
           style={{
-            borderColor: config.primary + '55',
-            color: config.primary,
-            background: `linear-gradient(135deg, ${config.primary}22, ${config.secondary}12)`,
+            borderColor: config.primary + '66',
+            color: '#020406',
+            background: `linear-gradient(135deg, ${config.primary}, ${config.secondary})`,
+            boxShadow: `0 0 22px ${config.glow}`,
           }}
         >
           <Sparkles size={19} />
@@ -87,18 +93,28 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
               className="navbar-link relative flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-all"
               style={{
                 color: active ? config.primary : 'rgba(255,255,255,0.66)',
-                background: active ? config.primary + '14' : 'transparent',
               }}
             >
               {active && (
                 <motion.span
                   layoutId="nav-indicator"
                   className="absolute inset-0 rounded-lg border"
-                  style={{ borderColor: config.primary + '4d' }}
+                  style={{
+                    borderColor: config.primary + '66',
+                    background: `linear-gradient(135deg, ${config.primary}2b, ${config.secondary}18)`,
+                    boxShadow: `0 0 20px ${config.glow}`,
+                  }}
                 />
               )}
               <Icon className="relative z-10" size={16} />
               <span className="relative z-10">{label}</span>
+              {active && (
+                <motion.span
+                  layoutId="nav-active-dot"
+                  className="relative z-10 h-1.5 w-1.5 rounded-full"
+                  style={{ background: config.primary, boxShadow: `0 0 10px ${config.primary}` }}
+                />
+              )}
             </button>
           );
         })}

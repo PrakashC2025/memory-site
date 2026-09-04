@@ -157,7 +157,9 @@ export class GoogleDriveService {
       });
 
       try {
-        tokenClient.requestAccessToken({ prompt: 'consent' });
+        // Empty prompt skips the consent screen when the user has already granted
+        // access, so reconnecting is instant. First-time connects still show consent.
+        tokenClient.requestAccessToken({ prompt: '' });
       } catch (err) {
         finish(() => reject(err instanceof Error ? err : new Error('Google Drive authorization failed.')));
       }
@@ -214,7 +216,7 @@ export class GoogleDriveService {
   async listMediaPage(accessToken: string, pageToken = ''): Promise<DriveMediaPage> {
     const params = new URLSearchParams({
       q: "(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false",
-      pageSize: '60',
+      pageSize: '100',
       orderBy: 'createdTime desc',
       fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
     });

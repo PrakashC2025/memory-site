@@ -1,14 +1,12 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import {
-  Archive,
   CalendarHeart,
   Camera,
   ChevronRight,
   Cloud,
   Film,
   Globe2,
-  Heart,
   Images,
   Loader2,
   Lock,
@@ -19,7 +17,6 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
-  WandSparkles,
 } from 'lucide-react';
 import DriveMediaPreview from '../components/DriveMediaPreview';
 import MemoryLightbox from '../components/MemoryLightbox';
@@ -93,6 +90,14 @@ const Memoriya: React.FC = () => {
   const [message, setMessage] = useState(restored?.memories?.length ? `Restored ${restored.memories.length} Drive memories from this browser session.` : '');
   const [error, setError] = useState('');
   const loaderRef = useRef<HTMLDivElement | null>(null);
+  const localObjectUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    return () => {
+      localObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+      localObjectUrlsRef.current = [];
+    };
+  }, []);
 
   const filteredMemories = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -176,26 +181,83 @@ const Memoriya: React.FC = () => {
       const token = state.accessToken || '';
       if (!token) throw new Error('Google Drive authorization was cancelled.');
       setAccessToken(token);
-      setMemories([]);
-      setSelected(null);
-      setImportCount(0);
-      setNextPageToken('');
+      // Refresh the token stored on existing Drive memories so they keep working,
+      // instead of clearing and re-downloading everything on every reconnect.
+      setMemories(current => current.map(memory =>
+        memory.driveFileId ? { ...memory, authToken: token } : memory
+      ));
       const page = await googleDriveService.listMediaPage(token);
       const added = appendDriveFiles(page.files, token);
       setNextPageToken(page.nextPageToken || '');
-      setImportCount(added);
+      setImportCount(count => count + added);
       setMessage(added
-        ? `Imported your first ${added} Drive memories. No demo images are shown.`
+        ? `Drive ready — ${memories.length + added} memories in view. Scroll to load more.`
         : 'Drive connected, but no photos or videos were found.');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Google Drive connection failed.';
       const wasCancelled = /cancel|closed/i.test(message);
       setError(wasCancelled ? '' : message);
-      setMessage(wasCancelled ? 'Google Drive connection cancelled.' : '');
+      setMessage(wasCancelled
+        ? 'Google Drive connection cancelled.'
+        : `${message} If Google blocked the popup with an “unauthorized domain” or “access blocked” error, add this exact origin to Google Cloud Console → Credentials → OAuth Client ID → Authorized JavaScript origins: ${window.location.origin}`);
     } finally {
       setLoading(false);
     }
   };
+
+  const localInputRef = useRef<HTMLInputElement>(null);
+
+  const importLocalFiles = (files: FileList | null) => {
+    const mediaFiles = Array.from(files || []).filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
+    if (!mediaFiles.length) return;
+
+    const now = new Date();
+    const imported = mediaFiles.map((file, index) => {
+      const url = URL.createObjectURL(file);
+      localObjectUrlsRef.current.push(url);
+      const isVideo = file.type.startsWith('video/');
+      const date = new Date(file.lastModified || now.getTime());
+      return {
+        id: `local-${file.name}-${file.lastModified}-${index}`,
+        title: file.name.replace(/\.[^.]+$/, ''),
+        caption: 'Local media on this device',
+        date: date.toISOString(),
+        year: date.getFullYear(),
+        month: date.getMonth() + 1,
+        type: isVideo ? 'video' : 'photo',
+        url,
+        thumbnail: isVideo ? '' : url,
+        mimeType: file.type,
+        tags: ['local', isVideo ? 'video' : 'photo'],
+        event: 'Local Media',
+      } satisfies Memory;
+    });
+
+    setMemories(current => {
+      const ids = new Set(current.map(memory => memory.id));
+      const next = [...imported.filter(memory => !ids.has(memory.id)), ...current]
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      if (!selected && next[0]) setSelected(next[0]);
+      return next;
+    });
+    setMessage(imported.length === 1
+      ? `Added 1 local memory from this device.`
+      : `Added ${imported.length} local memories from this device.`);
+  };
+
+  const localPicker = (
+    <input
+      ref={localInputRef}
+      type="file"
+      accept="image/*,video/*"
+      multiple
+      className="hidden"
+      onChange={event => {
+        importLocalFiles(event.currentTarget.files);
+        event.currentTarget.value = '';
+      }}
+    />
+  );
 
   const disconnectDrive = () => {
     setAccessToken('');
@@ -226,6 +288,7 @@ const Memoriya: React.FC = () => {
 
   return (
     <div className="memoriya-experience">
+      {localPicker}
       {!lightweight && !reducedMotion && hasMemories && <CinematicIntro />}
 
       <section className={`memoriya-cinema-hero ${!hasMemories ? 'is-empty' : ''}`}>
@@ -254,6 +317,9 @@ const Memoriya: React.FC = () => {
               {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
               {accessToken ? 'Sync Drive' : 'Connect Google Drive'}
             </button>
+            <button className="memoriya-glass-button" onClick={() => localInputRef.current?.click()}>
+              <Images size={17} /> Use Local Media
+            </button>
             {accessToken && (
               <button className="memoriya-glass-button" onClick={disconnectDrive}>
                 <ShieldCheck size={17} /> Disconnect
@@ -276,7 +342,7 @@ const Memoriya: React.FC = () => {
             <p>{onThisDay.caption}</p>
           </motion.aside>
         ) : (
-          <OnboardingCard loading={loading} onConnect={connectDrive} />
+          <OnboardingCard loading={loading} onConnect={connectDrive} onImportLocal={() => localInputRef.current?.click()} />
         )}
       </section>
 
@@ -316,7 +382,7 @@ const Memoriya: React.FC = () => {
       )}
 
       <main className="memoriya-stage">
-        {!hasMemories && <EmptyDriveState loading={loading} onConnect={connectDrive} />}
+        {!hasMemories && <EmptyDriveState loading={loading} onConnect={connectDrive} onImportLocal={() => localInputRef.current?.click()} />}
 
         {hasMemories && stage === 'reels' && selected && (
           <ReelsStage
@@ -379,29 +445,37 @@ const HeroImage = memo<{ memory: Memory; index: number; lightweight: boolean }>(
 
 HeroImage.displayName = 'HeroImage';
 
-const OnboardingCard: React.FC<{ loading: boolean; onConnect: () => void }> = ({ loading, onConnect }) => (
+const OnboardingCard: React.FC<{ loading: boolean; onConnect: () => void; onImportLocal: () => void }> = ({ loading, onConnect, onImportLocal }) => (
   <aside className="memoriya-now-card memoriya-onboarding-card">
     <span><ShieldCheck size={16} /> Private setup</span>
     <h2>No default photos here</h2>
-    <p>Connect Google Drive and Memoriya will show only your own photos and videos across every screen.</p>
-    <button className="memoriya-primary" onClick={onConnect} disabled={loading}>
-      {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
-      Connect Drive
-    </button>
+    <p>Connect Google Drive, or add photos and videos straight from this device. Memoriya shows only your own media across every screen.</p>
+    <div className="flex flex-col gap-2">
+      <button className="memoriya-primary" onClick={onConnect} disabled={loading}>
+        {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
+        Connect Drive
+      </button>
+      <button className="memoriya-glass-button" onClick={onImportLocal}>
+        <Images size={17} /> Use Local Media
+      </button>
+    </div>
   </aside>
 );
 
-const EmptyDriveState: React.FC<{ loading: boolean; onConnect: () => void }> = ({ loading, onConnect }) => (
+const EmptyDriveState: React.FC<{ loading: boolean; onConnect: () => void; onImportLocal: () => void }> = ({ loading, onConnect, onImportLocal }) => (
   <section className="memoriya-empty-drive">
     <Cloud size={34} />
     <h2>Start with your real memories</h2>
     <p>
-      There are no demo images in your workspace. Connect Google Drive and Memoriya will sort your photos and
-      videos automatically by date, time, type, albums, and available location metadata.
+      There are no demo images in your workspace. Connect Google Drive, or pick photos and videos from this
+      device. Memoriya sorts them automatically by date, time, type, albums, and available location metadata.
     </p>
     <button className="memoriya-primary" onClick={onConnect} disabled={loading}>
       {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
       {loading ? 'Connecting...' : 'Connect Google Drive'}
+    </button>
+    <button className="memoriya-glass-button" onClick={onImportLocal}>
+      <Images size={17} /> Use Local Media
     </button>
   </section>
 );
@@ -571,17 +645,6 @@ const OptimizedImage = memo<{ memory: Memory; width: number; eager?: boolean }>(
 ));
 
 OptimizedImage.displayName = 'OptimizedImage';
-
-const imageUrl = (memory: Memory, width: number) => {
-  const source = memory.thumbnail || memory.url;
-  if (!source.includes('images.unsplash.com')) return source;
-  const url = new URL(source);
-  url.searchParams.set('w', String(width));
-  url.searchParams.set('q', '72');
-  url.searchParams.set('fm', 'webp');
-  url.searchParams.set('fit', 'crop');
-  return url.toString();
-};
 
 const enrichDriveMemory = (memory: Memory, file: DriveMediaFile): Memory => {
   const location = file.imageMediaMetadata?.location;

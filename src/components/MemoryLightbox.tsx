@@ -33,7 +33,9 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import type { Memory } from '../data/memories';
+import { searchOpenSourceMusic } from '../services/openSourceMusic';
 import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
+import { withMediaFetch } from '../utils/mediaQueue';
 
 export type SlideshowTransition =
   | 'crossfade'
@@ -422,14 +424,6 @@ const buildStoryMusicResults = (value: string): StoryMusicTrack[] => {
   ];
 };
 
-type ITunesTrack = {
-  trackId?: number;
-  trackName?: string;
-  artistName?: string;
-  collectionName?: string;
-  previewUrl?: string;
-};
-
 const makeDownloadFile = (memory: Memory) => {
   const payload = [
     memory.title,
@@ -593,13 +587,15 @@ const MemoryLightbox: React.FC<Props> = ({
 
         const endpoint = buildDriveMediaEndpoint(current);
         if (!endpoint) return;
-        const response = await fetch(endpoint, {
-          headers: { Authorization: `Bearer ${current.authToken}` },
-          signal: controller.signal,
-          cache: 'force-cache',
+        const blob = await withMediaFetch(async () => {
+          const response = await fetch(endpoint, {
+            headers: { Authorization: `Bearer ${current.authToken}` },
+            signal: controller.signal,
+            cache: 'force-cache',
+          });
+          if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
+          return response.blob();
         });
-        if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
-        const blob = await response.blob();
         void writeCachedStoryMedia(cacheKey, blob, current.mimeType || blob.type);
         objectUrl = URL.createObjectURL(blob);
         setDriveObjectSrc(objectUrl);
@@ -926,23 +922,36 @@ const MemoryLightbox: React.FC<Props> = ({
   const searchStoryMusic = async (value = musicQuery) => {
     const query = value.trim();
     if (!query) {
-      emitToast('Search a song or paste a YouTube link.');
+      emitToast('Search a song or paste a link.');
       return;
     }
     setMusicSearching(true);
     setMusicOpen(true);
     try {
-      const results = buildStoryMusicResults(query);
-      if (!results.length) {
-        emitToast('No playable songs found.');
+      // Offline-known playable tracks (96 soundtrack, direct audio links, YouTube ids).
+      const known = buildStoryMusicResults(query);
+      const playableKnown = known.filter(track => track.videoId || track.previewUrl);
+      // Real searchable, playable open-source audio from the Internet Archive.
+      const openSource = (await searchOpenSourceMusic(query)).map(track => ({
+        ...track,
+        query,
+      } satisfies StoryMusicTrack));
+      const merged = [...playableKnown, ...openSource];
+      if (!merged.length) {
+        setMusicResults(known);
+        emitToast('No playable songs found online. Showing search links below.');
         return;
       }
-      setMusicResults(results);
-      emitToast('YouTube song results ready. Pick one to play or add.');
+      setMusicResults(merged);
+      emitToast(openSource.length
+        ? `${openSource.length} open-source songs found. Pick one to play.`
+        : 'Song results ready. Pick one to play or add.');
     } catch {
       const results = buildStoryMusicResults(query);
       setMusicResults(results);
-      emitToast(results.length ? 'Online audio search failed, showing fallback results.' : 'No playable songs found.');
+      emitToast(results.some(track => track.videoId || track.previewUrl)
+        ? 'Online search failed, using known songs.'
+        : 'No playable songs found.');
     } finally {
       setMusicSearching(false);
     }
@@ -992,7 +1001,7 @@ const MemoryLightbox: React.FC<Props> = ({
     emitToast(playNow ? 'Playlist started.' : 'Song added to playlist.');
   };
 
-  const playStoryTrack = (track: StoryMusicTrack, index = musicResults.findIndex(item => item.id === track.id)) => {
+  const playStoryTrack = (track: StoryMusicTrack) => {
     if (!track.videoId && !track.previewUrl) {
       setActiveStoryTrack(track);
       return;
@@ -1639,7 +1648,7 @@ const MemoryLightbox: React.FC<Props> = ({
               </div>
               {musicResults.length > 0 && (
                 <div className="cinema-story-music-results">
-                  {musicResults.map((track, index) => (
+                  {musicResults.map(track => (
                     <div
                       key={track.id}
                       className={activeMusicId === track.id ? 'is-active' : ''}
@@ -1647,13 +1656,13 @@ const MemoryLightbox: React.FC<Props> = ({
                       <button
                         type="button"
                         className="cinema-story-music-play"
-                        onClick={() => playStoryTrack(track, index)}
+                        onClick={() => playStoryTrack(track)}
                         aria-label={track.videoId || track.previewUrl ? `Play ${track.title}` : `Open ${track.title} on YouTube`}
                         title={track.videoId || track.previewUrl ? 'Play song' : 'Open YouTube search'}
                       >
                         {track.videoId || track.previewUrl ? <Play size={14} /> : <Search size={14} />}
                       </button>
-                      <button type="button" onClick={() => playStoryTrack(track, index)}>
+                      <button type="button" onClick={() => playStoryTrack(track)}>
                         <strong>{track.title}</strong>
                         <small>{track.artist}</small>
                       </button>
@@ -1708,7 +1717,7 @@ const MemoryLightbox: React.FC<Props> = ({
                 </div>
               )}
               {!audioSrc && !youtubeSrc && (
-                <p className="cinema-story-music-note">Search "96 movie song" to see the 96 soundtrack list, then click any song to play audio.</p>
+                <p className="cinema-story-music-note">Search any song — playable open-source audio from the Internet Archive is found automatically. "96 movie song" also lists the full 96 soundtrack.</p>
               )}
             </motion.aside>
           )}

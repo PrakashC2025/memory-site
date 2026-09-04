@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Bell, BookOpen, Check, Film, Lock, Music, Palette, Shield, Sparkles, User, Users, Wand2 } from 'lucide-react';
 import DriveConnectPanel from '../components/DriveConnectPanel';
+import PageHero from '../components/PageHero';
 import { THEMES, type Theme, useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
 
@@ -39,14 +40,14 @@ const Settings: React.FC = () => {
 
   return (
     <div className="mx-auto min-h-screen max-w-4xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
-      <motion.header {...fadeUp} transition={{ duration: 0.58 }} className="mb-9 text-center">
-        <div className="mx-auto mb-4 flex w-fit items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-[0.22em]" style={{ borderColor: config.primary + '40', color: config.accent }}>
-          <Sparkles size={14} />
-          Settings
-        </div>
-        <h1 className="neon-title text-4xl font-black md:text-5xl">Tune your memory world.</h1>
-        <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-white/58">Personalize the neon theme, privacy switches, and demo integrations.</p>
-      </motion.header>
+      <PageHero
+        kicker="Settings"
+        Icon={Sparkles}
+        gradient="gt-mint"
+        accent={config.primary}
+        title={<>Tune your <span className="italic">memory world.</span></>}
+        subtitle="Personalize the neon theme, privacy switches, and media connections."
+      />
 
       <div className="space-y-5">
         <motion.section {...fadeUp} transition={{ duration: 0.56, delay: 0.08 }} className="neon-card p-5 md:p-6">

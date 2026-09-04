@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CalendarDays, Heart, MapPin, Sparkles, Star } from 'lucide-react';
 import MemoryLightbox from '../components/MemoryLightbox';
 import DriveMediaPreview from '../components/DriveMediaPreview';
 import { useTheme } from '../context/ThemeContext';
+import PageHero from '../components/PageHero';
 import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
 import { readDriveMemories } from '../services/driveLibrary';
@@ -32,22 +33,20 @@ const Timeline: React.FC = () => {
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [filterYear, setFilterYear] = useState<number | null>(null);
 
-  const driveMemories = readDriveMemories();
+  const driveMemories = useMemo(() => readDriveMemories(), []);
   const years = groupMemoriesByYear(driveMemories);
   const filteredYears = filterYear ? years.filter(year => year.year === filterYear) : years;
 
   return (
     <div className="mx-auto min-h-screen max-w-6xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
-      <motion.header initial={{ opacity: 0, y: -18 }} animate={{ opacity: 1, y: 0 }} className="mb-9 text-center">
-        <div className="mx-auto mb-4 flex w-fit items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-[0.22em]" style={{ borderColor: config.primary + '40', color: config.accent }}>
-          <CalendarDays size={14} />
-          Timeline Journey
-        </div>
-        <h1 className="neon-title text-4xl font-black md:text-6xl">Every chapter, still glowing.</h1>
-        <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/58 md:text-base">
-          Browse memories by year and month. Open any card for the fullscreen neon lightbox.
-        </p>
-      </motion.header>
+      <PageHero
+        kicker="Timeline Journey"
+        Icon={CalendarDays}
+        gradient="gt-cyan"
+        accent={config.primary}
+        title={<>Every chapter, <span className="italic">still glowing.</span></>}
+        subtitle="Browse memories by year and month. Open any card for the fullscreen neon lightbox."
+      />
 
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.14 }} className="mb-10 flex flex-wrap justify-center gap-2">
         <button

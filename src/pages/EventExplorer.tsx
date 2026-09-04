@@ -5,6 +5,7 @@ import DriveMediaPreview from '../components/DriveMediaPreview';
 import MemoryLightbox from '../components/MemoryLightbox';
 import { useTheme } from '../context/ThemeContext';
 import type { Memory } from '../data/memories';
+import PageHero from '../components/PageHero';
 import { readDriveMemories } from '../services/driveLibrary';
 import { buildRecapSections, getMemoryHeatmap, groupMemoriesByEvent } from '../services/memoryOrganizer';
 
@@ -22,7 +23,7 @@ const EventExplorer: React.FC = () => {
   const { config } = useTheme();
   const [query, setQuery] = useState('');
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
-  const driveMemories = readDriveMemories();
+  const driveMemories = useMemo(() => readDriveMemories(), []);
 
   const events = useMemo(() => groupMemoriesByEvent(driveMemories), [driveMemories]);
   const recaps = useMemo(() => buildRecapSections(driveMemories), [driveMemories]);
@@ -37,16 +38,14 @@ const EventExplorer: React.FC = () => {
 
   return (
     <div className="mx-auto min-h-screen max-w-7xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
-      <motion.header initial={{ opacity: 0, y: -18 }} animate={{ opacity: 1, y: 0 }} className="mb-9 text-center">
-        <div className="mx-auto mb-4 flex w-fit items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-[0.22em]" style={{ borderColor: config.primary + '40', color: config.accent }}>
-          <Sparkles size={14} />
-          Event Explorer
-        </div>
-        <h1 className="neon-title text-4xl font-black md:text-6xl">Chapters your heart remembers.</h1>
-        <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/58 md:text-base">
-          Auto-detected moments become chapters, recaps, and emotional clusters instead of a plain gallery.
-        </p>
-      </motion.header>
+      <PageHero
+        kicker="Event Explorer"
+        Icon={Sparkles}
+        gradient="gt-rose"
+        accent={config.primary}
+        title={<>Chapters your heart <span className="italic">remembers.</span></>}
+        subtitle="Auto-detected moments become chapters, recaps, and emotional clusters instead of a plain gallery."
+      />
 
       {driveMemories.length === 0 && (
         <div className="neon-card mx-auto mb-8 max-w-xl p-8 text-center">

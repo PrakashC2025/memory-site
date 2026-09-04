@@ -33,7 +33,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
   const { config } = useTheme();
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [query, setQuery] = useState('');
-  const driveMemories = readDriveMemories();
+  const driveMemories = useMemo(() => readDriveMemories(), []);
 
   const years = groupMemoriesByYear(driveMemories);
   const favorites = driveMemories.filter(memory => memory.isFavorite);
@@ -71,15 +71,18 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
   return (
     <div className="dashboard-page mx-auto max-w-7xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
       <motion.section {...fadeUp} transition={{ duration: 0.65 }} className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
-        <div className="neon-card p-5 md:p-8">
-          <div className="mb-5 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em]" style={{ color: config.accent }}>
-            <Sparkles size={15} />
-            Personal Memory Archive
-          </div>
-          <h1 className="neon-title text-4xl font-black leading-tight md:text-6xl">
-            Welcome back, {user?.name?.split(' ')[0] || 'friend'}.
-          </h1>
-          <p className="mt-4 max-w-2xl text-sm leading-7 text-white/64 md:text-base">
+        <div className="neon-card relative overflow-hidden p-5 md:p-8">
+          <span className="page-hero-orb page-hero-orb-a" style={{ background: config.primary, opacity: 0.14 }} aria-hidden="true" />
+          <span className="page-hero-orb page-hero-orb-b" style={{ background: config.secondary, opacity: 0.12 }} aria-hidden="true" />
+          <div className="relative">
+            <div className="mb-5 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em]" style={{ color: config.accent }}>
+              <Sparkles size={15} />
+              Personal Memory Archive
+            </div>
+            <h1 className="gt-amber text-4xl font-black leading-tight md:text-6xl">
+              Welcome back, {user?.name?.split(' ')[0] || 'friend'}.
+            </h1>
+          <p className="relative mt-4 max-w-2xl text-sm leading-7 text-white/64 md:text-base">
             {driveMemories.length} Drive moments are ready. Search, open favorites, jump into the tree, or let story mode run.
           </p>
 
@@ -96,6 +99,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
               <CalendarDays size={17} />
               View Timeline
             </button>
+          </div>
           </div>
         </div>
 

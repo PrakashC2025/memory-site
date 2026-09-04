@@ -15,4 +15,8 @@ export default defineConfig({
       "@": path.resolve(__dirname, "src"),
     },
   },
+  server: {
+    // Allow the app to be opened through VS Code / remote dev tunnels.
+    allowedHosts: ["ljs91hvv-5173.inc1.devtunnels.ms", ".devtunnels.ms"],
+  },
 });

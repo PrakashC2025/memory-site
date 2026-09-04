@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Play } from 'lucide-react';
 import type { Memory } from '../data/memories';
 import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
+import { withMediaFetch } from '../utils/mediaQueue';
 
 interface Props {
   memory: Memory;
@@ -12,10 +13,37 @@ interface Props {
 
 const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager }) => {
   const imageCandidates = useMemo(() => buildImageCandidates(memory), [memory]);
+  const wrapperRef = useRef<HTMLSpanElement>(null);
   const [blobSrc, setBlobSrc] = useState('');
   const [imageIndex, setImageIndex] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [visible, setVisible] = useState(false);
+
+  // Only upgrade thumbnails to full quality when the image is close to the
+  // viewport. Pages with many memories no longer download everything at once.
+  useEffect(() => {
+    const node = wrapperRef.current;
+    if (!node) {
+      setVisible(true);
+      return undefined;
+    }
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries[0]?.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '420px' }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     setBlobSrc('');
@@ -23,7 +51,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     setLoaded(false);
     setFailed(false);
 
-    if (memory.type !== 'photo') return undefined;
+    if (memory.type !== 'photo' || !visible) return undefined;
 
     let objectUrl = '';
     const controller = new AbortController();
@@ -39,13 +67,17 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
 
         if (!memory.authToken || !memory.driveFileId) return;
 
-        const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(memory.driveFileId)}?alt=media`, {
-          headers: { Authorization: `Bearer ${memory.authToken}` },
-          signal: controller.signal,
-          cache: 'force-cache',
+        const fileId = memory.driveFileId;
+        const authToken = memory.authToken;
+        const blob = await withMediaFetch(async () => {
+          const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+            signal: controller.signal,
+            cache: 'force-cache',
+          });
+          if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
+          return response.blob();
         });
-        if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
-        const blob = await response.blob();
         void writeCachedStoryMedia(cacheKey, blob, memory.mimeType || blob.type);
         objectUrl = URL.createObjectURL(blob);
         setBlobSrc(objectUrl);
@@ -59,7 +91,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [memory.authToken, memory.driveFileId, memory.id, memory.type]);
+  }, [memory.authToken, memory.driveFileId, memory.id, memory.type, visible]);
 
   const src = blobSrc || imageCandidates[imageIndex] || '';
 
@@ -75,27 +107,27 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     setFailed(true);
   };
 
-  if (!failed && src) {
-    return (
-      <img
-        src={src}
-        alt={alt ?? memory.title}
-        className={`${className} drive-media-preview`}
-        loading={eager ? 'eager' : 'lazy'}
-        decoding="async"
-        referrerPolicy="no-referrer"
-        onLoad={() => setLoaded(true)}
-        onError={tryNextImage}
-        style={loaded ? undefined : { opacity: 0.01 }}
-      />
-    );
-  }
-
   return (
-    <span className={`drive-preview-fallback ${className} drive-media-preview`}>
-      {memory.type === 'video' ? <Play size={24} /> : <Image size={24} />}
-      <strong>{memory.title}</strong>
-      <small>{memory.type === 'video' ? 'Video from Drive' : 'Photo from Drive'}</small>
+    <span ref={wrapperRef} className="drive-media-preview-wrap">
+      {!failed && src ? (
+        <img
+          src={src}
+          alt={alt ?? memory.title}
+          className={`${className} drive-media-preview`}
+          loading={eager ? 'eager' : 'lazy'}
+          decoding="async"
+          referrerPolicy="no-referrer"
+          onLoad={() => setLoaded(true)}
+          onError={tryNextImage}
+          style={loaded ? undefined : { opacity: 0.01 }}
+        />
+      ) : (
+        <span className={`drive-preview-fallback ${className} drive-media-preview`}>
+          {memory.type === 'video' ? <Play size={24} /> : <Image size={24} />}
+          <strong>{memory.title}</strong>
+          <small>{memory.type === 'video' ? 'Video from Drive' : 'Photo from Drive'}</small>
+        </span>
+      )}
     </span>
   );
 };
@@ -119,4 +151,4 @@ const sharpenThumbnail = (url: string) => {
     .replace(/sz=w\d+/i, 'sz=w1600');
 };
 
-export default DriveMediaPreview;
+export default DriveMediaPreview;
