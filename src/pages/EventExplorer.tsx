@@ -177,7 +177,11 @@ const EventExplorer: React.FC = () => {
       </section>
 
       <MemoryLightbox memory={selectedMemory} memories={selectedMemory ? driveMemories : []} onClose={() => setSelectedMemory(null)} />
+<<<<<<< HEAD
       {reelConfig && <MemoryReel memories={reelConfig.memories} title={reelConfig.title} driveAccessToken={reelConfig.memories[0]?.authToken} onClose={() => setReelConfig(null)} />}
+=======
+      {reelConfig && <MemoryReel memories={reelConfig.memories} title={reelConfig.title} onClose={() => setReelConfig(null)} />}
+>>>>>>> 16af08391491e209b54807755e2c7b27d3942767
     </div>
   );
 };
