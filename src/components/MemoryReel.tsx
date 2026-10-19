@@ -3,7 +3,6 @@ import { Maximize2, Minimize2, Pause, Play, RotateCcw, Search, Upload, X } from 
 import type { Memory } from '../data/memories';
 import { googleDriveService, type DriveAudioFile } from '../services/googleDriveService';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
-import { withMediaFetch } from '../utils/mediaQueue';
 
 export interface MemoryReelTitle {
   line?: string;
@@ -11,7 +10,9 @@ export interface MemoryReelTitle {
 }
 
 interface ReelSource {
+  id: string;
   src: string;
+  fallbackSrc?: string;
   type: 'image' | 'video';
   label: string;
 }
@@ -184,6 +185,7 @@ export class MemoryReelController {
     return new Promise(resolve => {
       const isVideo = item.type === 'video' || /\.(mp4|mov|webm|m4v|avi|mkv)(\?|$)/i.test(item.src);
       let finished = false;
+      let attemptedFallback = false;
       const placeholder = () => {
         if (finished) return;
         const image = new Image();
@@ -214,7 +216,14 @@ export class MemoryReelController {
         image.decoding = 'async';
         image.crossOrigin = 'anonymous';
         image.onload = () => finish({ node: image, aspect: image.naturalWidth / image.naturalHeight || 1.5 });
-        image.onerror = placeholder;
+        image.onerror = () => {
+          if (item.fallbackSrc && !attemptedFallback) {
+            attemptedFallback = true;
+            image.src = item.fallbackSrc;
+            return;
+          }
+          placeholder();
+        };
         image.src = item.src;
       }
     });
@@ -401,9 +410,10 @@ export class MemoryReelController {
       const flyBlur = dip * 5;
       this.cards.forEach(card => {
         const distance = Math.hypot(card.x - camera.x, card.y - camera.y);
-        const blur = clamp((distance - 300) / 60, 0, 9) + (distance > 300 ? flyBlur : 0);
+        const blur = clamp((distance - 360) / 100, 0, 5) + (distance > 360 ? flyBlur * 0.65 : 0);
         const near = distance < 200;
-        card.card.style.filter = (blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : '') + (near ? '' : ' brightness(.82)');
+        card.card.style.opacity = '1';
+        card.card.style.filter = (blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : '') + (near ? '' : ' brightness(.9)');
         if (card.video) {
           const active = near && !this.paused;
           if (active && card.video.paused) void card.video.play().catch(() => undefined);
@@ -422,56 +432,27 @@ export class MemoryReelController {
 
 const isVideoMemory = (memory: Memory) => memory.type === 'video' || Boolean(memory.mimeType?.startsWith('video/'));
 
-const fetchDriveBlobUrl = async (memory: Memory, signal: AbortSignal) => {
-  if (!memory.driveFileId || !memory.authToken) return '';
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 18000);
-  const abort = () => controller.abort();
-  signal.addEventListener('abort', abort, { once: true });
-  try {
-    const response = await withMediaFetch(() => fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(memory.driveFileId!)}?alt=media`, {
-      headers: { Authorization: `Bearer ${memory.authToken}` },
-      signal: controller.signal,
-      cache: 'force-cache',
-    }));
-    if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
-    return URL.createObjectURL(await response.blob());
-  } finally {
-    window.clearTimeout(timeout);
-    signal.removeEventListener('abort', abort);
-  }
-};
-
 const makeReelPlaceholder = (label: string) => {
   const safeLabel = escapeHtml(label || 'Memory');
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#20283d"/><stop offset="1" stop-color="#7a4566"/></linearGradient></defs><rect width="1200" height="800" fill="url(#g)"/><circle cx="170" cy="150" r="130" fill="#ffd9a0" fill-opacity=".24"/><circle cx="1040" cy="650" r="220" fill="#8ee3ff" fill-opacity=".16"/><text x="600" y="420" fill="white" font-family="Georgia,serif" font-size="54" text-anchor="middle">${safeLabel}</text></svg>`)}`;
 };
 
-const resolveReelSources = async (memories: Memory[], signal: AbortSignal, ownedUrls: string[]) => {
-  const sources = await Promise.all(memories.map(async memory => {
-    const fallback = isVideoMemory(memory) ? memory.url || memory.thumbnail : memory.thumbnail || memory.url;
-    if (memory.driveFileId && memory.authToken) {
-      try {
-        const objectUrl = await fetchDriveBlobUrl(memory, signal);
-        if (objectUrl) {
-          if (signal.aborted) {
-            URL.revokeObjectURL(objectUrl);
-            return null;
-          }
-          ownedUrls.push(objectUrl);
-          return { src: objectUrl, type: isVideoMemory(memory) ? 'video' : 'image', label: memory.title } satisfies ReelSource;
-        }
-      } catch {
-        if (signal.aborted) return null;
-      }
-    }
+const resolveReelSources = async (memories: Memory[], signal: AbortSignal) => {
+  const sources = memories.map(memory => {
+    const video = isVideoMemory(memory);
+    const preview = video ? memory.url || memory.thumbnail : memory.thumbnail || memory.url;
+    const authenticatedFallback = !video && memory.driveFileId && memory.authToken && memory.url !== preview
+      ? memory.url
+      : undefined;
     return {
-      src: fallback || makeReelPlaceholder(memory.title),
-      type: isVideoMemory(memory) ? 'video' : 'image',
+      id: memory.id,
+      src: preview || makeReelPlaceholder(memory.title),
+      fallbackSrc: authenticatedFallback,
+      type: video ? 'video' : 'image',
       label: memory.title,
     } satisfies ReelSource;
-  }));
-  return sources.filter((source): source is ReelSource => Boolean(source));
+  });
+  return signal.aborted ? [] : sources;
 };
 
 interface MusicQueueItem {
@@ -521,18 +502,25 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
 
   useEffect(() => {
     const controller = new AbortController();
-    const ownedUrls: string[] = [];
+    const photos = memories.filter(memory => !isVideoMemory(memory));
+    const videos = memories.filter(memory => isVideoMemory(memory));
     setLoading(true);
     setResolvedSources([]);
-    void resolveReelSources(memories, controller.signal, ownedUrls).then(sources => {
-      if (!controller.signal.aborted) {
-        setResolvedSources(sources);
-        setLoading(false);
-      }
-    });
+    void (async () => {
+      const photoSources = await resolveReelSources(photos, controller.signal);
+      if (controller.signal.aborted) return;
+      setResolvedSources(photoSources);
+      if (photoSources.length) setLoading(false);
+
+      // Videos are intentionally appended after the photo wall is ready so a
+      // large video cannot delay the first visual sequence.
+      const videoSources = await resolveReelSources(videos, controller.signal);
+      if (controller.signal.aborted) return;
+      setResolvedSources(current => [...current, ...videoSources]);
+      if (!photoSources.length) setLoading(false);
+    })();
     return () => {
       controller.abort();
-      ownedUrls.forEach(url => URL.revokeObjectURL(url));
     };
   }, [memories]);
 
@@ -548,7 +536,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
       onProgress: (current, total) => {
         setProgress({ progress: current, total });
         const more = moreConfigRef.current;
-        if (more.hasMore && !more.loadingMore && !moreRequestedRef.current && total > 0 && current / total >= 0.72) {
+        if (more.hasMore && !more.loadingMore && !moreRequestedRef.current && total > 0 && current / total >= 0.55) {
           moreRequestedRef.current = true;
           more.onNeedMore?.();
         }
