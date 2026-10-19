@@ -60,14 +60,26 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       if (!token) return;
       try {
         const page = await googleDriveService.listMediaPage(token, '', folderId);
-        const byId = new Map(known.map(memory => [memory.id, memory]));
-        page.files.forEach(file => byId.set(`drive-${file.id}`, googleDriveService.toMemory(file, token)));
-        known = [...byId.values()].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        const knownIds = new Set(known.map(memory => memory.id));
+        const newFiles = page.files.filter(file => !knownIds.has(`drive-${file.id}`));
+        if (!newFiles.length) {
+          // Keep the active reel untouched when Drive has not changed. The
+          // cache check still runs silently for a changed file on Drive.
+          void cacheDriveMediaFiles(page.files, token);
+          return;
+        }
+
+        // Append new memories instead of sorting the wall again. Existing
+        // photos keep their order and timing while the new photos wait their
+        // turn later in the live loop.
+        const newMemories = newFiles.map(file => googleDriveService.toMemory(file, token));
+        known = [...known, ...newMemories];
         saveDriveMemories(known, token, folderId);
-        // Show new Drive items immediately, then replace their URLs with local
-        // IndexedDB blobs as soon as the background cache finishes.
-        await applyCached(known);
-        void cacheDriveMediaFiles(page.files, token).then(() => applyCached(known));
+        // New media is appended without replacing the active blob URLs, so
+        // the photo currently on screen keeps playing normally. Its full
+        // local copy is downloaded silently for the next playback/open.
+        setDriveMemories(current => [...current, ...newMemories]);
+        void cacheDriveMediaFiles(newFiles, token);
       } catch {
         // Cached memories remain playable when Drive is temporarily offline.
       }
