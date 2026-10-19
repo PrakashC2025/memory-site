@@ -21,6 +21,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import DriveMediaPreview from '../components/DriveMediaPreview';
+import DriveCameraCapture from '../components/DriveCameraCapture';
 import MemoryLightbox from '../components/MemoryLightbox';
 import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
@@ -100,6 +101,7 @@ const Memoriya: React.FC = () => {
   const [selected, setSelected] = useState<Memory | null>(() => restored?.memories?.[0] || null);
   const [viewerMemory, setViewerMemory] = useState<Memory | null>(null);
   const [reelConfig, setReelConfig] = useState<{ memories: Memory[]; title: { line: string; big: string }; live: boolean } | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [activeReaction, setActiveReaction] = useState('Love');
   const [accessToken, setAccessToken] = useState(restored?.accessToken || '');
   const [nextPageToken, setNextPageToken] = useState(restored?.nextPageToken || '');
@@ -176,7 +178,7 @@ const Memoriya: React.FC = () => {
 
   const appendDriveFiles = (files: DriveMediaFile[], token: string) => {
     const imported = files
-      .filter(file => file.thumbnailUrl || file.webContentLink)
+      .filter(file => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || file.thumbnailUrl || file.webContentLink)
       .map(file => enrichDriveMemory(googleDriveService.toMemory(file, token), file));
     setMemories(current => {
       const ids = new Set(current.map(memory => memory.id));
@@ -378,6 +380,7 @@ const Memoriya: React.FC = () => {
     if (folderPollRef.current) window.clearInterval(folderPollRef.current);
     folderPollRef.current = null;
     localFileIdsRef.current.clear();
+    setCameraOpen(false);
     window.sessionStorage.removeItem(DRIVE_SESSION_KEY);
   };
 
@@ -444,6 +447,7 @@ const Memoriya: React.FC = () => {
             <button className="memoriya-glass-button" onClick={() => void connectLocalFolder()}>
               <FolderOpen size={17} /> Link local folder
             </button>
+            {accessToken && <button className="memoriya-glass-button" onClick={() => setCameraOpen(true)}><Camera size={17} /> Drive camera</button>}
             {hasMemories && <button className="memoriya-glass-button" onClick={() => playStory(filteredMemories)}><Film size={17} /> Play story</button>}
             {accessToken && (
               <button className="memoriya-glass-button" onClick={disconnectDrive}>
@@ -559,6 +563,16 @@ const Memoriya: React.FC = () => {
       )}
 
       <MemoryLightbox memory={viewerMemory} memories={filteredMemories} onClose={() => setViewerMemory(null)} />
+      {cameraOpen && accessToken && (
+        <DriveCameraCapture
+          accessToken={accessToken}
+          onUploaded={file => {
+            const added = appendDriveFiles([file], accessToken);
+            setMessage(added ? 'Photo uploaded to Drive and added to the live story.' : 'Photo uploaded to Drive. Sync again if it is not visible yet.');
+          }}
+          onClose={() => setCameraOpen(false)}
+        />
+      )}
       {reelConfig && (
         <MemoryReel
           memories={reelConfig.memories}

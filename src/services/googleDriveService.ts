@@ -42,7 +42,9 @@ export interface DriveMediaPage {
   nextPageToken?: string;
 }
 
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+// Read existing memories and allow the in-site camera to create new photos.
+// drive.file keeps write access limited to files created by Memoriya.
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
 const GOOGLE_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 const DRIVE_REQUEST_TIMEOUT_MS = 20000;
 
@@ -166,7 +168,7 @@ export class GoogleDriveService {
             accessToken: response.access_token,
             lastImportedAt: new Date().toISOString(),
             mode: 'google',
-            message: 'Google Drive connected with readonly access.',
+            message: 'Google Drive connected with memory upload access.',
           }));
         },
         error_callback: error => {
@@ -247,6 +249,55 @@ export class GoogleDriveService {
         thumbnailUrl: file.thumbnailUrl || file.thumbnailLink || file.webContentLink || file.webViewLink || '',
         webContentLink: file.webContentLink || file.webViewLink,
       })),
+    };
+  }
+
+  async listFolders(accessToken: string): Promise<Array<{ id: string; name: string }>> {
+    const params = new URLSearchParams({
+      q: "mimeType='application/vnd.google-apps.folder' and trashed=false",
+      pageSize: '100',
+      orderBy: 'name',
+      fields: 'files(id,name)',
+    });
+    const payload = await fetchDriveJson<{ files?: Array<{ id: string; name: string }> }>(
+      `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
+      accessToken,
+    );
+    return payload.files || [];
+  }
+
+  async uploadMedia(accessToken: string, file: File, folderId?: string): Promise<DriveMediaFile> {
+    const boundary = `memoriya-${Date.now().toString(36)}`;
+    const metadata: { name: string; mimeType: string; parents?: string[] } = {
+      name: file.name || `memoriya-${Date.now()}.jpg`,
+      mimeType: file.type || 'image/jpeg',
+    };
+    if (folderId && folderId !== 'drive-root') metadata.parents = [folderId];
+
+    const body = new Blob([
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+      JSON.stringify(metadata),
+      `\r\n--${boundary}\r\nContent-Type: ${metadata.mimeType}\r\n\r\n`,
+      file,
+      `\r\n--${boundary}--`,
+    ], { type: `multipart/related; boundary=${boundary}` });
+
+    const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,createdTime,modifiedTime,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(detail || `Drive upload failed (${response.status}). Reconnect Drive with upload permission.`);
+    }
+    const uploaded = await response.json() as DriveMediaFile & { thumbnailLink?: string };
+    return {
+      ...uploaded,
+      thumbnailUrl: uploaded.thumbnailUrl || uploaded.thumbnailLink || uploaded.webContentLink || '',
     };
   }
 
