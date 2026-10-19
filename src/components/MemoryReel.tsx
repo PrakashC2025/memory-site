@@ -96,7 +96,9 @@ export class MemoryReelController {
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
     this.options = {
-      hold: 3.6,
+      // Give every loaded photo a complete six-second focus before the
+      // camera starts its transition to the next frame.
+      hold: 6,
       move: 1.2,
       loop: false,
       reducedMotion: false,
