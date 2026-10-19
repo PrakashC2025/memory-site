@@ -44,6 +44,7 @@ export interface DriveMediaPage {
 
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 const GOOGLE_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
+const DRIVE_REQUEST_TIMEOUT_MS = 20000;
 
 type GoogleTokenResponse = {
   access_token?: string;
@@ -98,6 +99,26 @@ const loadScript = (src: string) =>
     document.head.appendChild(script);
   });
 
+const fetchDriveJson = async <T,>(url: string, accessToken: string): Promise<T> => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Drive scan failed (${response.status}).`);
+    return await response.json() as T;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Drive is taking too long to respond. Please try Sync Drive again.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
+
 export class GoogleDriveService {
   async connect(): Promise<DriveConnectionState> {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
@@ -125,7 +146,7 @@ export class GoogleDriveService {
 
       const timeoutId = window.setTimeout(() => {
         finish(() => reject(new Error('Google Drive authorization was cancelled.')));
-      }, 90000);
+      }, 45000);
 
       const tokenClient = oauth.initTokenClient({
         client_id: clientId,
@@ -179,24 +200,16 @@ export class GoogleDriveService {
     do {
       const params = new URLSearchParams({
         q: "(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false",
-        pageSize: '100',
+        pageSize: '40',
         orderBy: 'createdTime desc',
         fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
       });
       if (pageToken) params.set('pageToken', pageToken);
 
-      const response = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Drive scan failed (${response.status}).`);
-      }
-
-      const payload = await response.json() as {
+      const payload = await fetchDriveJson<{
         nextPageToken?: string;
         files?: Array<DriveMediaFile & { thumbnailLink?: string; webViewLink?: string }>;
-      };
+      }>(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, accessToken);
 
       const batch = (payload.files || []).map(file => ({
         ...file,
@@ -216,24 +229,16 @@ export class GoogleDriveService {
   async listMediaPage(accessToken: string, pageToken = ''): Promise<DriveMediaPage> {
     const params = new URLSearchParams({
       q: "(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false",
-      pageSize: '100',
+      pageSize: '40',
       orderBy: 'createdTime desc',
       fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
     });
     if (pageToken) params.set('pageToken', pageToken);
 
-    const response = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Drive scan failed (${response.status}).`);
-    }
-
-    const payload = await response.json() as {
+    const payload = await fetchDriveJson<{
       nextPageToken?: string;
       files?: Array<DriveMediaFile & { thumbnailLink?: string; webViewLink?: string }>;
-    };
+    }>(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, accessToken);
 
     return {
       nextPageToken: payload.nextPageToken,
