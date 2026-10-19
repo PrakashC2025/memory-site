@@ -701,7 +701,7 @@ const HeroImage = memo<{ memory: Memory; index: number; lightweight: boolean }>(
     animate={lightweight ? undefined : { opacity: 1, y: 0, rotate: index % 2 ? 2 : -2 }}
     transition={{ delay: 0.08 + index * 0.04, duration: 0.28 }}
   >
-    <OptimizedImage memory={memory} width={360} eager={index < 2} />
+    <OptimizedImage memory={memory} width={360} eager />
   </motion.div>
 ));
 

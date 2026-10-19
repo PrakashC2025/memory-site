@@ -5854,7 +5854,14 @@ body,
     linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
     rgba(5, 8, 16, 0.72) !important;
   box-shadow: 0 16px 46px rgba(0, 0, 0, 0.26) !important;
+  z-index: 0 !important;
   mask-image: none !important;
+}
+
+.memoriya-experience .memoriya-hero-copy,
+.memoriya-experience .memoriya-now-card {
+  position: relative;
+  z-index: 1;
 }
 
 .memoriya-experience .memoriya-hero-film > div {

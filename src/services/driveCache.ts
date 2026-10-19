@@ -38,6 +38,12 @@ const readCached = async (id: string) => {
   });
 };
 
+export const readCachedDriveMedia = async (id: string) => {
+  if (!id) return null;
+  const cached = await readCached(id);
+  return cached ? { blob: cached.blob, mimeType: cached.mimeType } : null;
+};
+
 const writeCached = async (item: CachedDriveMedia) => {
   const db = await getCache();
   if (!db) return;
