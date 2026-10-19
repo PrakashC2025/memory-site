@@ -86,7 +86,7 @@ const Memoriya: React.FC = () => {
   const [memories, setMemories] = useState<Memory[]>(() => restored?.memories || []);
   const [selected, setSelected] = useState<Memory | null>(() => restored?.memories?.[0] || null);
   const [viewerMemory, setViewerMemory] = useState<Memory | null>(null);
-  const [reelConfig, setReelConfig] = useState<{ memories: Memory[]; title: { line: string; big: string } } | null>(null);
+  const [reelConfig, setReelConfig] = useState<{ memories: Memory[]; title: { line: string; big: string }; live: boolean } | null>(null);
   const [activeReaction, setActiveReaction] = useState('Love');
   const [accessToken, setAccessToken] = useState(restored?.accessToken || '');
   const [nextPageToken, setNextPageToken] = useState(restored?.nextPageToken || '');
@@ -143,6 +143,11 @@ const Memoriya: React.FC = () => {
   useEffect(() => {
     if (!selected && filteredMemories[0]) setSelected(filteredMemories[0]);
   }, [filteredMemories, selected]);
+
+  useEffect(() => {
+    if (!reelConfig?.live) return;
+    setReelConfig(current => current?.live ? { ...current, memories: filteredMemories } : current);
+  }, [filteredMemories]);
 
   const appendDriveFiles = (files: DriveMediaFile[], token: string) => {
     const imported = files
@@ -297,6 +302,7 @@ const Memoriya: React.FC = () => {
     setReelConfig({
       memories: sequence,
       title: { line, big: String(sequence[0]?.year || new Date().getFullYear()) },
+      live: items === filteredMemories,
     });
   };
 
@@ -449,7 +455,16 @@ const Memoriya: React.FC = () => {
       )}
 
       <MemoryLightbox memory={viewerMemory} memories={filteredMemories} onClose={() => setViewerMemory(null)} />
-      {reelConfig && <MemoryReel memories={reelConfig.memories} title={reelConfig.title} onClose={() => setReelConfig(null)} />}
+      {reelConfig && (
+        <MemoryReel
+          memories={reelConfig.memories}
+          title={reelConfig.title}
+          hasMore={reelConfig.live && Boolean(nextPageToken)}
+          loadingMore={loading}
+          onNeedMore={() => void loadDrivePage()}
+          onClose={() => setReelConfig(null)}
+        />
+      )}
     </div>
   );
 };

@@ -20,6 +20,9 @@ interface MemoryReelProps {
   title?: MemoryReelTitle;
   audio?: string;
   autoPlay?: boolean;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onNeedMore?: () => void;
   onClose?: () => void;
 }
 
@@ -113,8 +116,10 @@ export class MemoryReelController {
     }
   }
 
-  async setItems(items: ReelSource[]) {
+  async setItems(items: ReelSource[], preserveProgress = false) {
     const generation = ++this.loadGeneration;
+    const wasPlaying = !this.paused;
+    const previousElapsed = this.elapsed;
     this.pause();
     this.world.innerHTML = '';
     this.cards = [];
@@ -164,8 +169,10 @@ export class MemoryReelController {
     });
 
     this.total = this.cards.length * (this.options.hold + this.options.move) - this.options.move + 2.6;
+    this.elapsed = preserveProgress ? Math.min(previousElapsed, this.total) : 0;
     this.resize();
-    this.render(0);
+    this.render(this.elapsed);
+    if (preserveProgress && wasPlaying) this.play();
   }
 
   private load(item: ReelSource): Promise<LoadedMedia | null> {
@@ -214,6 +221,7 @@ export class MemoryReelController {
 
   play() {
     if (!this.cards.length || this.destroyed || !this.paused && this.raf) return;
+    if (this.elapsed >= this.total) this.elapsed = 0;
     this.paused = false;
     this.poster.classList.add('off');
     this.options.onStateChange?.(true);
@@ -424,7 +432,7 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal, owned
   return sources.filter((source): source is ReelSource => Boolean(source));
 };
 
-const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPlay = true, onClose }) => {
+const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPlay = true, hasMore = false, loadingMore = false, onNeedMore, onClose }) => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<MemoryReelController | null>(null);
   const audioObjectUrlRef = useRef('');
@@ -441,6 +449,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
   const [musicLoading, setMusicLoading] = useState(false);
   const [musicName, setMusicName] = useState('');
   const reducedMotion = usePrefersReducedMotion();
+  const moreRequestedRef = useRef(false);
+  const hasLoadedSourcesRef = useRef(false);
+  const moreConfigRef = useRef({ hasMore, loadingMore, onNeedMore });
+  moreConfigRef.current = { hasMore, loadingMore, onNeedMore };
 
   useEffect(() => {
     setTitleDraft({ line: title?.line || '', big: title?.big || '' });
@@ -466,24 +478,42 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
 
   useEffect(() => {
     const stage = stageRef.current;
-    if (!stage || !resolvedSources.length) return undefined;
+    if (!stage) return undefined;
     const controller = new MemoryReelController(stage, {
-      items: resolvedSources,
+      items: [],
       title: activeTitle,
       audio: audio || audioObjectUrlRef.current || undefined,
       reducedMotion,
-      onProgress: (current, total) => setProgress({ progress: current, total }),
+      onProgress: (current, total) => {
+        setProgress({ progress: current, total });
+        const more = moreConfigRef.current;
+        if (more.hasMore && !more.loadingMore && !moreRequestedRef.current && total > 0 && current / total >= 0.72) {
+          moreRequestedRef.current = true;
+          more.onNeedMore?.();
+        }
+      },
       onStateChange: setPlaying,
     });
     controllerRef.current = controller;
-    void controller.setItems(resolvedSources).then(() => {
-      if (autoPlay) controller.play();
-    });
     return () => {
       controller.destroy();
       controllerRef.current = null;
     };
-  }, [resolvedSources, reducedMotion]);
+  }, [audio, reducedMotion]);
+
+  useEffect(() => {
+    const controller = controllerRef.current;
+    if (!controller || !resolvedSources.length) return;
+    const preserveProgress = hasLoadedSourcesRef.current;
+    hasLoadedSourcesRef.current = true;
+    void controller.setItems(resolvedSources, preserveProgress).then(() => {
+      if (autoPlay && !preserveProgress) controller.play();
+    });
+  }, [autoPlay, resolvedSources]);
+
+  useEffect(() => {
+    moreRequestedRef.current = false;
+  }, [memories.length, hasMore]);
 
   useEffect(() => {
     controllerRef.current?.setTitle(activeTitle);
