@@ -182,7 +182,9 @@ export class MemoryReelController {
     const wallCards = loaded.map((media, index) => {
       const row = Math.floor(index / columns);
       const column = index % columns;
-      const height = 360;
+      // Give portrait and square media a taller frame so the complete image
+      // can breathe without forcing it into a landscape crop.
+      const height = media.aspect < 0.9 ? 420 : media.aspect < 1.15 ? 400 : 360;
       const width = Math.min(560, Math.max(300, height * media.aspect));
       const card = document.createElement('div');
       card.className = `card${random() < 0.16 ? ' frame' : ''}`;

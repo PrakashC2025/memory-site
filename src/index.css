@@ -2570,6 +2570,7 @@ input[type="number"]::-webkit-inner-spin-button {
   position: absolute;
   left: 0;
   top: 0;
+  box-sizing: border-box;
   overflow: hidden;
   border-radius: 18px;
   background: #222;
@@ -2587,6 +2588,8 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .memory-reel-stage .card.frame > .m {
+  width: 100%;
+  height: calc(100% - 34px);
   border-radius: 2px;
 }
 
@@ -2594,7 +2597,8 @@ input[type="number"]::-webkit-inner-spin-button {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  background: #090d16;
 }
 
 .memory-reel-stage .vignette {
