@@ -2559,8 +2559,9 @@ input[type="number"]::-webkit-inner-spin-button {
   background-position: center;
   background-size: cover;
   background-repeat: no-repeat;
-  filter: blur(24px) saturate(1.08);
-  opacity: 0.48;
+  filter: blur(24px) saturate(1.12) brightness(.82);
+  opacity: 0.68;
+  background-color: #111827;
   transform: scale(1.08);
   transition: background-image 0.55s ease, opacity 0.55s ease;
   pointer-events: none;

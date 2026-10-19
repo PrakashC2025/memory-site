@@ -171,8 +171,10 @@ export class MemoryReelController {
   private rebuildWall(loaded: LoadedMedia[], preserveProgress: boolean, previousElapsed: number, wasPlaying: boolean) {
     const columns = Math.max(3, Math.ceil(Math.sqrt(loaded.length * 1.25)));
     const rows = Math.max(1, Math.ceil(loaded.length / columns));
-    const sx = 740;
-    const sy = 530;
+    // Keep neighboring cards inside the 16:9 viewport so the focused frame
+    // is surrounded by real memories instead of empty black space.
+    const sx = 620;
+    const sy = 460;
     let seed = 7;
     const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
