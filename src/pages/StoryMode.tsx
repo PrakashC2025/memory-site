@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import MemoryLightbox from '../components/MemoryLightbox';
+import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
 import { readDriveMemories } from '../services/driveLibrary';
 
@@ -22,7 +22,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   }, []);
 
   const importLocalFiles = (files: FileList | null) => {
-    const mediaFiles = Array.from(files || []).filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
+    const mediaFiles = Array.from(files || []).filter(file => file.type.startsWith('image/'));
     if (!mediaFiles.length) return;
 
     objectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
@@ -32,7 +32,6 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     const nextMemories = mediaFiles.map((file, index) => {
       const url = URL.createObjectURL(file);
       objectUrlsRef.current.push(url);
-      const isVideo = file.type.startsWith('video/');
       return {
         id: `local-${file.name}-${file.lastModified}-${index}`,
         title: file.name.replace(/\.[^.]+$/, ''),
@@ -40,11 +39,11 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         date: new Date(file.lastModified || now.getTime()).toISOString(),
         year: new Date(file.lastModified || now.getTime()).getFullYear(),
         month: new Date(file.lastModified || now.getTime()).getMonth() + 1,
-        type: isVideo ? 'video' : 'photo',
+        type: 'photo',
         url,
-        thumbnail: isVideo ? '' : url,
+        thumbnail: url,
         mimeType: file.type,
-        tags: ['local', isVideo ? 'video' : 'photo'],
+        tags: ['local', 'photo'],
         event: 'Local Story',
       } satisfies Memory;
     });
@@ -56,7 +55,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     <input
       ref={localInputRef}
       type="file"
-      accept="image/*,video/*"
+      accept="image/*"
       multiple
       className="hidden"
       onChange={event => {
@@ -77,7 +76,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
             immediately with thumbnails and upgrades to full quality as each slide plays.
           </p>
           <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-center">
-            <button onClick={() => localInputRef.current?.click()} className="neon-button px-4 py-2 text-sm font-black">Use Local Media</button>
+            <button onClick={() => localInputRef.current?.click()} className="neon-button px-4 py-2 text-sm font-black">Use Local Photos</button>
             <button onClick={onExit} className="neon-button px-4 py-2 text-sm font-black">Back to Memoriya</button>
           </div>
         </section>
@@ -88,19 +87,13 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   return (
     <div className="fixed inset-0 z-[5] overflow-hidden bg-black">
       {localPicker}
-      <MemoryLightbox
-        memory={storyMemories[0]}
+      <MemoryReel
         memories={storyMemories}
-        autoplay
-        mode="story"
-        template="auto"
-        speed="slow"
-        intensity="premium"
-        onImportLocalMedia={() => localInputRef.current?.click()}
+        title={{ line: storyMemories[0].event || 'Memoriya story', big: String(storyMemories[0].year) }}
         onClose={onExit}
       />
     </div>
   );
 };
 
-export default StoryMode;
+export default StoryMode;

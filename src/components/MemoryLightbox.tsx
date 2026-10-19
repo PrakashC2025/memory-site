@@ -463,7 +463,7 @@ const MemoryLightbox: React.FC<Props> = ({
   const [highResReady, setHighResReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(autoplay);
   const [progress, setProgress] = useState(0);
-  const [fitMode, setFitMode] = useState<FitMode>('contain');
+  const [fitMode, setFitMode] = useState<FitMode>(() => mode === 'story' ? 'smart' : 'contain');
   const [captionsOn, setCaptionsOn] = useState(true);
   const [treeOverlayOn, setTreeOverlayOn] = useState(showTreeOverlay);
   const [muted, setMuted] = useState(false);
@@ -544,6 +544,39 @@ const MemoryLightbox: React.FC<Props> = ({
   const duration = SPEED_MS[currentSpeed];
   const transitionDuration = mode === 'story' ? (currentIntensity === 'dramatic' ? 1.28 : currentIntensity === 'soft' ? 0.82 : 1.02) : currentIntensity === 'dramatic' ? 0.95 : currentIntensity === 'soft' ? 0.48 : 0.68;
   const hasStoryMusic = mode === 'story' && Boolean(youtubeSrc || audioSrc);
+  const storyMusicSuggestions = useMemo(() => {
+    const text = sequence
+      .slice(0, 18)
+      .flatMap(item => [item.title, item.caption, item.event, item.emotion, ...(item.tags || [])])
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    if (/wedding|marriage|love|romance/.test(text)) {
+      return [
+        { label: 'Romance', query: 'romantic instrumental memories music' },
+        { label: 'Wedding', query: 'wedding cinematic instrumental music' },
+        { label: 'Soft piano', query: 'soft piano emotional open source music' },
+        ...STORY_MUSIC_SUGGESTIONS.filter(item => !['Romantic', 'Family'].includes(item.label)),
+      ];
+    }
+    if (/birthday|party|festival|diwali|graduation|celebration/.test(text)) {
+      return [
+        { label: 'Celebration', query: 'celebration upbeat instrumental open source music' },
+        { label: 'Birthday', query: 'happy birthday celebration instrumental music' },
+        { label: 'Bright pop', query: 'upbeat happy instrumental open source music' },
+        ...STORY_MUSIC_SUGGESTIONS.filter(item => !['Birthday'].includes(item.label)),
+      ];
+    }
+    if (/travel|trip|goa|beach|mountain|trek|road/.test(text)) {
+      return [
+        { label: 'Travel', query: 'travel cinematic instrumental open source music' },
+        { label: 'Adventure', query: 'adventure upbeat instrumental music' },
+        { label: 'Sunset', query: 'sunset ambient instrumental memories music' },
+        ...STORY_MUSIC_SUGGESTIONS.filter(item => !['Travel'].includes(item.label)),
+      ];
+    }
+    return STORY_MUSIC_SUGGESTIONS;
+  }, [sequence]);
 
   const emitToast = (message: string) => {
     setToast(message);
@@ -1152,7 +1185,7 @@ const MemoryLightbox: React.FC<Props> = ({
       }
     : variant;
   const objectFit = fitMode === 'cover' ? 'cover' : 'contain';
-  const mediaClass = `cinema-media cinema-media-${fitMode} cinema-frame-${templateStyle.frame}`;
+  const mediaClass = `cinema-media cinema-media-${fitMode} cinema-frame-${templateStyle.frame} cinema-camera-shot-${currentIdx % 6}`;
   const storyEffectClass = mode === 'story' ? `cinema-story-effect cinema-story-effect-${currentIdx % 5} cinema-story-edit-${resolvedEditStyle}` : '';
   const zoomScale = zoom * (activeTransition === 'ken-burns' && isPlaying ? 1.035 : 1);
   const counter = `${currentIdx + 1} / ${sequence.length}`;
@@ -1185,10 +1218,19 @@ const MemoryLightbox: React.FC<Props> = ({
     const lift = currentIntensity === 'dramatic' ? 16 : currentIntensity === 'soft' ? 6 : 11;
     const tilt = currentIntensity === 'dramatic' ? 2.2 : currentIntensity === 'soft' ? 0.7 : 1.3;
     const pulse = currentIntensity === 'dramatic' ? 0.072 : currentIntensity === 'soft' ? 0.024 : 0.046;
-    let scaleFrames = [zoomScale, zoomScale * (1 + pulse), zoomScale * 1.012];
-    let xFrames = [0, direction * drift * 0.42, direction * -drift * 0.24];
-    let yFrames = [0, -lift, lift * 0.35];
-    let rotateFrames = [rotation, rotation + direction * tilt, rotation + direction * tilt * 0.32];
+    const shot = currentIdx % 6;
+    const cinematicShot = [
+      { scale: [1.01, 1.045, 1.09], x: [0, direction * 8, direction * 18], y: [4, -5, -10], rotate: [0, direction * 0.2, direction * 0.35] },
+      { scale: [1.08, 1.1, 1.075], x: [direction * 30, direction * 4, direction * -28], y: [6, -2, -8], rotate: [direction * 0.35, direction * 0.08, direction * -0.26] },
+      { scale: [1.13, 1.08, 1.025], x: [direction * -18, direction * -4, direction * 12], y: [-10, 1, 12], rotate: [direction * -0.25, direction * 0.05, direction * 0.28] },
+      { scale: [1.045, 1.08, 1.1], x: [direction * -8, direction * 12, direction * 30], y: [14, 4, -12], rotate: [direction * -0.32, direction * -0.06, direction * 0.24] },
+      { scale: [1.055, 1.1, 1.07], x: [direction * 18, direction * -12, direction * 8], y: [-8, -18, -2], rotate: [direction * 0.2, direction * -0.4, direction * 0.18] },
+      { scale: [1.02, 1.065, 1.095], x: [direction * -4, direction * -18, direction * -30], y: [10, 0, -14], rotate: [direction * 0.12, direction * 0.36, direction * 0.56] },
+    ][shot];
+    let scaleFrames = cinematicShot.scale.map(value => zoomScale * value);
+    let xFrames = cinematicShot.x.map(value => value * (drift / 18));
+    let yFrames = cinematicShot.y.map(value => value * (lift / 11));
+    let rotateFrames = cinematicShot.rotate.map(value => rotation + value * (tilt / 1.3));
     let filterFrames = [
       'brightness(0.96) saturate(1.04)',
       'brightness(1.04) saturate(1.12)',
@@ -1445,23 +1487,67 @@ const MemoryLightbox: React.FC<Props> = ({
               ))}
             </div>
           )}
-          <AnimatePresence mode={mode === 'story' ? 'sync' : 'wait'} initial={mode !== 'story'}>
-            <motion.figure
-              key={`${current.id}-${activeTransition}-${fitMode}`}
-              variants={displayVariant}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              transition={{ duration: transitionDuration, ease: [0.16, 1, 0.3, 1] }}
-              className={`${mediaClass} ${storyEffectClass}`}
-              style={{
-                borderColor: `${colors[0]}66`,
-                boxShadow: `0 0 90px ${colors[0]}33, 0 36px 120px rgba(0,0,0,0.72)`,
-              }}
-            >
+          {isStoryMode ? (
+            <div className="cinema-story-camera-wall" aria-label="Cinematic photo camera">
+              <div
+                className="cinema-story-camera-track"
+                style={{ transform: `translate3d(calc(50vw - ${typeof window !== 'undefined' && window.innerWidth <= 760 ? 44 : 38}vw - ${currentIdx * (typeof window !== 'undefined' && window.innerWidth <= 760 ? 93 : 82)}vw), 0, 0)` }}
+              >
+                {sequence.map((item, index) => {
+                  const active = index === currentIdx;
+                  const source = active ? (item.url || item.thumbnail) : getDecorativeMemorySrc(item);
+                  return (
+                    <button
+                      key={`${item.id}-camera-wall`}
+                      type="button"
+                      className={`cinema-story-camera-card ${active ? 'is-active' : 'is-blurred'}`}
+                      onClick={event => {
+                        event.stopPropagation();
+                        setIndex(index);
+                        showChrome(true);
+                      }}
+                      aria-label={`Show ${item.title}`}
+                    >
+                      {source ? (
+                        <img
+                          src={source}
+                          alt={item.title}
+                          loading={active ? 'eager' : 'lazy'}
+                          decoding="async"
+                          onError={event => {
+                            const fallback = item.thumbnail || item.url;
+                            if (fallback && event.currentTarget.src !== fallback) event.currentTarget.src = fallback;
+                          }}
+                        />
+                      ) : (
+                        <span className="cinema-story-camera-card-fallback"><ImageIcon size={28} /></span>
+                      )}
+                      <span className="cinema-story-camera-card-label">{String(index + 1).padStart(2, '0')}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="cinema-story-camera-focus" aria-hidden="true" />
+              <div className="cinema-story-camera-sweep" aria-hidden="true" />
+            </div>
+          ) : (
+            <AnimatePresence mode="wait" initial>
+              <motion.figure
+                key={`${current.id}-${activeTransition}-${fitMode}`}
+                variants={displayVariant}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: transitionDuration, ease: [0.16, 1, 0.3, 1] }}
+                className={`${mediaClass} ${storyEffectClass}`}
+                style={{
+                  borderColor: `${colors[0]}66`,
+                  boxShadow: `0 0 90px ${colors[0]}33, 0 36px 120px rgba(0,0,0,0.72)`,
+                }}
+              >
               <div className="cinema-frame-glow" style={{ background: `radial-gradient(circle at 50% 18%, ${colors[0]}36 0%, transparent 72%)` }} />
               <div className="cinema-frame-reflection" style={{ background: `linear-gradient(125deg, rgba(255,255,255,0.22), transparent 30%, transparent 62%, ${colors[1]}18 100%)` }} />
-              {mode === 'story' && !settingsOpen && !musicOpen && (
+              {isStoryMode && !settingsOpen && !musicOpen && (
                 <>
                   <div className="cinema-edit-flash" style={{ background: `linear-gradient(110deg, transparent, ${colors[0]}88, ${colors[1]}44, transparent)` }} />
                   <div className="cinema-prism-shift" aria-hidden="true" />
@@ -1492,9 +1578,9 @@ const MemoryLightbox: React.FC<Props> = ({
                     poster={current.thumbnail}
                     controls
                     autoPlay={isPlaying}
-                    muted={mode === 'story' ? true : muted}
+                    muted={isStoryMode ? true : muted}
                     playsInline
-                    preload={mode === 'story' ? 'auto' : 'metadata'}
+                    preload={isStoryMode ? 'auto' : 'metadata'}
                     onLoadedMetadata={markMediaLoaded}
                     onLoadedData={event => {
                       markMediaLoaded();
@@ -1504,14 +1590,14 @@ const MemoryLightbox: React.FC<Props> = ({
                       if (isPlaying) void event.currentTarget.play().catch(() => {});
                     }}
                     onPlay={() => {
-                      if (mode !== 'story') setIsPlaying(true);
+                      if (!isStoryMode) setIsPlaying(true);
                     }}
                     onPause={() => {
-                      if (mode !== 'story') setIsPlaying(false);
+                      if (!isStoryMode) setIsPlaying(false);
                     }}
                     onError={handleVideoError}
                     onEnded={() => {
-                      if (mode === 'story') {
+                      if (isStoryMode) {
                         goNext();
                         return;
                       }
@@ -1548,8 +1634,9 @@ const MemoryLightbox: React.FC<Props> = ({
               </motion.div>
               <div className="cinema-sweep" />
               <div className="cinema-letterbox" />
-            </motion.figure>
-          </AnimatePresence>
+              </motion.figure>
+            </AnimatePresence>
+          )}
         </main>
 
         <AnimatePresence>
@@ -1634,7 +1721,7 @@ const MemoryLightbox: React.FC<Props> = ({
                 <button type="submit">{musicSearching ? '...' : 'Find'}</button>
               </form>
               <div className="cinema-story-music-chips">
-                {STORY_MUSIC_SUGGESTIONS.map(item => (
+                {storyMusicSuggestions.slice(0, 6).map(item => (
                   <button
                     key={item.label}
                     onClick={() => {

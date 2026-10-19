@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { CalendarDays, Film, Heart, Search, Sparkles, Star } from 'lucide-react';
 import DriveMediaPreview from '../components/DriveMediaPreview';
 import MemoryLightbox from '../components/MemoryLightbox';
+import MemoryReel from '../components/MemoryReel';
 import { useTheme } from '../context/ThemeContext';
 import type { Memory } from '../data/memories';
 import PageHero from '../components/PageHero';
@@ -23,6 +24,7 @@ const EventExplorer: React.FC = () => {
   const { config } = useTheme();
   const [query, setQuery] = useState('');
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
+  const [reelConfig, setReelConfig] = useState<{ memories: Memory[]; title: { line: string; big: string } } | null>(null);
   const driveMemories = useMemo(() => readDriveMemories(), []);
 
   const events = useMemo(() => groupMemoriesByEvent(driveMemories), [driveMemories]);
@@ -145,6 +147,13 @@ const EventExplorer: React.FC = () => {
                       </div>
                       <h3 className="text-xl font-black text-white">{event.title}</h3>
                       <p className="mt-2 text-sm leading-6 text-white/56">{event.memories.length} memories gathered into this chapter.</p>
+                      <button
+                        type="button"
+                        onClick={() => setReelConfig({ memories: event.memories, title: { line: event.title, big: String(event.year) } })}
+                        className="mt-4 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/8 px-3 py-2 text-xs font-black text-white"
+                      >
+                        <Film size={14} /> Play story
+                      </button>
                       <div className="mt-4 flex -space-x-2">
                         {event.memories.slice(0, 5).map(memory => (
                           <button key={memory.id} onClick={() => setSelectedMemory(memory)} className="h-10 w-10 overflow-hidden rounded-lg border border-black">
@@ -168,6 +177,7 @@ const EventExplorer: React.FC = () => {
       </section>
 
       <MemoryLightbox memory={selectedMemory} memories={selectedMemory ? driveMemories : []} onClose={() => setSelectedMemory(null)} />
+      {reelConfig && <MemoryReel memories={reelConfig.memories} title={reelConfig.title} onClose={() => setReelConfig(null)} />}
     </div>
   );
 };
