@@ -27,6 +27,9 @@ interface MemoryReelProps {
   loadingMore?: boolean;
   onNeedMore?: () => void;
   driveAccessToken?: string;
+  driveFolderId?: string;
+  driveFolders?: Array<{ id: string; name: string }>;
+  onDriveFolderChange?: (folderId: string) => void;
   onClose?: () => void;
 }
 
@@ -503,7 +506,7 @@ interface MusicQueueItem {
 const driveAudioUrl = (fileId: string, accessToken: string) =>
   `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&access_token=${encodeURIComponent(accessToken)}`;
 
-const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, onClose }) => {
+const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onClose }) => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<MemoryReelController | null>(null);
   const audioObjectUrlsRef = useRef<string[]>([]);
@@ -734,6 +737,12 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
     setActiveTitle({ line: titleDraft.line?.trim() || '', big: titleDraft.big?.trim() || '' });
   };
 
+  const openMusic = () => {
+    const next = !musicOpen;
+    setMusicOpen(next);
+    if (next && driveAccessToken && !driveSongs.length && !driveSongsLoading) void loadDriveSongs();
+  };
+
   return (
     <div className="memory-reel-overlay" role="dialog" aria-modal="true" aria-label="Memory story reel">
       <div className="memory-reel-shell">
@@ -744,7 +753,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
           </button>
           <button type="button" onClick={() => controllerRef.current?.restart()} disabled={loading}><RotateCcw size={16} /> Replay</button>
           <button type="button" onClick={toggleFullscreen}><>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</> {fullscreen ? 'Exit' : 'Fullscreen'}</button>
-          <button type="button" onClick={() => setMusicOpen(value => !value)}><Search size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : ''}</button>
+          <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Search size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : ''}</button>
+          {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
+            <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+          )}
           <button type="button" onClick={() => setLoopEnabled(value => !value)} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
           {onClose && <button type="button" className="memory-reel-close" onClick={onClose}><X size={17} /> Close</button>}
         </div>

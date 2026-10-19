@@ -48,6 +48,24 @@ export const readDriveFolderId = () => {
   }
 };
 
+export const saveDriveMemories = (memories: Memory[], accessToken: string, driveFolderId = '') => {
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    const current = stored ? JSON.parse(stored) as Partial<DriveSessionSnapshot> : {};
+    window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
+      ...current,
+      accessToken,
+      memories,
+      driveFolderId,
+      nextPageToken: '',
+      importCount: memories.length,
+      savedAt: Date.now(),
+    }));
+  } catch {
+    // Session storage is optional; IndexedDB remains the playback cache.
+  }
+};
+
 export const upgradeDriveImageUrls = (memory: Memory): Memory => {
   if (!memory.driveFileId) return memory;
   const id = encodeURIComponent(memory.driveFileId);

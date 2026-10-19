@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
-import { readDriveFolderId, readDriveMemories } from '../services/driveLibrary';
+import { readDriveAccessToken, readDriveFolderId, readDriveMemories, saveDriveMemories } from '../services/driveLibrary';
 import { googleDriveService } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, cacheDriveMemories, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
 
@@ -13,6 +13,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const localInputRef = useRef<HTMLInputElement>(null);
   const [localMemories, setLocalMemories] = useState<Memory[]>([]);
   const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
+  const [driveFolders, setDriveFolders] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState(() => readDriveFolderId());
+  const folderChangedRef = useRef(false);
   const objectUrlsRef = useRef<string[]>([]);
   const driveObjectUrlsRef = useRef<string[]>([]);
   const storyMemories = localMemories.length ? localMemories : driveMemories;
@@ -26,9 +29,16 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   }, []);
 
   useEffect(() => {
-    const seed = readDriveMemories();
-    const token = seed[0]?.authToken || '';
-    const folderId = readDriveFolderId();
+    const token = readDriveAccessToken();
+    if (!token) return;
+    void googleDriveService.listFolders(token).then(setDriveFolders).catch(() => setDriveFolders([]));
+  }, []);
+
+  useEffect(() => {
+    const seed = folderChangedRef.current ? [] : readDriveMemories();
+    folderChangedRef.current = false;
+    const token = seed[0]?.authToken || readDriveAccessToken();
+    const folderId = selectedFolderId;
     let active = true;
     let known = [...seed];
 
@@ -53,6 +63,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         const byId = new Map(known.map(memory => [memory.id, memory]));
         page.files.forEach(file => byId.set(`drive-${file.id}`, googleDriveService.toMemory(file, token)));
         known = [...byId.values()].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        saveDriveMemories(known, token, folderId);
         // Show new Drive items immediately, then replace their URLs with local
         // IndexedDB blobs as soon as the background cache finishes.
         await applyCached(known);
@@ -68,7 +79,15 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       active = false;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [selectedFolderId]);
+
+  const changeDriveFolder = (folderId: string) => {
+    if (folderId === selectedFolderId) return;
+    folderChangedRef.current = true;
+    saveDriveMemories([], readDriveAccessToken(), folderId);
+    setSelectedFolderId(folderId);
+    setDriveMemories([]);
+  };
 
   const importLocalFiles = (files: FileList | null) => {
     const mediaFiles = Array.from(files || []).filter(file => file.type.startsWith('image/'));
@@ -139,7 +158,10 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       <MemoryReel
         memories={storyMemories}
         title={{ line: storyMemories[0].event || 'Memoriya story', big: String(storyMemories[0].year) }}
-        driveAccessToken={storyMemories[0].authToken}
+        driveAccessToken={readDriveAccessToken() || storyMemories[0].authToken}
+        driveFolderId={selectedFolderId}
+        driveFolders={driveFolders}
+        onDriveFolderChange={changeDriveFolder}
         onClose={onExit}
       />
     </div>
