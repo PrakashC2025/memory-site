@@ -2519,7 +2519,7 @@ input[type="number"]::-webkit-inner-spin-button {
   min-height: 100vh;
   align-content: center;
   padding: clamp(0.75rem, 2vw, 2rem);
-  background: #000;
+  background: radial-gradient(circle at 50% 44%, #182133 0%, #0b101c 56%, #020307 100%);
 }
 
 .memory-reel-stage {
@@ -2529,7 +2529,7 @@ input[type="number"]::-webkit-inner-spin-button {
   min-height: 270px;
   overflow: hidden;
   border-radius: 18px;
-  background: #000;
+  background: radial-gradient(circle at 50% 44%, #182133 0%, #0b101c 56%, #020307 100%);
   perspective: 1200px;
   perspective-origin: 50% 50%;
   isolation: isolate;

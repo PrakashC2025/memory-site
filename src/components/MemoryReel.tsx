@@ -129,42 +129,68 @@ export class MemoryReelController {
     this.pause();
     this.world.innerHTML = '';
     this.cards = [];
-    const loaded = await Promise.all(items.map(item => this.load(item)));
-    if (this.destroyed || generation !== this.loadGeneration) return;
-    const ok = loaded.filter((item): item is LoadedMedia => Boolean(item));
-    if (!ok.length) {
+    if (!items.length) {
       this.options.onProgress?.(0, 0);
       return;
     }
 
-    const columns = Math.max(3, Math.ceil(Math.sqrt(ok.length * 1.25)));
-    const rows = Math.max(1, Math.ceil(ok.length / columns));
-    const sx = 560;
-    const sy = 400;
+    let ready = false;
+    let resolveReady: () => void = () => undefined;
+    const readyPromise = new Promise<void>(resolve => { resolveReady = resolve; });
+    const loaded: LoadedMedia[] = [];
+    const reveal = (media: LoadedMedia) => {
+      if (this.destroyed || generation !== this.loadGeneration) return;
+      loaded.push(media);
+      this.rebuildWall(loaded, preserveProgress || loaded.length > 1, previousElapsed, wasPlaying);
+      if (!ready) {
+        ready = true;
+        resolveReady();
+      }
+    };
+
+    void Promise.all(items.map(async item => {
+      const media = await this.load(item);
+      if (media) reveal(media);
+    })).then(() => {
+      if (!ready) {
+        ready = true;
+        resolveReady();
+      }
+    });
+    await readyPromise;
+  }
+
+  private rebuildWall(loaded: LoadedMedia[], preserveProgress: boolean, previousElapsed: number, wasPlaying: boolean) {
+    const columns = Math.max(3, Math.ceil(Math.sqrt(loaded.length * 1.25)));
+    const rows = Math.max(1, Math.ceil(loaded.length / columns));
+    const sx = 740;
+    const sy = 530;
     let seed = 7;
     const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
-    const wallCards = ok.map((media, index) => {
+    this.cards.forEach(card => card.video?.pause());
+    this.world.innerHTML = '';
+    this.cards = [];
+    const wallCards = loaded.map((media, index) => {
       const row = Math.floor(index / columns);
       const column = index % columns;
-      const height = 380;
-      const width = Math.min(620, Math.max(300, height * media.aspect));
+      const height = 360;
+      const width = Math.min(560, Math.max(300, height * media.aspect));
       const card = document.createElement('div');
       card.className = `card${random() < 0.16 ? ' frame' : ''}`;
       card.style.width = `${width}px`;
       card.style.height = `${height}px`;
       card.appendChild(media.node);
-      const x = (column - (columns - 1) / 2) * sx + (random() - 0.5) * 260;
-      const y = (row - (rows - 1) / 2) * sy + (random() - 0.5) * 220;
-      const z = -random() * 240;
-      const rot = (random() - 0.5) * 30;
+      const x = (column - (columns - 1) / 2) * sx + (random() - 0.5) * 120;
+      const y = (row - (rows - 1) / 2) * sy + (random() - 0.5) * 100;
+      const z = -random() * 120;
+      const rot = (random() - 0.5) * 20;
       card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
       card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
       return { card, x, y, z, rot, width, height, video: media.video } satisfies ReelCard;
     });
 
-    // Keep the wall spatially scattered, but let the camera choose a varied
-    // direction instead of following the source file order or a row-by-row path.
+    // Shuffle camera targets without changing the spacing of the photo wall.
     for (let index = wallCards.length - 1; index > 0; index -= 1) {
       const swapIndex = Math.floor(random() * (index + 1));
       [wallCards[index], wallCards[swapIndex]] = [wallCards[swapIndex], wallCards[index]];
@@ -178,7 +204,7 @@ export class MemoryReelController {
     this.elapsed = preserveProgress ? Math.min(previousElapsed, this.total) : 0;
     this.resize();
     this.render(this.elapsed);
-    if (preserveProgress && wasPlaying) this.play();
+    if (wasPlaying) this.play();
   }
 
   private load(item: ReelSource): Promise<LoadedMedia | null> {
