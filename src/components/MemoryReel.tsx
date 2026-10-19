@@ -20,6 +20,7 @@ interface MemoryReelProps {
   title?: MemoryReelTitle;
   audio?: string;
   autoPlay?: boolean;
+  loop?: boolean;
   hasMore?: boolean;
   loadingMore?: boolean;
   onNeedMore?: () => void;
@@ -84,6 +85,8 @@ export class MemoryReelController {
   private paused = true;
   private total = 0;
   private audio?: HTMLAudioElement;
+  private audioQueue: string[] = [];
+  private audioIndex = 0;
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
@@ -275,14 +278,50 @@ export class MemoryReelController {
   }
 
   setAudio(source?: string) {
+    this.setAudioQueue(source ? [source] : []);
+  }
+
+  setAudioQueue(sources: string[], keepCurrent = true) {
+    const shouldResume = !this.paused;
+    const currentSource = this.audioQueue[this.audioIndex];
+    this.audioQueue = sources.filter(Boolean);
+    const currentIndex = currentSource ? this.audioQueue.indexOf(currentSource) : -1;
+    this.audioIndex = keepCurrent && currentIndex >= 0 ? currentIndex : 0;
+    if (this.audio) {
+      this.audio.pause();
+      this.audio.onended = null;
+      this.audio.src = '';
+    }
+    this.audio = this.audioQueue.length ? new Audio(this.audioQueue[this.audioIndex]) : undefined;
+    if (this.audio) {
+      this.audio.loop = false;
+      this.audio.onended = () => this.advanceAudio();
+    }
+    if (shouldResume) void this.audio?.play().catch(() => undefined);
+  }
+
+  nextAudio() {
+    this.advanceAudio();
+  }
+
+  setLoop(loop: boolean) {
+    this.options.loop = loop;
+  }
+
+  private advanceAudio() {
+    if (!this.audioQueue.length) return;
+    if (this.audioIndex < this.audioQueue.length - 1) this.audioIndex += 1;
+    else if (this.options.loop) this.audioIndex = 0;
+    else return;
     const shouldResume = !this.paused;
     if (this.audio) {
       this.audio.pause();
-      this.audio.src = '';
+      this.audio.onended = null;
     }
-    this.audio = source ? new Audio(source) : undefined;
-    if (this.audio) this.audio.loop = true;
-    if (shouldResume) void this.audio?.play().catch(() => undefined);
+    this.audio = new Audio(this.audioQueue[this.audioIndex]);
+    this.audio.loop = false;
+    this.audio.onended = () => this.advanceAudio();
+    if (shouldResume) void this.audio.play().catch(() => undefined);
   }
 
   getProgress() {
@@ -296,6 +335,7 @@ export class MemoryReelController {
     this.resizeObserver?.disconnect();
     if (this.resizeHandler) window.removeEventListener('resize', this.resizeHandler);
     this.audio?.pause();
+    if (this.audio) this.audio.onended = null;
     this.audio = undefined;
     this.world.innerHTML = '';
     this.cards = [];
@@ -432,10 +472,17 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal, owned
   return sources.filter((source): source is ReelSource => Boolean(source));
 };
 
-const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPlay = true, hasMore = false, loadingMore = false, onNeedMore, onClose }) => {
+interface MusicQueueItem {
+  id: string;
+  src: string;
+  label: string;
+  owned?: boolean;
+}
+
+const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, onClose }) => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<MemoryReelController | null>(null);
-  const audioObjectUrlRef = useRef('');
+  const audioObjectUrlsRef = useRef<string[]>([]);
   const [resolvedSources, setResolvedSources] = useState<ReelSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState(false);
@@ -448,6 +495,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
   const [musicResults, setMusicResults] = useState<OpenSourceMusicTrack[]>([]);
   const [musicLoading, setMusicLoading] = useState(false);
   const [musicName, setMusicName] = useState('');
+  const [musicQueue, setMusicQueue] = useState<MusicQueueItem[]>(() => audio ? [{ id: 'initial-audio', src: audio, label: 'Background music' }] : []);
+  const [loopEnabled, setLoopEnabled] = useState(loop);
   const reducedMotion = usePrefersReducedMotion();
   const moreRequestedRef = useRef(false);
   const hasLoadedSourcesRef = useRef(false);
@@ -482,7 +531,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
     const controller = new MemoryReelController(stage, {
       items: [],
       title: activeTitle,
-      audio: audio || audioObjectUrlRef.current || undefined,
+      audio: undefined,
+      loop: loopEnabled,
       reducedMotion,
       onProgress: (current, total) => {
         setProgress({ progress: current, total });
@@ -512,6 +562,14 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
   }, [autoPlay, resolvedSources]);
 
   useEffect(() => {
+    controllerRef.current?.setLoop(loopEnabled);
+  }, [loopEnabled]);
+
+  useEffect(() => {
+    controllerRef.current?.setAudioQueue(musicQueue.map(track => track.src));
+  }, [musicQueue]);
+
+  useEffect(() => {
     moreRequestedRef.current = false;
   }, [memories.length, hasMore]);
 
@@ -526,7 +584,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
   }, []);
 
   useEffect(() => () => {
-    if (audioObjectUrlRef.current) URL.revokeObjectURL(audioObjectUrlRef.current);
+    audioObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    audioObjectUrlsRef.current = [];
   }, []);
 
   const toggleFullscreen = async () => {
@@ -536,19 +595,37 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
     else await shell.requestFullscreen?.().catch(() => undefined);
   };
 
-  const chooseMusicFile = (file: File | undefined) => {
-    if (!file) return;
-    if (audioObjectUrlRef.current) URL.revokeObjectURL(audioObjectUrlRef.current);
-    audioObjectUrlRef.current = URL.createObjectURL(file);
-    setMusicName(file.name);
-    controllerRef.current?.setAudio(audioObjectUrlRef.current);
-    if (playing) controllerRef.current?.play();
+  const chooseMusicFiles = (files: FileList | File[]) => {
+    const nextFiles = Array.from(files || []).filter(file => file.type.startsWith('audio/'));
+    if (!nextFiles.length) return;
+    const nextTracks = nextFiles.map((file, index) => {
+      const src = URL.createObjectURL(file);
+      audioObjectUrlsRef.current.push(src);
+      return { id: `local-audio-${file.name}-${file.lastModified}-${index}`, src, label: file.name, owned: true } satisfies MusicQueueItem;
+    });
+    setMusicName(nextTracks[0].label);
+    setMusicQueue(current => [...current, ...nextTracks]);
   };
 
   const chooseMusicTrack = (track: OpenSourceMusicTrack) => {
     setMusicName(`${track.title} · ${track.artist}`);
-    controllerRef.current?.setAudio(track.previewUrl);
-    if (playing) controllerRef.current?.play();
+    setMusicQueue(current => current.some(item => item.src === track.previewUrl)
+      ? current
+      : [...current, { id: track.id, src: track.previewUrl, label: `${track.title} · ${track.artist}` }]);
+  };
+
+  const moveMusic = (index: number, direction: -1 | 1) => {
+    setMusicQueue(current => {
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= current.length) return current;
+      const next = [...current];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+  };
+
+  const removeMusic = (index: number) => {
+    setMusicQueue(current => current.filter((_, itemIndex) => itemIndex !== index));
   };
 
   const searchMusic = async () => {
@@ -575,7 +652,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
           </button>
           <button type="button" onClick={() => controllerRef.current?.restart()} disabled={loading}><RotateCcw size={16} /> Replay</button>
           <button type="button" onClick={toggleFullscreen}><>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</> {fullscreen ? 'Exit' : 'Fullscreen'}</button>
-          <button type="button" onClick={() => setMusicOpen(value => !value)}><Search size={16} /> Music</button>
+          <button type="button" onClick={() => setMusicOpen(value => !value)}><Search size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : ''}</button>
+          <button type="button" onClick={() => setLoopEnabled(value => !value)} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
           {onClose && <button type="button" className="memory-reel-close" onClick={onClose}><X size={17} /> Close</button>}
         </div>
         <div className="memory-reel-progress-text">{loading ? 'Preparing your memories…' : `${Math.round(progress.progress)}s / ${Math.round(progress.total)}s`}</div>
@@ -589,9 +667,23 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
             <div className="memory-reel-music-search">
               <input value={musicQuery} onChange={event => setMusicQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void searchMusic(); }} placeholder="Search free music…" />
               <button type="button" onClick={() => void searchMusic()} disabled={musicLoading}><Search size={15} /> {musicLoading ? 'Searching…' : 'Search'}</button>
-              <label className="memory-reel-upload"><Upload size={15} /> Choose audio<input type="file" accept="audio/*" onChange={event => chooseMusicFile(event.target.files?.[0])} /></label>
+              <label className="memory-reel-upload"><Upload size={15} /> Add local songs<input type="file" accept="audio/*" multiple onChange={event => { chooseMusicFiles(event.target.files || []); event.currentTarget.value = ''; }} /></label>
             </div>
             {musicName && <p className="memory-reel-current-music">Now selected: {musicName}</p>}
+            {musicQueue.length > 0 && (
+              <div className="memory-reel-queue">
+                {musicQueue.map((track, index) => (
+                  <div className="memory-reel-queue-item" key={track.id}>
+                    <span><b>{index + 1}.</b> {track.label}</span>
+                    <div>
+                      <button type="button" onClick={() => moveMusic(index, -1)} disabled={index === 0} aria-label="Move song earlier">↑</button>
+                      <button type="button" onClick={() => moveMusic(index, 1)} disabled={index === musicQueue.length - 1} aria-label="Move song later">↓</button>
+                      <button type="button" onClick={() => removeMusic(index)} aria-label="Remove song">×</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
             {musicResults.map(track => (
               <button type="button" className="memory-reel-track" key={track.id} onClick={() => chooseMusicTrack(track)}>
                 <strong>{track.title}</strong><span>{track.artist}</span>

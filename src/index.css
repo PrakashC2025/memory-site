@@ -2754,6 +2754,50 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .memory-reel-track span { color: rgba(255, 255, 255, 0.55); font-size: 0.74rem; }
 
+.memory-reel-queue {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.memory-reel-queue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.76rem;
+}
+
+.memory-reel-queue-item > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-reel-queue-item > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+}
+
+.memory-reel-queue-item button {
+  display: grid;
+  width: 1.7rem;
+  height: 1.7rem;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  cursor: pointer;
+}
+
+.memory-reel-queue-item button:disabled { cursor: not-allowed; opacity: 0.35; }
+
 @media (max-width: 760px) {
   .memory-reel-overlay { padding: 0; place-items: stretch; }
   .memory-reel-shell { min-height: 100dvh; align-content: center; padding: 0.7rem; }

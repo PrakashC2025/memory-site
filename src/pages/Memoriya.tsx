@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Cloud,
   Film,
+  FolderOpen,
   WandSparkles,
   Globe2,
   Images,
@@ -36,6 +37,18 @@ interface DriveSessionSnapshot {
   importCount: number;
   memories: Memory[];
   savedAt: number;
+}
+
+interface LocalDirectoryEntry {
+  kind: 'file' | 'directory';
+  name: string;
+  getFile?: () => Promise<File>;
+  values?: () => AsyncIterableIterator<LocalDirectoryEntry>;
+}
+
+interface LocalDirectoryHandle extends LocalDirectoryEntry {
+  kind: 'directory';
+  requestPermission?: (options?: { mode?: 'read' | 'readwrite' }) => Promise<PermissionState>;
 }
 
 const reactions = ['Love', 'Happy', 'Magic', 'Family'];
@@ -96,12 +109,24 @@ const Memoriya: React.FC = () => {
   const [error, setError] = useState('');
   const loaderRef = useRef<HTMLDivElement | null>(null);
   const localObjectUrlsRef = useRef<string[]>([]);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const folderHandleRef = useRef<LocalDirectoryHandle | null>(null);
+  const folderPollRef = useRef<number | null>(null);
+  const folderScanBusyRef = useRef(false);
+  const localFileIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
     return () => {
       localObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
       localObjectUrlsRef.current = [];
+      if (folderPollRef.current) window.clearInterval(folderPollRef.current);
+      folderPollRef.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    folderInputRef.current?.setAttribute('webkitdirectory', '');
+    folderInputRef.current?.setAttribute('directory', '');
   }, []);
 
   const filteredMemories = useMemo(() => {
@@ -218,18 +243,25 @@ const Memoriya: React.FC = () => {
 
   const localInputRef = useRef<HTMLInputElement>(null);
 
-  const importLocalFiles = (files: FileList | null) => {
-    const mediaFiles = Array.from(files || []).filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
+  const importLocalFiles = (files: FileList | File[] | null) => {
+    const mediaFiles = Array.from(files || [])
+      .filter(file => isSupportedLocalMedia(file))
+      .filter(file => {
+        const id = localFileId(file);
+        if (localFileIdsRef.current.has(id)) return false;
+        localFileIdsRef.current.add(id);
+        return true;
+      });
     if (!mediaFiles.length) return;
 
     const now = new Date();
-    const imported = mediaFiles.map((file, index) => {
+    const imported = mediaFiles.map(file => {
       const url = URL.createObjectURL(file);
       localObjectUrlsRef.current.push(url);
       const isVideo = file.type.startsWith('video/');
       const date = new Date(file.lastModified || now.getTime());
       return {
-        id: `local-${file.name}-${file.lastModified}-${index}`,
+        id: localFileId(file),
         title: file.name.replace(/\.[^.]+$/, ''),
         caption: 'Local media on this device',
         date: date.toISOString(),
@@ -256,11 +288,75 @@ const Memoriya: React.FC = () => {
       : `Added ${imported.length} local memories from this device.`);
   };
 
+  const scanLocalFolder = async (handle: LocalDirectoryHandle) => {
+    if (folderScanBusyRef.current) return;
+    folderScanBusyRef.current = true;
+    try {
+      if (handle.requestPermission) {
+        const permission = await handle.requestPermission({ mode: 'read' });
+        if (permission !== 'granted') return;
+      }
+      const files: File[] = [];
+      const walk = async (directory: LocalDirectoryHandle): Promise<void> => {
+        if (!directory.values) return;
+        for await (const entry of directory.values()) {
+          if (entry.kind === 'file' && entry.getFile) {
+            const file = await entry.getFile();
+            if (isSupportedLocalMedia(file)) files.push(file);
+          } else if (entry.kind === 'directory') {
+            await walk(entry as LocalDirectoryHandle);
+          }
+        }
+      };
+      await walk(handle);
+      importLocalFiles(files);
+    } catch {
+      setMessage('The local folder could not be read. Choose it again to reconnect.');
+    } finally {
+      folderScanBusyRef.current = false;
+    }
+  };
+
+  const connectLocalFolder = async () => {
+    const picker = (window as Window & {
+      showDirectoryPicker?: (options?: { mode?: 'read' | 'readwrite' }) => Promise<LocalDirectoryHandle>;
+    }).showDirectoryPicker;
+    if (!picker) {
+      folderInputRef.current?.click();
+      return;
+    }
+    try {
+      const handle = await picker({ mode: 'read' });
+      folderHandleRef.current = handle;
+      await scanLocalFolder(handle);
+      if (folderPollRef.current) window.clearInterval(folderPollRef.current);
+      folderPollRef.current = window.setInterval(() => {
+        if (folderHandleRef.current) void scanLocalFolder(folderHandleRef.current);
+      }, 5000);
+      setMessage('Local folder linked. New photos are checked every 5 seconds while Memoriya is open.');
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) setError('Could not connect that local folder.');
+    }
+  };
+
   const localPicker = (
     <input
       ref={localInputRef}
       type="file"
       accept="image/*,video/*"
+      multiple
+      className="hidden"
+      onChange={event => {
+        importLocalFiles(event.currentTarget.files);
+        event.currentTarget.value = '';
+      }}
+    />
+  );
+
+  const folderPicker = (
+    <input
+      ref={folderInputRef}
+      type="file"
       multiple
       className="hidden"
       onChange={event => {
@@ -278,6 +374,10 @@ const Memoriya: React.FC = () => {
     setSelected(null);
     setMessage('Drive disconnected. Connect again when you are ready.');
     setError('');
+    folderHandleRef.current = null;
+    if (folderPollRef.current) window.clearInterval(folderPollRef.current);
+    folderPollRef.current = null;
+    localFileIdsRef.current.clear();
     window.sessionStorage.removeItem(DRIVE_SESSION_KEY);
   };
 
@@ -309,6 +409,7 @@ const Memoriya: React.FC = () => {
   return (
     <div className="memoriya-experience">
       {localPicker}
+      {folderPicker}
       {!lightweight && !reducedMotion && hasMemories && <CinematicIntro />}
 
       <section className={`memoriya-cinema-hero ${!hasMemories ? 'is-empty' : ''}`}>
@@ -339,6 +440,9 @@ const Memoriya: React.FC = () => {
             </button>
             <button className="memoriya-glass-button" onClick={() => localInputRef.current?.click()}>
               <Images size={17} /> Use Local Media
+            </button>
+            <button className="memoriya-glass-button" onClick={() => void connectLocalFolder()}>
+              <FolderOpen size={17} /> Link local folder
             </button>
             {hasMemories && <button className="memoriya-glass-button" onClick={() => playStory(filteredMemories)}><Film size={17} /> Play story</button>}
             {accessToken && (
@@ -459,7 +563,7 @@ const Memoriya: React.FC = () => {
         <MemoryReel
           memories={reelConfig.memories}
           title={reelConfig.title}
-          hasMore={reelConfig.live && Boolean(nextPageToken)}
+          hasMore={reelConfig.live && Boolean(accessToken)}
           loadingMore={loading}
           onNeedMore={() => void loadDrivePage()}
           onClose={() => setReelConfig(null)}
@@ -467,6 +571,7 @@ const Memoriya: React.FC = () => {
       )}
     </div>
   );
+
 };
 
 const DirectorStage: React.FC<{ plan: DirectorPlan; onPlay: () => void; onOpenMemory: (memory: Memory) => void }> = ({ plan, onPlay, onOpenMemory }) => (
@@ -780,6 +885,11 @@ const pointForPlace = (place: string, index: number) => {
 };
 
 const countType = (memories: Memory[], type: Memory['type']) => memories.filter(memory => memory.type === type).length;
+
+const isSupportedLocalMedia = (file: File) =>
+  file.type.startsWith('image/') || file.type.startsWith('video/') || /\.(jpe?g|png|gif|webp|avif|heic|heif|mp4|mov|webm|m4v|avi|mkv)$/i.test(file.name);
+
+const localFileId = (file: File) => `local-${file.name}-${file.lastModified}-${file.size}`;
 
 const useLightweightMode = () => {
   const [lightweight, setLightweight] = useState(false);
