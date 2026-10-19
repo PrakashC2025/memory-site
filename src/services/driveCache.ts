@@ -25,8 +25,11 @@ const openCache = () => new Promise<IDBDatabase | null>(resolve => {
   request.onerror = () => resolve(null);
 });
 
+let cacheDbPromise: Promise<IDBDatabase | null> | undefined;
+const getCache = () => cacheDbPromise || (cacheDbPromise = openCache());
+
 const readCached = async (id: string) => {
-  const db = await openCache();
+  const db = await getCache();
   if (!db) return undefined;
   return new Promise<CachedDriveMedia | undefined>(resolve => {
     const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(id);
@@ -36,7 +39,7 @@ const readCached = async (id: string) => {
 };
 
 const writeCached = async (item: CachedDriveMedia) => {
-  const db = await openCache();
+  const db = await getCache();
   if (!db) return;
   await new Promise<void>(resolve => {
     const request = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put(item);
@@ -70,6 +73,19 @@ export const cacheDriveMediaFiles = (files: DriveMediaFile[], accessToken: strin
     .filter(file => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/'))
     .sort((a, b) => Number(b.mimeType.startsWith('image/')) - Number(a.mimeType.startsWith('image/')));
   return Promise.all(visualFiles.map(file => downloadDriveMedia(file, accessToken))).then(() => undefined);
+};
+
+export const cacheDriveMemories = (memories: Memory[], accessToken: string) => {
+  const files = memories
+    .filter(memory => memory.driveFileId)
+    .map(memory => ({
+      id: memory.driveFileId as string,
+      name: memory.title,
+      mimeType: memory.mimeType || (memory.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+      thumbnailUrl: memory.thumbnail || '',
+      createdTime: memory.date,
+    } satisfies DriveMediaFile));
+  return cacheDriveMediaFiles(files, accessToken);
 };
 
 export const hydrateCachedDriveMemories = async (memories: Memory[]) => {

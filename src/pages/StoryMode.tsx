@@ -3,7 +3,7 @@ import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
 import { readDriveFolderId, readDriveMemories } from '../services/driveLibrary';
 import { googleDriveService } from '../services/googleDriveService';
-import { cacheDriveMediaFiles, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
+import { cacheDriveMediaFiles, cacheDriveMemories, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
 
 interface StoryModeProps {
   onExit: () => void;
@@ -44,6 +44,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     };
 
     void applyCached(known);
+    if (token) void cacheDriveMemories(known, token).then(() => applyCached(known));
 
     const syncDrive = async () => {
       if (!token) return;

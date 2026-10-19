@@ -217,16 +217,7 @@ export class MemoryReelController {
       const isVideo = item.type === 'video' || /\.(mp4|mov|webm|m4v|avi|mkv)(\?|$)/i.test(item.src);
       let finished = false;
       let attemptedFallback = false;
-      const placeholder = () => {
-        if (finished) return;
-        const image = new Image();
-        image.className = 'm';
-        image.decoding = 'async';
-        image.onload = () => finish({ node: image, aspect: 1.5 });
-        image.onerror = () => finish(null);
-        image.src = makeReelPlaceholder(item.label);
-      };
-      const timer = window.setTimeout(placeholder, 20000);
+      const timer = window.setTimeout(() => finish(null), 12000);
       const finish = (value: LoadedMedia | null) => {
         if (finished) return;
         finished = true;
@@ -240,7 +231,7 @@ export class MemoryReelController {
         video.className = 'm';
         video.crossOrigin = 'anonymous';
         video.onloadedmetadata = () => finish({ node: video, video, aspect: video.videoWidth / video.videoHeight || 1.6 });
-        video.onerror = placeholder;
+        video.onerror = () => finish(null);
       } else {
         const image = new Image();
         image.className = 'm';
@@ -253,7 +244,7 @@ export class MemoryReelController {
             image.src = item.fallbackSrc;
             return;
           }
-          placeholder();
+          finish(null);
         };
         image.src = item.src;
       }
@@ -479,25 +470,21 @@ export class MemoryReelController {
 
 const isVideoMemory = (memory: Memory) => memory.type === 'video' || Boolean(memory.mimeType?.startsWith('video/'));
 
-const makeReelPlaceholder = (label: string) => {
-  const safeLabel = escapeHtml(label || 'Memory');
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#20283d"/><stop offset="1" stop-color="#7a4566"/></linearGradient></defs><rect width="1200" height="800" fill="url(#g)"/><circle cx="170" cy="150" r="130" fill="#ffd9a0" fill-opacity=".24"/><circle cx="1040" cy="650" r="220" fill="#8ee3ff" fill-opacity=".16"/><text x="600" y="420" fill="white" font-family="Georgia,serif" font-size="54" text-anchor="middle">${safeLabel}</text></svg>`)}`;
-};
-
 const resolveReelSources = async (memories: Memory[], signal: AbortSignal) => {
-  const sources = memories.map(memory => {
+  const sources = memories.flatMap(memory => {
     const video = isVideoMemory(memory);
     const preview = video ? memory.url || memory.thumbnail : memory.thumbnail || memory.url;
+    if (!preview) return [];
     const authenticatedFallback = !video && memory.driveFileId && memory.authToken && memory.url !== preview
       ? memory.url
       : undefined;
-    return {
+    return [{
       id: memory.id,
-      src: preview || makeReelPlaceholder(memory.title),
+      src: preview,
       fallbackSrc: authenticatedFallback,
       type: video ? 'video' : 'image',
       label: memory.title,
-    } satisfies ReelSource;
+    } satisfies ReelSource];
   });
   return signal.aborted ? [] : sources;
 };
