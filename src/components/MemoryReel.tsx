@@ -12,6 +12,7 @@ export interface MemoryReelTitle {
 interface ReelSource {
   src: string;
   type: 'image' | 'video';
+  label: string;
 }
 
 interface MemoryReelProps {
@@ -84,7 +85,7 @@ export class MemoryReelController {
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
     this.options = {
-      hold: 1.7,
+      hold: 3.6,
       move: 1.2,
       loop: false,
       reducedMotion: false,
@@ -125,16 +126,16 @@ export class MemoryReelController {
       return;
     }
 
-    const columns = Math.max(2, Math.round(Math.sqrt(ok.length * 1.5)));
+    const columns = Math.max(3, Math.ceil(Math.sqrt(ok.length * 1.25)));
+    const rows = Math.max(1, Math.ceil(ok.length / columns));
     const sx = 560;
     const sy = 400;
     let seed = 7;
     const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
-    ok.forEach((media, index) => {
+    const wallCards = ok.map((media, index) => {
       const row = Math.floor(index / columns);
-      let column = index % columns;
-      if (row % 2) column = columns - 1 - column;
+      const column = index % columns;
       const height = 380;
       const width = Math.min(620, Math.max(300, height * media.aspect));
       const card = document.createElement('div');
@@ -142,14 +143,24 @@ export class MemoryReelController {
       card.style.width = `${width}px`;
       card.style.height = `${height}px`;
       card.appendChild(media.node);
-      const x = column * sx + (random() - 0.5) * 150;
-      const y = row * sy + (random() - 0.5) * 120;
-      const z = -random() * 160;
+      const x = (column - (columns - 1) / 2) * sx + (random() - 0.5) * 260;
+      const y = (row - (rows - 1) / 2) * sy + (random() - 0.5) * 220;
+      const z = -random() * 240;
       const rot = (random() - 0.5) * 30;
       card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
       card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
-      this.world.appendChild(card);
-      this.cards.push({ card, x, y, z, rot, width, height, video: media.video });
+      return { card, x, y, z, rot, width, height, video: media.video } satisfies ReelCard;
+    });
+
+    // Keep the wall spatially scattered, but let the camera choose a varied
+    // direction instead of following the source file order or a row-by-row path.
+    for (let index = wallCards.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(random() * (index + 1));
+      [wallCards[index], wallCards[swapIndex]] = [wallCards[swapIndex], wallCards[index]];
+    }
+    wallCards.forEach(card => {
+      this.world.appendChild(card.card);
+      this.cards.push(card);
     });
 
     this.total = this.cards.length * (this.options.hold + this.options.move) - this.options.move + 2.6;
@@ -161,12 +172,16 @@ export class MemoryReelController {
     return new Promise(resolve => {
       const isVideo = item.type === 'video' || /\.(mp4|mov|webm|m4v|avi|mkv)(\?|$)/i.test(item.src);
       let finished = false;
-      const timer = window.setTimeout(() => {
-        if (!finished) {
-          finished = true;
-          resolve(null);
-        }
-      }, 14000);
+      const placeholder = () => {
+        if (finished) return;
+        const image = new Image();
+        image.className = 'm';
+        image.decoding = 'async';
+        image.onload = () => finish({ node: image, aspect: 1.5 });
+        image.onerror = () => finish(null);
+        image.src = makeReelPlaceholder(item.label);
+      };
+      const timer = window.setTimeout(placeholder, 20000);
       const finish = (value: LoadedMedia | null) => {
         if (finished) return;
         finished = true;
@@ -180,14 +195,14 @@ export class MemoryReelController {
         video.className = 'm';
         video.crossOrigin = 'anonymous';
         video.onloadedmetadata = () => finish({ node: video, video, aspect: video.videoWidth / video.videoHeight || 1.6 });
-        video.onerror = () => finish(null);
+        video.onerror = placeholder;
       } else {
         const image = new Image();
         image.className = 'm';
         image.decoding = 'async';
         image.crossOrigin = 'anonymous';
         image.onload = () => finish({ node: image, aspect: image.naturalWidth / image.naturalHeight || 1.5 });
-        image.onerror = () => finish(null);
+        image.onerror = placeholder;
         image.src = item.src;
       }
     });
@@ -377,10 +392,14 @@ const fetchDriveBlobUrl = async (memory: Memory, signal: AbortSignal) => {
   }
 };
 
+const makeReelPlaceholder = (label: string) => {
+  const safeLabel = escapeHtml(label || 'Memory');
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#20283d"/><stop offset="1" stop-color="#7a4566"/></linearGradient></defs><rect width="1200" height="800" fill="url(#g)"/><circle cx="170" cy="150" r="130" fill="#ffd9a0" fill-opacity=".24"/><circle cx="1040" cy="650" r="220" fill="#8ee3ff" fill-opacity=".16"/><text x="600" y="420" fill="white" font-family="Georgia,serif" font-size="54" text-anchor="middle">${safeLabel}</text></svg>`)}`;
+};
+
 const resolveReelSources = async (memories: Memory[], signal: AbortSignal, ownedUrls: string[]) => {
   const sources = await Promise.all(memories.map(async memory => {
     const fallback = isVideoMemory(memory) ? memory.url || memory.thumbnail : memory.thumbnail || memory.url;
-    if (!fallback && !memory.driveFileId) return null;
     if (memory.driveFileId && memory.authToken) {
       try {
         const objectUrl = await fetchDriveBlobUrl(memory, signal);
@@ -390,13 +409,17 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal, owned
             return null;
           }
           ownedUrls.push(objectUrl);
-          return { src: objectUrl, type: isVideoMemory(memory) ? 'video' : 'image' } satisfies ReelSource;
+          return { src: objectUrl, type: isVideoMemory(memory) ? 'video' : 'image', label: memory.title } satisfies ReelSource;
         }
       } catch {
         if (signal.aborted) return null;
       }
     }
-    return fallback ? { src: fallback, type: isVideoMemory(memory) ? 'video' : 'image' } satisfies ReelSource : null;
+    return {
+      src: fallback || makeReelPlaceholder(memory.title),
+      type: isVideoMemory(memory) ? 'video' : 'image',
+      label: memory.title,
+    } satisfies ReelSource;
   }));
   return sources.filter((source): source is ReelSource => Boolean(source));
 };
