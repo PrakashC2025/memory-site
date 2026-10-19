@@ -2693,6 +2693,8 @@ input[type="number"]::-webkit-inner-spin-button {
 .memory-reel-toolbar,
 .memory-reel-editor,
 .memory-reel-music-search {
+  position: relative;
+  z-index: 30;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

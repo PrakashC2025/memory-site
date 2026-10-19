@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Maximize2, Minimize2, Pause, Play, RotateCcw, Search, Upload, X } from 'lucide-react';
+import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, X } from 'lucide-react';
 import type { Memory } from '../data/memories';
 import { googleDriveService, type DriveAudioFile } from '../services/googleDriveService';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
@@ -757,9 +757,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
           </button>
           <button type="button" onClick={() => controllerRef.current?.restart()} disabled={loading}><RotateCcw size={16} /> Replay</button>
           <button type="button" onClick={toggleFullscreen}><>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</> {fullscreen ? 'Exit' : 'Fullscreen'}</button>
-          <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Search size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : ''}</button>
+          <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Music2 size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : ''}</button>
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
-            <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+            <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
           )}
           <button type="button" onClick={() => setLoopEnabled(value => !value)} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
           {onClose && <button type="button" className="memory-reel-close" onClick={onClose}><X size={17} /> Close</button>}
@@ -795,6 +795,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
                   </div>
                 ))}
               </div>
+            )}
+            {!musicQueue.length && !driveSongs.length && !musicResults.length && !musicError && (
+              <p className="memory-reel-music-note">No song selected yet. Add a local song, search free music, or load songs from Drive.</p>
             )}
             {driveSongs.length > 0 && (
               <div className="memory-reel-drive-songs">

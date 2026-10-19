@@ -13,7 +13,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const localInputRef = useRef<HTMLInputElement>(null);
   const [localMemories, setLocalMemories] = useState<Memory[]>([]);
   const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
-  const [driveFolders, setDriveFolders] = useState<Array<{ id: string; name: string }>>([]);
+  const [driveFolders, setDriveFolders] = useState<Array<{ id: string; name: string }>>(() => (
+    readDriveAccessToken() ? [{ id: '', name: 'All My Drive photos' }] : []
+  ));
   const [selectedFolderId, setSelectedFolderId] = useState(() => readDriveFolderId());
   const folderChangedRef = useRef(false);
   const objectUrlsRef = useRef<string[]>([]);
@@ -31,7 +33,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   useEffect(() => {
     const token = readDriveAccessToken();
     if (!token) return;
-    void googleDriveService.listFolders(token).then(setDriveFolders).catch(() => setDriveFolders([]));
+    void googleDriveService.listFolders(token)
+      .then(folders => setDriveFolders([{ id: '', name: 'All My Drive photos' }, ...folders]))
+      .catch(() => setDriveFolders([{ id: '', name: 'All My Drive photos' }]));
   }, []);
 
   useEffect(() => {
