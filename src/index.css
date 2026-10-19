@@ -2739,7 +2739,6 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .memory-reel-upload { position: relative; overflow: hidden; }
 .memory-reel-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-<<<<<<< HEAD
 .memory-reel-drive-upload { border-color: rgba(54, 241, 205, 0.35); }
 .memory-reel-upload input:disabled { cursor: wait; }
 .memory-reel-music-note,
@@ -2752,8 +2751,6 @@ input[type="number"]::-webkit-inner-spin-button {
 .memory-reel-music-error { color: #ff9fb7; }
 .memory-reel-music-heading { color: rgba(255, 255, 255, 0.7); font-weight: 800; }
 .memory-reel-drive-songs { display: grid; gap: 0.45rem; }
-=======
->>>>>>> 16af08391491e209b54807755e2c7b27d3942767
 
 .memory-reel-track {
   display: grid;
@@ -2769,7 +2766,6 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .memory-reel-track span { color: rgba(255, 255, 255, 0.55); font-size: 0.74rem; }
 
-<<<<<<< HEAD
 .memory-reel-queue {
   display: grid;
   gap: 0.4rem;
@@ -2814,8 +2810,6 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .memory-reel-queue-item button:disabled { cursor: not-allowed; opacity: 0.35; }
 
-=======
->>>>>>> 16af08391491e209b54807755e2c7b27d3942767
 @media (max-width: 760px) {
   .memory-reel-overlay { padding: 0; place-items: stretch; }
   .memory-reel-shell { min-height: 100dvh; align-content: center; padding: 0.7rem; }
@@ -2830,7 +2824,6 @@ input[type="number"]::-webkit-inner-spin-button {
   .memory-reel-stage .poster { transition: none; }
 }
 
-<<<<<<< HEAD
 .memoriya-camera-overlay {
   position: fixed;
   inset: 0;
@@ -3019,8 +3012,6 @@ input[type="number"]::-webkit-inner-spin-button {
   .memoriya-camera-controls { margin-top: 1rem; }
 }
 
-=======
->>>>>>> 16af08391491e209b54807755e2c7b27d3942767
 .memoriya-story-launch,
 .memoriya-album-play {
   display: inline-flex;

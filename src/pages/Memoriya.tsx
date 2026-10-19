@@ -100,12 +100,8 @@ const Memoriya: React.FC = () => {
   const [memories, setMemories] = useState<Memory[]>(() => restored?.memories || []);
   const [selected, setSelected] = useState<Memory | null>(() => restored?.memories?.[0] || null);
   const [viewerMemory, setViewerMemory] = useState<Memory | null>(null);
-<<<<<<< HEAD
   const [reelConfig, setReelConfig] = useState<{ memories: Memory[]; title: { line: string; big: string }; live: boolean } | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
-=======
-  const [reelConfig, setReelConfig] = useState<{ memories: Memory[]; title: { line: string; big: string } } | null>(null);
->>>>>>> 16af08391491e209b54807755e2c7b27d3942767
   const [activeReaction, setActiveReaction] = useState('Love');
   const [accessToken, setAccessToken] = useState(restored?.accessToken || '');
   const [nextPageToken, setNextPageToken] = useState(restored?.nextPageToken || '');
@@ -409,10 +405,7 @@ const Memoriya: React.FC = () => {
     setReelConfig({
       memories: sequence,
       title: { line, big: String(sequence[0]?.year || new Date().getFullYear()) },
-<<<<<<< HEAD
       live: items === filteredMemories,
-=======
->>>>>>> 16af08391491e209b54807755e2c7b27d3942767
     });
   };
 
@@ -451,13 +444,10 @@ const Memoriya: React.FC = () => {
             <button className="memoriya-glass-button" onClick={() => localInputRef.current?.click()}>
               <Images size={17} /> Use Local Media
             </button>
-<<<<<<< HEAD
             <button className="memoriya-glass-button" onClick={() => void connectLocalFolder()}>
               <FolderOpen size={17} /> Link local folder
             </button>
             {accessToken && <button className="memoriya-glass-button" onClick={() => setCameraOpen(true)}><Camera size={17} /> Drive camera</button>}
-=======
->>>>>>> 16af08391491e209b54807755e2c7b27d3942767
             {hasMemories && <button className="memoriya-glass-button" onClick={() => playStory(filteredMemories)}><Film size={17} /> Play story</button>}
             {accessToken && (
               <button className="memoriya-glass-button" onClick={disconnectDrive}>
@@ -573,7 +563,6 @@ const Memoriya: React.FC = () => {
       )}
 
       <MemoryLightbox memory={viewerMemory} memories={filteredMemories} onClose={() => setViewerMemory(null)} />
-<<<<<<< HEAD
       {cameraOpen && accessToken && (
         <DriveCameraCapture
           accessToken={accessToken}
@@ -595,9 +584,6 @@ const Memoriya: React.FC = () => {
           onClose={() => setReelConfig(null)}
         />
       )}
-=======
-      {reelConfig && <MemoryReel memories={reelConfig.memories} title={reelConfig.title} onClose={() => setReelConfig(null)} />}
->>>>>>> 16af08391491e209b54807755e2c7b27d3942767
     </div>
   );
 

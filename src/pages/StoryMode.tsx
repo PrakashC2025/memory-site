@@ -90,10 +90,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       <MemoryReel
         memories={storyMemories}
         title={{ line: storyMemories[0].event || 'Memoriya story', big: String(storyMemories[0].year) }}
-<<<<<<< HEAD
         driveAccessToken={storyMemories[0].authToken}
-=======
->>>>>>> 16af08391491e209b54807755e2c7b27d3942767
         onClose={onExit}
       />
     </div>
