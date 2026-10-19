@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, Check, FlipHorizontal, Loader2, X } from 'lucide-react';
+import { Camera, Check, FlipHorizontal, Grid3X3, Lightbulb, Loader2, Maximize2, X } from 'lucide-react';
 import type { DriveMediaFile } from '../services/googleDriveService';
 import { googleDriveService } from '../services/googleDriveService';
 
@@ -33,17 +33,26 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const trackRef = useRef<MediaStreamTrack | null>(null);
   const imageCaptureRef = useRef<ImageCaptureLike | null>(null);
   const previewUrlRef = useRef('');
+  const pendingUploadsRef = useRef(0);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [filter, setFilter] = useState<CameraFilter>('natural');
   const [previewUrl, setPreviewUrl] = useState('');
+  const [showLastShot, setShowLastShot] = useState(false);
+  const [gridEnabled, setGridEnabled] = useState(false);
+  const [torchEnabled, setTorchEnabled] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [zoomRange, setZoomRange] = useState<{ min: number; max: number; step: number } | null>(null);
+  const [torchAvailable, setTorchAvailable] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [status, setStatus] = useState('Starting camera…');
   const [error, setError] = useState('');
   const [folderId, setFolderId] = useState('drive-root');
   const [folders, setFolders] = useState<DriveFolderChoice[]>([]);
+  const [pendingUploads, setPendingUploads] = useState(0);
 
   useEffect(() => {
     void googleDriveService.listFolders(accessToken)
@@ -66,8 +75,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
           audio: false,
           video: {
             facingMode: { ideal: facingMode },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            width: { ideal: 2560 },
+            height: { ideal: 1440 },
             frameRate: { ideal: 30, max: 60 },
           },
         });
@@ -81,6 +90,23 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
         video.srcObject = stream;
         await video.play();
         const track = stream.getVideoTracks()[0];
+        trackRef.current = track;
+        const capabilities = track.getCapabilities() as MediaTrackCapabilities & {
+          zoom?: { min?: number; max?: number; step?: number };
+          torch?: boolean;
+        };
+        if (capabilities.zoom) {
+          const range = {
+            min: capabilities.zoom.min ?? 1,
+            max: capabilities.zoom.max ?? 1,
+            step: capabilities.zoom.step ?? 0.1,
+          };
+          setZoomRange(range);
+          setZoom(range.min);
+        } else {
+          setZoomRange(null);
+        }
+        setTorchAvailable(Boolean(capabilities.torch));
         const ImageCaptureConstructor = (window as unknown as { ImageCapture?: new (track: MediaStreamTrack) => ImageCaptureLike }).ImageCapture;
         imageCaptureRef.current = ImageCaptureConstructor ? new ImageCaptureConstructor(track) : null;
         setCameraReady(true);
@@ -94,6 +120,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
       cancelled = true;
       streamRef.current?.getTracks().forEach(track => track.stop());
       streamRef.current = null;
+      trackRef.current = null;
+      setTorchEnabled(false);
+      setZoomRange(null);
     };
   }, [facingMode]);
 
@@ -151,17 +180,47 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
       previewUrlRef.current = localPreviewUrl;
       setPreviewUrl(localPreviewUrl);
+      setShowLastShot(true);
       setStatus('Uploading securely to Drive…');
       const file = new File([blob], `memoriya-${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`, { type: 'image/jpeg' });
-      const uploaded = await googleDriveService.uploadMedia(accessToken, file, folderId);
-      onUploaded(uploaded);
+      setCapturing(false);
+      pendingUploadsRef.current += 1;
+      setPendingUploads(pendingUploadsRef.current);
+      void googleDriveService.uploadMedia(accessToken, file, folderId)
+        .then(uploaded => {
+          onUploaded(uploaded);
+          setError('');
+          setStatus('Photo saved locally and added to your live Drive story.');
+        })
+        .catch(uploadError => {
+          setError(uploadError instanceof Error ? `Photo is safe locally, but Drive upload failed: ${uploadError.message}` : 'Photo is safe locally, but Drive upload failed.');
+          setStatus('Ready for another photo.');
+        })
+        .finally(() => {
+          pendingUploadsRef.current = Math.max(0, pendingUploadsRef.current - 1);
+          setPendingUploads(pendingUploadsRef.current);
+        });
       setStatus('Saved to Drive — the live story will add it automatically.');
+      setStatus('Saved locally - upload is running in the background.');
     } catch (captureError) {
       setError(captureError instanceof Error ? captureError.message : 'Photo capture failed.');
       setStatus('Ready to try again.');
     } finally {
       setCapturing(false);
     }
+  };
+
+  const changeZoom = (value: number) => {
+    setZoom(value);
+    const track = trackRef.current;
+    if (track) void track.applyConstraints({ advanced: [{ zoom: value } as MediaTrackConstraintSet] });
+  };
+
+  const toggleTorch = () => {
+    const next = !torchEnabled;
+    setTorchEnabled(next);
+    const track = trackRef.current;
+    if (track) void track.applyConstraints({ advanced: [{ torch: next } as MediaTrackConstraintSet] });
   };
 
   return (
@@ -174,8 +233,12 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
         <div className="memoriya-camera-viewfinder">
           <video ref={videoRef} muted playsInline autoPlay style={{ filter: CAMERA_FILTERS[filter].css, transform: facingMode === 'user' ? 'scaleX(-1)' : undefined }} />
           {!cameraReady && <div className="memoriya-camera-status"><Loader2 className="memoriya-spin-icon" size={28} /><span>{error || status}</span></div>}
-          {previewUrl && <img className="memoriya-camera-last-shot" src={previewUrl} alt="Last captured memory" />}
-          <div className="memoriya-camera-grid" aria-hidden="true" />
+          {previewUrl && showLastShot && <img className="memoriya-camera-last-shot" src={previewUrl} alt="Last captured memory" />}
+          {gridEnabled && <div className="memoriya-camera-grid" aria-hidden="true" />}
+          <div className="memoriya-camera-viewfinder-tools">
+            {previewUrl && <button type="button" onClick={() => setShowLastShot(value => !value)}>{showLastShot ? 'Live' : 'Last photo'}</button>}
+            <button type="button" onClick={() => setGridEnabled(value => !value)} className={gridEnabled ? 'is-active' : ''} aria-label="Toggle camera grid"><Grid3X3 size={16} /></button>
+          </div>
         </div>
         <div className="memoriya-camera-controls">
           <button type="button" onClick={() => setFacingMode(value => value === 'environment' ? 'user' : 'environment')}><FlipHorizontal size={17} /> Flip</button>
@@ -188,6 +251,10 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
             </select>
           </label>
         </div>
+        <div className="memoriya-camera-settings">
+          {zoomRange && <label><Maximize2 size={15} /> Zoom <input type="range" min={zoomRange.min} max={zoomRange.max} step={zoomRange.step} value={zoom} onChange={event => changeZoom(Number(event.target.value))} /><output>{zoom.toFixed(1)}x</output></label>}
+          {torchAvailable && <button type="button" onClick={toggleTorch} className={torchEnabled ? 'is-active' : ''}><Lightbulb size={15} /> {torchEnabled ? 'Flash on' : 'Flash off'}</button>}
+        </div>
         <label className="memoriya-camera-destination">Save to Drive folder
           <select value={folderId} onChange={event => setFolderId(event.target.value)}>
             <option value="drive-root">My Drive root</option>
@@ -195,7 +262,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
           </select>
         </label>
         <p className={`memoriya-camera-message ${error ? 'is-error' : ''}`}>{error || status}</p>
-        {previewUrl && !capturing && !error && <p className="memoriya-camera-saved"><Check size={15} /> Latest photo is saved in your connected Drive.</p>}
+        {pendingUploads > 0 && <p className="memoriya-camera-saved"><Loader2 size={15} className="memoriya-spin-icon" /> {pendingUploads} upload{pendingUploads === 1 ? '' : 's'} running in background</p>}
+        {previewUrl && !capturing && !error && pendingUploads === 0 && <p className="memoriya-camera-saved"><Check size={15} /> Latest photo is saved locally and in your connected Drive.</p>}
         <canvas ref={canvasRef} className="hidden" />
       </section>
     </div>
