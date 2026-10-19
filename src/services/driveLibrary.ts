@@ -9,6 +9,7 @@ interface DriveSessionSnapshot {
   memories: Memory[];
   savedAt: number;
   driveFolderId?: string;
+  driveFolders?: Array<{ id: string; name: string }>;
 }
 
 export const readDriveMemories = () => {
@@ -45,6 +46,17 @@ export const readDriveFolderId = () => {
     return (JSON.parse(stored) as DriveSessionSnapshot).driveFolderId || '';
   } catch {
     return '';
+  }
+};
+
+export const readDriveFolders = () => {
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    if (!stored) return [];
+    const folders = (JSON.parse(stored) as DriveSessionSnapshot).driveFolders || [];
+    return folders.filter(folder => folder.id && folder.id !== 'drive-root');
+  } catch {
+    return [];
   }
 };
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
-import { readDriveAccessToken, readDriveFolderId, readDriveMemories, saveDriveMemories } from '../services/driveLibrary';
+import { readDriveAccessToken, readDriveFolderId, readDriveFolders, readDriveMemories, saveDriveMemories } from '../services/driveLibrary';
 import { googleDriveService } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, cacheDriveMemories, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
 
@@ -13,9 +13,10 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const localInputRef = useRef<HTMLInputElement>(null);
   const [localMemories, setLocalMemories] = useState<Memory[]>([]);
   const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
-  const [driveFolders, setDriveFolders] = useState<Array<{ id: string; name: string }>>(() => (
-    readDriveAccessToken() ? [{ id: '', name: 'All My Drive photos' }] : []
-  ));
+  const [driveFolders, setDriveFolders] = useState<Array<{ id: string; name: string }>>(() => {
+    const savedFolders = readDriveFolders();
+    return readDriveAccessToken() ? [{ id: '', name: 'All My Drive photos' }, ...savedFolders] : [];
+  });
   const [selectedFolderId, setSelectedFolderId] = useState(() => readDriveFolderId());
   const folderChangedRef = useRef(false);
   const objectUrlsRef = useRef<string[]>([]);
@@ -35,7 +36,11 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     if (!token) return;
     void googleDriveService.listFolders(token)
       .then(folders => setDriveFolders([{ id: '', name: 'All My Drive photos' }, ...folders]))
-      .catch(() => setDriveFolders([{ id: '', name: 'All My Drive photos' }]));
+      .catch(() => {
+        // Keep the last folder list saved by Memoriya if Drive is temporarily
+        // unavailable or the short-lived access token needs renewal.
+        setDriveFolders(current => current.length ? current : [{ id: '', name: 'All My Drive photos' }]);
+      });
   }, []);
 
   useEffect(() => {
