@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import DriveMediaPreview from '../components/DriveMediaPreview';
 import MemoryLightbox from '../components/MemoryLightbox';
+import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
 import { DRIVE_SESSION_KEY, upgradeDriveImageUrls } from '../services/driveLibrary';
 import { googleDriveService, type DriveConnectionState, type DriveMediaFile } from '../services/googleDriveService';
@@ -85,7 +86,7 @@ const Memoriya: React.FC = () => {
   const [memories, setMemories] = useState<Memory[]>(() => restored?.memories || []);
   const [selected, setSelected] = useState<Memory | null>(() => restored?.memories?.[0] || null);
   const [viewerMemory, setViewerMemory] = useState<Memory | null>(null);
-  const [directorOpen, setDirectorOpen] = useState(false);
+  const [reelConfig, setReelConfig] = useState<{ memories: Memory[]; title: { line: string; big: string } } | null>(null);
   const [activeReaction, setActiveReaction] = useState('Love');
   const [accessToken, setAccessToken] = useState(restored?.accessToken || '');
   const [nextPageToken, setNextPageToken] = useState(restored?.nextPageToken || '');
@@ -291,6 +292,14 @@ const Memoriya: React.FC = () => {
     setViewerMemory(memory);
   };
 
+  const playStory = (items: Memory[], line = 'Memoriya story') => {
+    const sequence = items.length ? items : filteredMemories;
+    setReelConfig({
+      memories: sequence,
+      title: { line, big: String(sequence[0]?.year || new Date().getFullYear()) },
+    });
+  };
+
   return (
     <div className="memoriya-experience">
       {localPicker}
@@ -325,6 +334,7 @@ const Memoriya: React.FC = () => {
             <button className="memoriya-glass-button" onClick={() => localInputRef.current?.click()}>
               <Images size={17} /> Use Local Media
             </button>
+            {hasMemories && <button className="memoriya-glass-button" onClick={() => playStory(filteredMemories)}><Film size={17} /> Play story</button>}
             {accessToken && (
               <button className="memoriya-glass-button" onClick={disconnectDrive}>
                 <ShieldCheck size={17} /> Disconnect
@@ -395,6 +405,7 @@ const Memoriya: React.FC = () => {
             selected={selected}
             setSelected={setSelected}
             openMemory={openMemory}
+            onPlayStory={() => playStory(filteredMemories)}
             activeReaction={activeReaction}
             setActiveReaction={setActiveReaction}
             lightweight={lightweight || Boolean(reducedMotion)}
@@ -402,7 +413,7 @@ const Memoriya: React.FC = () => {
         )}
 
         {hasMemories && stage === 'director' && (
-          <DirectorStage plan={directorPlan} onPlay={() => setDirectorOpen(true)} onOpenMemory={openMemory} />
+          <DirectorStage plan={directorPlan} onPlay={() => playStory(directorPlan.sequence, directorPlan.title)} onOpenMemory={openMemory} />
         )}
 
         {hasMemories && stage === 'map' && (
@@ -410,7 +421,7 @@ const Memoriya: React.FC = () => {
         )}
 
         {hasMemories && stage === 'albums' && (
-          <AlbumsStage albums={albums} galleryStyle={galleryStyle} setGalleryStyle={setGalleryStyle} openMemory={openMemory} lightweight={lightweight || Boolean(reducedMotion)} />
+          <AlbumsStage albums={albums} galleryStyle={galleryStyle} setGalleryStyle={setGalleryStyle} openMemory={openMemory} onPlayStory={playStory} lightweight={lightweight || Boolean(reducedMotion)} />
         )}
 
         {hasMemories && stage === 'story' && (
@@ -438,18 +449,7 @@ const Memoriya: React.FC = () => {
       )}
 
       <MemoryLightbox memory={viewerMemory} memories={filteredMemories} onClose={() => setViewerMemory(null)} />
-      <MemoryLightbox
-        memory={directorOpen ? directorPlan.sequence[0] || null : null}
-        memories={directorPlan.sequence}
-        autoplay
-        mode="story"
-        template={directorPlan.template}
-        transitionStyle={directorPlan.transition}
-        speed="slow"
-        intensity="premium"
-        onClose={() => setDirectorOpen(false)}
-        onImportLocalMedia={() => localInputRef.current?.click()}
-      />
+      {reelConfig && <MemoryReel memories={reelConfig.memories} title={reelConfig.title} onClose={() => setReelConfig(null)} />}
     </div>
   );
 };
@@ -550,12 +550,13 @@ interface ReelsStageProps {
   selected: Memory;
   setSelected: (memory: Memory) => void;
   openMemory: (memory: Memory) => void;
+  onPlayStory: () => void;
   activeReaction: string;
   setActiveReaction: (reaction: string) => void;
   lightweight: boolean;
 }
 
-const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, openMemory, activeReaction, setActiveReaction }) => (
+const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, openMemory, onPlayStory, activeReaction, setActiveReaction }) => (
   <section className="memoriya-reel-stage">
     <article
       className="memoriya-reel-phone"
@@ -592,6 +593,7 @@ const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, ope
         </div>
       </div>
     </article>
+    <button type="button" className="memoriya-story-launch" onClick={onPlayStory}><Film size={16} /> Play full camera-wall story</button>
     <div className="memoriya-reel-list">
       {memories.map((memory, index) => (
         <button
@@ -651,8 +653,9 @@ const AlbumsStage = memo<{
   galleryStyle: GalleryStyle;
   setGalleryStyle: (style: GalleryStyle) => void;
   openMemory: (memory: Memory) => void;
+  onPlayStory: (items: Memory[], line: string) => void;
   lightweight: boolean;
-}>(({ albums, galleryStyle, setGalleryStyle, openMemory, lightweight }) => (
+}>(({ albums, galleryStyle, setGalleryStyle, openMemory, onPlayStory, lightweight }) => (
   <section className="memoriya-albums">
     <div className="memoriya-style-switch">
       {(['polaroid', 'scrapbook'] as GalleryStyle[]).map(style => (
@@ -663,11 +666,14 @@ const AlbumsStage = memo<{
     </div>
     <div className={`memoriya-album-wall is-${galleryStyle}`}>
       {albums.map(([title, items]) => (
-        <motion.button key={title} whileHover={lightweight ? undefined : { y: -5 }} onClick={() => openMemory(items[0])}>
-          <OptimizedImage memory={items[0]} width={420} />
-          <strong>{title}</strong>
-          <span>{items.length} user memories</span>
-        </motion.button>
+        <motion.article key={title} whileHover={lightweight ? undefined : { y: -5 }}>
+          <button type="button" onClick={() => openMemory(items[0])}>
+            <OptimizedImage memory={items[0]} width={420} />
+            <strong>{title}</strong>
+            <span>{items.length} user memories</span>
+          </button>
+          <button type="button" className="memoriya-album-play" onClick={() => onPlayStory(items, title)}><Film size={14} /> Play story</button>
+        </motion.article>
       ))}
     </div>
   </section>

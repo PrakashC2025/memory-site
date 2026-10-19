@@ -1487,23 +1487,67 @@ const MemoryLightbox: React.FC<Props> = ({
               ))}
             </div>
           )}
-          <AnimatePresence mode={mode === 'story' ? 'sync' : 'wait'} initial={mode !== 'story'}>
-            <motion.figure
-              key={`${current.id}-${activeTransition}-${fitMode}`}
-              variants={displayVariant}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              transition={{ duration: transitionDuration, ease: [0.16, 1, 0.3, 1] }}
-              className={`${mediaClass} ${storyEffectClass}`}
-              style={{
-                borderColor: `${colors[0]}66`,
-                boxShadow: `0 0 90px ${colors[0]}33, 0 36px 120px rgba(0,0,0,0.72)`,
-              }}
-            >
+          {isStoryMode ? (
+            <div className="cinema-story-camera-wall" aria-label="Cinematic photo camera">
+              <div
+                className="cinema-story-camera-track"
+                style={{ transform: `translate3d(calc(50vw - ${typeof window !== 'undefined' && window.innerWidth <= 760 ? 44 : 38}vw - ${currentIdx * (typeof window !== 'undefined' && window.innerWidth <= 760 ? 93 : 82)}vw), 0, 0)` }}
+              >
+                {sequence.map((item, index) => {
+                  const active = index === currentIdx;
+                  const source = active ? (item.url || item.thumbnail) : getDecorativeMemorySrc(item);
+                  return (
+                    <button
+                      key={`${item.id}-camera-wall`}
+                      type="button"
+                      className={`cinema-story-camera-card ${active ? 'is-active' : 'is-blurred'}`}
+                      onClick={event => {
+                        event.stopPropagation();
+                        setIndex(index);
+                        showChrome(true);
+                      }}
+                      aria-label={`Show ${item.title}`}
+                    >
+                      {source ? (
+                        <img
+                          src={source}
+                          alt={item.title}
+                          loading={active ? 'eager' : 'lazy'}
+                          decoding="async"
+                          onError={event => {
+                            const fallback = item.thumbnail || item.url;
+                            if (fallback && event.currentTarget.src !== fallback) event.currentTarget.src = fallback;
+                          }}
+                        />
+                      ) : (
+                        <span className="cinema-story-camera-card-fallback"><ImageIcon size={28} /></span>
+                      )}
+                      <span className="cinema-story-camera-card-label">{String(index + 1).padStart(2, '0')}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="cinema-story-camera-focus" aria-hidden="true" />
+              <div className="cinema-story-camera-sweep" aria-hidden="true" />
+            </div>
+          ) : (
+            <AnimatePresence mode="wait" initial>
+              <motion.figure
+                key={`${current.id}-${activeTransition}-${fitMode}`}
+                variants={displayVariant}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: transitionDuration, ease: [0.16, 1, 0.3, 1] }}
+                className={`${mediaClass} ${storyEffectClass}`}
+                style={{
+                  borderColor: `${colors[0]}66`,
+                  boxShadow: `0 0 90px ${colors[0]}33, 0 36px 120px rgba(0,0,0,0.72)`,
+                }}
+              >
               <div className="cinema-frame-glow" style={{ background: `radial-gradient(circle at 50% 18%, ${colors[0]}36 0%, transparent 72%)` }} />
               <div className="cinema-frame-reflection" style={{ background: `linear-gradient(125deg, rgba(255,255,255,0.22), transparent 30%, transparent 62%, ${colors[1]}18 100%)` }} />
-              {mode === 'story' && !settingsOpen && !musicOpen && (
+              {isStoryMode && !settingsOpen && !musicOpen && (
                 <>
                   <div className="cinema-edit-flash" style={{ background: `linear-gradient(110deg, transparent, ${colors[0]}88, ${colors[1]}44, transparent)` }} />
                   <div className="cinema-prism-shift" aria-hidden="true" />
@@ -1534,9 +1578,9 @@ const MemoryLightbox: React.FC<Props> = ({
                     poster={current.thumbnail}
                     controls
                     autoPlay={isPlaying}
-                    muted={mode === 'story' ? true : muted}
+                    muted={isStoryMode ? true : muted}
                     playsInline
-                    preload={mode === 'story' ? 'auto' : 'metadata'}
+                    preload={isStoryMode ? 'auto' : 'metadata'}
                     onLoadedMetadata={markMediaLoaded}
                     onLoadedData={event => {
                       markMediaLoaded();
@@ -1546,14 +1590,14 @@ const MemoryLightbox: React.FC<Props> = ({
                       if (isPlaying) void event.currentTarget.play().catch(() => {});
                     }}
                     onPlay={() => {
-                      if (mode !== 'story') setIsPlaying(true);
+                      if (!isStoryMode) setIsPlaying(true);
                     }}
                     onPause={() => {
-                      if (mode !== 'story') setIsPlaying(false);
+                      if (!isStoryMode) setIsPlaying(false);
                     }}
                     onError={handleVideoError}
                     onEnded={() => {
-                      if (mode === 'story') {
+                      if (isStoryMode) {
                         goNext();
                         return;
                       }
@@ -1590,8 +1634,9 @@ const MemoryLightbox: React.FC<Props> = ({
               </motion.div>
               <div className="cinema-sweep" />
               <div className="cinema-letterbox" />
-            </motion.figure>
-          </AnimatePresence>
+              </motion.figure>
+            </AnimatePresence>
+          )}
         </main>
 
         <AnimatePresence>
