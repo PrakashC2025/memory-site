@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import MemoryLightbox from '../components/MemoryLightbox';
+import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
 import { readDriveMemories } from '../services/driveLibrary';
 
@@ -87,15 +87,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   return (
     <div className="fixed inset-0 z-[5] overflow-hidden bg-black">
       {localPicker}
-      <MemoryLightbox
-        memory={storyMemories[0]}
+      <MemoryReel
         memories={storyMemories}
-        autoplay
-        mode="story"
-        template="auto"
-        speed="slow"
-        intensity="premium"
-        onImportLocalMedia={() => localInputRef.current?.click()}
+        title={{ line: storyMemories[0].event || 'Memoriya story', big: String(storyMemories[0].year) }}
         onClose={onExit}
       />
     </div>
