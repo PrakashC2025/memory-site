@@ -73,6 +73,8 @@ export class MemoryReelController {
   private readonly el: HTMLElement;
   private readonly options: Required<Pick<MemoryReelOptions, 'hold' | 'move' | 'loop' | 'reducedMotion'>> & MemoryReelOptions;
   private world: HTMLDivElement;
+  private ambient: HTMLDivElement;
+  private ambientSource = '';
   private titleEl: HTMLDivElement;
   private progressEl: HTMLDivElement;
   private poster: HTMLDivElement;
@@ -101,6 +103,7 @@ export class MemoryReelController {
       ...options,
     };
     this.world = Object.assign(document.createElement('div'), { className: 'world' });
+    this.ambient = Object.assign(document.createElement('div'), { className: 'ambient' });
     const vignette = Object.assign(document.createElement('div'), { className: 'vignette' });
     this.titleEl = Object.assign(document.createElement('div'), { className: 'title' });
     this.progressEl = Object.assign(document.createElement('div'), { className: 'prog' });
@@ -109,7 +112,7 @@ export class MemoryReelController {
     tap.onclick = () => this.paused ? this.play() : this.pause();
     this.poster.onclick = () => this.play();
     this.el.innerHTML = '';
-    this.el.append(this.world, vignette, this.titleEl, this.progressEl, tap, this.poster);
+    this.el.append(this.world, this.ambient, vignette, this.titleEl, this.progressEl, tap, this.poster);
     if (this.options.audio) this.setAudio(this.options.audio);
 
     this.resizeObserver = typeof ResizeObserver !== 'undefined'
@@ -183,7 +186,9 @@ export class MemoryReelController {
       card.appendChild(media.node);
       const x = (column - (columns - 1) / 2) * sx + (random() - 0.5) * 120;
       const y = (row - (rows - 1) / 2) * sy + (random() - 0.5) * 100;
-      const z = -random() * 120;
+      // Keep cards on one plane. A large depth spread makes a nearby card
+      // grow over the focused card and hide part of it.
+      const z = 0;
       const rot = (random() - 0.5) * 20;
       card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
       card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
@@ -430,15 +435,22 @@ export class MemoryReelController {
         z: lerp(from.z, to.z, progress),
         rot: lerp(from.rot, to.rot, progress),
       };
-      const push = 40 + clamp(holdProgress, 0, 1) * 60 - dip * 300;
+      const push = 100 + clamp(holdProgress, 0, 1) * 180 - dip * 360;
       const sway = Math.sin(time * 0.7) * 3 * (1 - dip);
       this.world.style.transform = `scale(${this.scale}) translate3d(0,0,${push}px) rotateY(${-6 + sway}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${-camera.x}px,${-camera.y}px,${-camera.z}px)`;
       const flyBlur = dip * 5;
-      this.cards.forEach(card => {
+      let focusedIndex = 0;
+      let focusedDistance = Number.POSITIVE_INFINITY;
+      this.cards.forEach((card, index) => {
         const distance = Math.hypot(card.x - camera.x, card.y - camera.y);
+        if (distance < focusedDistance) {
+          focusedDistance = distance;
+          focusedIndex = index;
+        }
         const blur = clamp((distance - 360) / 100, 0, 5) + (distance > 360 ? flyBlur * 0.65 : 0);
         const near = distance < 200;
         card.card.style.opacity = '1';
+        card.card.style.zIndex = index === focusedIndex ? '20' : '1';
         card.card.style.filter = (blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : '') + (near ? '' : ' brightness(.9)');
         if (card.video) {
           const active = near && !this.paused;
@@ -446,6 +458,15 @@ export class MemoryReelController {
           else if (!active && !card.video.paused) card.video.pause();
         }
       });
+      this.cards.forEach((card, index) => {
+        card.card.style.zIndex = index === focusedIndex ? '20' : '1';
+      });
+      const focusedMedia = this.cards[focusedIndex]?.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
+      const ambientSource = focusedMedia?.currentSrc || focusedMedia?.getAttribute('src') || '';
+      if (ambientSource && ambientSource !== this.ambientSource) {
+        this.ambientSource = ambientSource;
+        this.ambient.style.backgroundImage = `url("${ambientSource.replace(/"/g, '\\"')}")`;
+      }
     }
 
     if (!this.titleEl.innerHTML && this.options.title) this.setTitle(this.options.title);

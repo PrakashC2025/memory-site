@@ -2547,8 +2547,23 @@ input[type="number"]::-webkit-inner-spin-button {
   top: 50%;
   width: 0;
   height: 0;
+  z-index: 1;
   transform-style: preserve-3d;
   will-change: transform;
+}
+
+.memory-reel-stage .ambient {
+  position: absolute;
+  inset: -8%;
+  z-index: 0;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  filter: blur(24px) saturate(1.08);
+  opacity: 0.48;
+  transform: scale(1.08);
+  transition: background-image 0.55s ease, opacity 0.55s ease;
+  pointer-events: none;
 }
 
 .memory-reel-stage .card {
