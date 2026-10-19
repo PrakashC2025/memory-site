@@ -111,6 +111,8 @@ const Memoriya: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(restored?.memories?.length ? `Restored ${restored.memories.length} Drive memories from this browser session.` : '');
   const [error, setError] = useState('');
+  const folderRequestRef = useRef(0);
+  const driveSyncBusyRef = useRef(false);
   const loaderRef = useRef<HTMLDivElement | null>(null);
   const localObjectUrlsRef = useRef<string[]>([]);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -182,6 +184,45 @@ const Memoriya: React.FC = () => {
         // Folder browsing is optional; the full Drive view remains available.
       });
   }, [accessToken, driveFolderId, driveFolders.length]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let active = true;
+    const syncLatestDriveMedia = async () => {
+      if (!active || driveSyncBusyRef.current) return;
+      driveSyncBusyRef.current = true;
+      try {
+        const page = await googleDriveService.listMediaPage(accessToken, '', driveFolderId);
+        if (!active) return;
+        const imported = page.files
+          .filter(file => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || file.thumbnailUrl || file.webContentLink)
+          .map(file => enrichDriveMemory(googleDriveService.toMemory(file, accessToken), file));
+        setMemories(current => {
+          const ids = new Set(current.map(memory => memory.id));
+          const fresh = imported.filter(memory => !ids.has(memory.id));
+          if (fresh.length) void cacheDriveMediaFiles(fresh.map(memory => ({
+            id: memory.driveFileId || memory.id,
+            name: memory.title,
+            mimeType: memory.mimeType || (memory.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+            thumbnailUrl: memory.thumbnail,
+            createdTime: memory.date,
+          } satisfies DriveMediaFile)), accessToken);
+          return fresh.length
+            ? [...current, ...fresh].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+            : current;
+        });
+      } catch {
+        // The current local cache and reel remain playable during a transient Drive error.
+      } finally {
+        driveSyncBusyRef.current = false;
+      }
+    };
+    const interval = window.setInterval(() => void syncLatestDriveMedia(), 10000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [accessToken, driveFolderId]);
 
   useEffect(() => {
     if (!selected && filteredMemories[0]) setSelected(filteredMemories[0]);
@@ -273,24 +314,36 @@ const Memoriya: React.FC = () => {
 
   const changeDriveFolder = async (folderId: string) => {
     if (!accessToken || folderId === driveFolderId) return;
+    const requestId = ++folderRequestRef.current;
+    driveSyncBusyRef.current = true;
     setError('');
     setLoading(true);
     setDriveFolderId(folderId);
     setNextPageToken('');
     setImportCount(0);
-    setMemories(current => current.filter(memory => !memory.driveFileId));
-    setSelected(current => current?.driveFileId ? null : current);
     setMessage(folderId ? 'Loading photos from the selected Drive folder...' : 'Loading photos from all of My Drive...');
     try {
       const page = await googleDriveService.listMediaPage(accessToken, '', folderId);
-      const added = appendDriveFiles(page.files, accessToken);
+      if (requestId !== folderRequestRef.current) return;
+      const imported = page.files
+        .filter(file => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || file.thumbnailUrl || file.webContentLink)
+        .map(file => enrichDriveMemory(googleDriveService.toMemory(file, accessToken), file));
+      void cacheDriveMediaFiles(page.files, accessToken);
+      setMemories(current => {
+        const localMemories = current.filter(memory => !memory.driveFileId);
+        const next = [...localMemories, ...imported]
+          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        setSelected(currentSelected => currentSelected?.driveFileId ? next[0] || null : currentSelected);
+        return next;
+      });
       setNextPageToken(page.nextPageToken || '');
-      setImportCount(added);
+      setImportCount(imported.length);
       setDriveFolders(current => current.map(folder => ({ ...folder, selected: folder.id === folderId })));
-      setMessage(`Loaded ${added} memories from ${folderId ? 'the selected Drive folder' : 'all of My Drive'}.`);
+      setMessage(`Loaded ${imported.length} memories from ${folderId ? 'the selected Drive folder' : 'all of My Drive'}. New uploads will sync automatically.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load that Drive folder.');
     } finally {
+      driveSyncBusyRef.current = false;
       setLoading(false);
     }
   };
@@ -640,6 +693,9 @@ const Memoriya: React.FC = () => {
           memories={reelConfig.memories}
           title={reelConfig.title}
           driveAccessToken={accessToken}
+          driveFolderId={driveFolderId}
+          driveFolders={driveFolders}
+          onDriveFolderChange={folderId => void changeDriveFolder(folderId)}
           hasMore={reelConfig.live && Boolean(accessToken)}
           loadingMore={loading}
           onNeedMore={() => void loadDrivePage()}

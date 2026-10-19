@@ -18,6 +18,8 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     return readDriveAccessToken() ? [{ id: '', name: 'All My Drive photos' }, ...savedFolders] : [];
   });
   const [selectedFolderId, setSelectedFolderId] = useState(() => readDriveFolderId());
+  const [driveLoading, setDriveLoading] = useState(() => Boolean(readDriveAccessToken() && !readDriveMemories().length));
+  const [driveError, setDriveError] = useState('');
   const folderChangedRef = useRef(false);
   const objectUrlsRef = useRef<string[]>([]);
   const driveObjectUrlsRef = useRef<string[]>([]);
@@ -50,6 +52,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     const folderId = selectedFolderId;
     let active = true;
     let known = [...seed];
+    let syncBusy = false;
 
     const applyCached = async (next: Memory[]) => {
       const result = await hydrateCachedDriveMemories(next);
@@ -66,36 +69,49 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     if (token) void cacheDriveMemories(known, token).then(() => applyCached(known));
 
     const syncDrive = async () => {
-      if (!token) return;
+      if (!token || syncBusy) return;
+      syncBusy = true;
+      setDriveError('');
       try {
-        const page = await googleDriveService.listMediaPage(token, '', folderId);
-        const knownIds = new Set(known.map(memory => memory.id));
-        const newFiles = page.files.filter(file => !knownIds.has(`drive-${file.id}`));
-        if (!newFiles.length) {
-          // Keep the active reel untouched when Drive has not changed. The
-          // cache check still runs silently for a changed file on Drive.
-          void cacheDriveMediaFiles(page.files, token);
-          return;
-        }
-
-        // Append new memories instead of sorting the wall again. Existing
-        // photos keep their order and timing while the new photos wait their
-        // turn later in the live loop.
-        const newMemories = newFiles.map(file => googleDriveService.toMemory(file, token));
-        known = [...known, ...newMemories];
-        saveDriveMemories(known, token, folderId);
-        // New media is appended without replacing the active blob URLs, so
-        // the photo currently on screen keeps playing normally. Its full
-        // local copy is downloaded silently for the next playback/open.
-        setDriveMemories(current => [...current, ...newMemories]);
-        void cacheDriveMediaFiles(newFiles, token);
+        let pageToken = '';
+        do {
+          const page = await googleDriveService.listMediaPage(token, pageToken, folderId);
+          if (!active) return;
+          const knownIds = new Set(known.map(memory => memory.id));
+          const newFiles = page.files.filter(file => !knownIds.has(`drive-${file.id}`));
+          if (newFiles.length) {
+            // Append new media without replacing the active reel. Existing
+            // photos keep their order and new uploads wait for their turn.
+            const newMemories = newFiles.map(file => googleDriveService.toMemory(file, token));
+            known = [...known, ...newMemories];
+            saveDriveMemories(known, token, folderId);
+            setDriveMemories(current => [...current, ...newMemories]);
+            void cacheDriveMediaFiles(newFiles, token).then(async () => {
+              const cached = await hydrateCachedDriveMemories(newMemories);
+              if (!active || !cached.objectUrls.length) {
+                if (!active) releaseCachedObjectUrls(cached.objectUrls);
+                return;
+              }
+              driveObjectUrlsRef.current.push(...cached.objectUrls);
+              const cachedById = new Map(cached.memories.map(memory => [memory.id, memory]));
+              setDriveMemories(current => current.map(memory => cachedById.get(memory.id) || memory));
+            });
+          } else {
+            // Refresh the local cache silently when Drive has not changed.
+            void cacheDriveMediaFiles(page.files, token);
+          }
+          pageToken = page.nextPageToken || '';
+        } while (pageToken && active);
       } catch {
-        // Cached memories remain playable when Drive is temporarily offline.
+        setDriveError('Drive is temporarily unavailable. Cached memories will keep playing.');
+      } finally {
+        syncBusy = false;
+        if (active) setDriveLoading(false);
       }
     };
 
     void syncDrive();
-    const interval = window.setInterval(() => void syncDrive(), 30000);
+    const interval = window.setInterval(() => void syncDrive(), 10000);
     return () => {
       active = false;
       window.clearInterval(interval);
@@ -106,6 +122,8 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     if (folderId === selectedFolderId) return;
     folderChangedRef.current = true;
     saveDriveMemories([], readDriveAccessToken(), folderId);
+    setDriveLoading(true);
+    setDriveError('');
     setSelectedFolderId(folderId);
     setDriveMemories([]);
   };
@@ -158,12 +176,20 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     return (
       <div className="fixed inset-0 z-[5] grid place-items-center bg-black px-4 text-white">
         {localPicker}
-        <section className="neon-card max-w-md p-6 text-center">
-          <h1 className="text-2xl font-black">No story yet</h1>
+        <section className="neon-card max-w-md p-6 text-center" data-drive-error={driveError || undefined}>
+          <h1 className="text-2xl font-black">{driveLoading ? 'Loading Drive story…' : 'No story yet'}</h1>
           <p className="mt-3 text-sm leading-6 text-white/60">
             Connect Google Drive in Memoriya, or choose local photos/videos from this device — the story starts
             immediately with thumbnails and upgrades to full quality as each slide plays.
           </p>
+          {driveFolders.length > 1 && (
+            <label className="mt-5 flex flex-col gap-2 text-left text-xs font-black uppercase tracking-[0.14em] text-white/60">
+              Drive folder
+              <select className="rounded-xl border border-white/15 bg-white/10 px-3 py-3 text-sm normal-case tracking-normal text-white" value={selectedFolderId} onChange={event => changeDriveFolder(event.target.value)}>
+                {driveFolders.map(folder => <option key={folder.id || 'all'} value={folder.id} className="bg-slate-900">{folder.name}</option>)}
+              </select>
+            </label>
+          )}
           <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <button onClick={() => localInputRef.current?.click()} className="neon-button px-4 py-2 text-sm font-black">Use Local Photos</button>
             <button onClick={onExit} className="neon-button px-4 py-2 text-sm font-black">Back to Memoriya</button>
