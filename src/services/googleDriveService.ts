@@ -236,9 +236,10 @@ export class GoogleDriveService {
     return allFiles;
   }
 
-  async listMediaPage(accessToken: string, pageToken = ''): Promise<DriveMediaPage> {
+  async listMediaPage(accessToken: string, pageToken = '', folderId = ''): Promise<DriveMediaPage> {
+    const locationQuery = folderId ? `'${folderId}' in parents and ` : '';
     const params = new URLSearchParams({
-      q: "(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false",
+      q: `${locationQuery}(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false`,
       pageSize: '40',
       orderBy: 'createdTime desc',
       fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',

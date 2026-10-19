@@ -26,7 +26,8 @@ import MemoryLightbox from '../components/MemoryLightbox';
 import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
 import { DRIVE_SESSION_KEY, upgradeDriveImageUrls } from '../services/driveLibrary';
-import { googleDriveService, type DriveConnectionState, type DriveMediaFile } from '../services/googleDriveService';
+import { googleDriveService, type DriveConnectionState, type DriveFolder, type DriveMediaFile } from '../services/googleDriveService';
+import { cacheDriveMediaFiles } from '../services/driveCache';
 import { autoEventLabel, buildDirectorPlan, type DirectorPlan } from '../services/directorPlan';
 
 type Stage = 'reels' | 'director' | 'map' | 'albums' | 'story';
@@ -38,6 +39,8 @@ interface DriveSessionSnapshot {
   importCount: number;
   memories: Memory[];
   savedAt: number;
+  driveFolderId?: string;
+  driveFolders?: DriveFolder[];
 }
 
 interface LocalDirectoryEntry {
@@ -77,10 +80,7 @@ const readDriveSession = (): DriveSessionSnapshot | null => {
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
     if (!stored) return null;
     const snapshot = JSON.parse(stored) as DriveSessionSnapshot;
-    if (!snapshot.accessToken || Date.now() - snapshot.savedAt > 55 * 60 * 1000) {
-      window.sessionStorage.removeItem(DRIVE_SESSION_KEY);
-      return null;
-    }
+    if (!snapshot.accessToken) return null;
     return {
       ...snapshot,
       memories: (snapshot.memories || []).map(upgradeDriveImageUrls),
@@ -104,6 +104,8 @@ const Memoriya: React.FC = () => {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [activeReaction, setActiveReaction] = useState('Love');
   const [accessToken, setAccessToken] = useState(restored?.accessToken || '');
+  const [driveFolderId, setDriveFolderId] = useState(restored?.driveFolderId || '');
+  const [driveFolders, setDriveFolders] = useState<DriveFolder[]>(restored?.driveFolders || []);
   const [nextPageToken, setNextPageToken] = useState(restored?.nextPageToken || '');
   const [importCount, setImportCount] = useState(restored?.importCount || 0);
   const [loading, setLoading] = useState(false);
@@ -163,9 +165,23 @@ const Memoriya: React.FC = () => {
       importCount,
       memories,
       savedAt: Date.now(),
+      driveFolderId,
+      driveFolders,
     };
     window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify(snapshot));
-  }, [accessToken, importCount, memories, nextPageToken]);
+  }, [accessToken, driveFolderId, driveFolders, importCount, memories, nextPageToken]);
+
+  useEffect(() => {
+    if (!accessToken || driveFolders.length) return;
+    void googleDriveService.listFolders(accessToken)
+      .then(folders => setDriveFolders([
+        { id: 'drive-root', name: 'All My Drive photos', mediaCount: 0, selected: !driveFolderId },
+        ...folders.map(folder => ({ ...folder, mediaCount: 0, selected: folder.id === driveFolderId })),
+      ]))
+      .catch(() => {
+        // Folder browsing is optional; the full Drive view remains available.
+      });
+  }, [accessToken, driveFolderId, driveFolders.length]);
 
   useEffect(() => {
     if (!selected && filteredMemories[0]) setSelected(filteredMemories[0]);
@@ -177,6 +193,7 @@ const Memoriya: React.FC = () => {
   }, [filteredMemories]);
 
   const appendDriveFiles = (files: DriveMediaFile[], token: string) => {
+    void cacheDriveMediaFiles(files, token);
     const imported = files
       .filter(file => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || file.thumbnailUrl || file.webContentLink)
       .map(file => enrichDriveMemory(googleDriveService.toMemory(file, token), file));
@@ -196,7 +213,7 @@ const Memoriya: React.FC = () => {
     setError('');
     setMessage(pageToken ? 'Loading more memories from Drive...' : 'Reading your photos and videos from Google Drive...');
     try {
-      const page = await googleDriveService.listMediaPage(token, pageToken);
+      const page = await googleDriveService.listMediaPage(token, pageToken, driveFolderId);
       const added = appendDriveFiles(page.files, token);
       setNextPageToken(page.nextPageToken || '');
       setImportCount(count => count + added);
@@ -224,7 +241,18 @@ const Memoriya: React.FC = () => {
       setMemories(current => current.map(memory =>
         memory.driveFileId ? { ...memory, authToken: token } : memory
       ));
-      const page = await googleDriveService.listMediaPage(token);
+      let availableFolders: DriveFolder[] = [{ id: 'drive-root', name: 'All My Drive photos', mediaCount: 0, selected: !driveFolderId }];
+      try {
+        const folders = await googleDriveService.listFolders(token);
+        availableFolders = [
+          availableFolders[0],
+          ...folders.map(folder => ({ ...folder, mediaCount: 0, selected: folder.id === driveFolderId })),
+        ];
+      } catch {
+        // Folder browsing is optional; the full Drive view still works.
+      }
+      setDriveFolders(availableFolders);
+      const page = await googleDriveService.listMediaPage(token, '', driveFolderId);
       const added = appendDriveFiles(page.files, token);
       setNextPageToken(page.nextPageToken || '');
       setImportCount(count => count + added);
@@ -238,6 +266,30 @@ const Memoriya: React.FC = () => {
       setMessage(wasCancelled
         ? 'Google Drive connection cancelled.'
         : `${message} If Google blocked the popup with an “unauthorized domain” or “access blocked” error, add this exact origin to Google Cloud Console → Credentials → OAuth Client ID → Authorized JavaScript origins: ${window.location.origin}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const changeDriveFolder = async (folderId: string) => {
+    if (!accessToken || folderId === driveFolderId) return;
+    setError('');
+    setLoading(true);
+    setDriveFolderId(folderId);
+    setNextPageToken('');
+    setImportCount(0);
+    setMemories(current => current.filter(memory => !memory.driveFileId));
+    setSelected(current => current?.driveFileId ? null : current);
+    setMessage(folderId ? 'Loading photos from the selected Drive folder...' : 'Loading photos from all of My Drive...');
+    try {
+      const page = await googleDriveService.listMediaPage(accessToken, '', folderId);
+      const added = appendDriveFiles(page.files, accessToken);
+      setNextPageToken(page.nextPageToken || '');
+      setImportCount(added);
+      setDriveFolders(current => current.map(folder => ({ ...folder, selected: folder.id === folderId })));
+      setMessage(`Loaded ${added} memories from ${folderId ? 'the selected Drive folder' : 'all of My Drive'}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load that Drive folder.');
     } finally {
       setLoading(false);
     }
@@ -448,6 +500,16 @@ const Memoriya: React.FC = () => {
               <FolderOpen size={17} /> Link local folder
             </button>
             {accessToken && <button className="memoriya-glass-button" onClick={() => setCameraOpen(true)}><Camera size={17} /> Drive camera</button>}
+            {accessToken && driveFolders.length > 0 && (
+              <label className="memoriya-glass-button memoriya-drive-folder-select">
+                <FolderOpen size={17} />
+                <span>Source</span>
+                <select value={driveFolderId} onChange={event => void changeDriveFolder(event.target.value)} aria-label="Choose Drive photo source">
+                  <option value="">All My Drive photos</option>
+                  {driveFolders.filter(folder => folder.id !== 'drive-root').map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                </select>
+              </label>
+            )}
             {hasMemories && <button className="memoriya-glass-button" onClick={() => playStory(filteredMemories)}><Film size={17} /> Play story</button>}
             {accessToken && (
               <button className="memoriya-glass-button" onClick={disconnectDrive}>

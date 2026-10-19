@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Check, Cloud, FolderOpen, Upload } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { googleDriveService, type DriveConnectionState } from '../services/googleDriveService';
+import { readDriveAccessToken, readDriveMemories } from '../services/driveLibrary';
 
 const emptyState: DriveConnectionState = {
   connected: false,
@@ -12,7 +13,19 @@ const emptyState: DriveConnectionState = {
 
 const DriveConnectPanel: React.FC = () => {
   const { config } = useTheme();
-  const [state, setState] = useState<DriveConnectionState>(emptyState);
+  const [state, setState] = useState<DriveConnectionState>(() => {
+    const memories = readDriveMemories();
+    const accessToken = readDriveAccessToken();
+    if (!accessToken && !memories.length) return emptyState;
+    return {
+      connected: true,
+      loading: false,
+      accessToken: accessToken || memories[0]?.authToken,
+      mode: 'google',
+      folders: [{ id: 'drive-root', name: 'Google Drive Photos', mediaCount: memories.length, selected: true }],
+      message: 'Google Drive session restored from this browser.',
+    };
+  });
 
   const handleConnect = async () => {
     setState(current => ({ ...current, loading: true }));

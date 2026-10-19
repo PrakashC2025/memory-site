@@ -8,6 +8,7 @@ interface DriveSessionSnapshot {
   importCount: number;
   memories: Memory[];
   savedAt: number;
+  driveFolderId?: string;
 }
 
 export const readDriveMemories = () => {
@@ -15,7 +16,10 @@ export const readDriveMemories = () => {
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
     if (!stored) return [];
     const snapshot = JSON.parse(stored) as DriveSessionSnapshot;
-    if (!snapshot.memories?.length || Date.now() - snapshot.savedAt > 55 * 60 * 1000) return [];
+    // Keep the local session metadata after the short-lived OAuth token expires.
+    // Story Mode can still play the IndexedDB blobs, while the main screen can
+    // ask the user to sync again when Drive needs a fresh token.
+    if (!snapshot.memories?.length) return [];
     return snapshot.memories.map(memory => upgradeDriveImageUrls(memory));
   } catch {
     return [];
@@ -23,6 +27,26 @@ export const readDriveMemories = () => {
 };
 
 export const useDriveMemories = () => readDriveMemories();
+
+export const readDriveAccessToken = () => {
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    if (!stored) return '';
+    return (JSON.parse(stored) as DriveSessionSnapshot).accessToken || '';
+  } catch {
+    return '';
+  }
+};
+
+export const readDriveFolderId = () => {
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    if (!stored) return '';
+    return (JSON.parse(stored) as DriveSessionSnapshot).driveFolderId || '';
+  } catch {
+    return '';
+  }
+};
 
 export const upgradeDriveImageUrls = (memory: Memory): Memory => {
   if (!memory.driveFileId) return memory;

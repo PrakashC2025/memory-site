@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
-import { readDriveMemories } from '../services/driveLibrary';
+import { readDriveFolderId, readDriveMemories } from '../services/driveLibrary';
+import { googleDriveService } from '../services/googleDriveService';
+import { cacheDriveMediaFiles, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
 
 interface StoryModeProps {
   onExit: () => void;
@@ -10,14 +12,60 @@ interface StoryModeProps {
 const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const localInputRef = useRef<HTMLInputElement>(null);
   const [localMemories, setLocalMemories] = useState<Memory[]>([]);
-  const [driveMemories] = useState<Memory[]>(() => readDriveMemories());
+  const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
   const objectUrlsRef = useRef<string[]>([]);
+  const driveObjectUrlsRef = useRef<string[]>([]);
   const storyMemories = localMemories.length ? localMemories : driveMemories;
 
   useEffect(() => {
     return () => {
       objectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
       objectUrlsRef.current = [];
+      releaseCachedObjectUrls(driveObjectUrlsRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const seed = readDriveMemories();
+    const token = seed[0]?.authToken || '';
+    const folderId = readDriveFolderId();
+    let active = true;
+    let known = [...seed];
+
+    const applyCached = async (next: Memory[]) => {
+      const result = await hydrateCachedDriveMemories(next);
+      if (!active) {
+        releaseCachedObjectUrls(result.objectUrls);
+        return;
+      }
+      releaseCachedObjectUrls(driveObjectUrlsRef.current);
+      driveObjectUrlsRef.current = result.objectUrls;
+      setDriveMemories(result.memories);
+    };
+
+    void applyCached(known);
+
+    const syncDrive = async () => {
+      if (!token) return;
+      try {
+        const page = await googleDriveService.listMediaPage(token, '', folderId);
+        const byId = new Map(known.map(memory => [memory.id, memory]));
+        page.files.forEach(file => byId.set(`drive-${file.id}`, googleDriveService.toMemory(file, token)));
+        known = [...byId.values()].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        // Show new Drive items immediately, then replace their URLs with local
+        // IndexedDB blobs as soon as the background cache finishes.
+        await applyCached(known);
+        void cacheDriveMediaFiles(page.files, token).then(() => applyCached(known));
+      } catch {
+        // Cached memories remain playable when Drive is temporarily offline.
+      }
+    };
+
+    void syncDrive();
+    const interval = window.setInterval(() => void syncDrive(), 30000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
     };
   }, []);
 
