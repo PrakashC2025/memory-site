@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Cloud,
   Film,
+  WandSparkles,
   Globe2,
   Images,
   Loader2,
@@ -23,8 +24,9 @@ import MemoryLightbox from '../components/MemoryLightbox';
 import type { Memory } from '../data/memories';
 import { DRIVE_SESSION_KEY, upgradeDriveImageUrls } from '../services/driveLibrary';
 import { googleDriveService, type DriveConnectionState, type DriveMediaFile } from '../services/googleDriveService';
+import { autoEventLabel, buildDirectorPlan, type DirectorPlan } from '../services/directorPlan';
 
-type Stage = 'reels' | 'map' | 'albums' | 'story';
+type Stage = 'reels' | 'director' | 'map' | 'albums' | 'story';
 type GalleryStyle = 'polaroid' | 'scrapbook';
 
 interface DriveSessionSnapshot {
@@ -45,6 +47,7 @@ const reactionGlyphs: Record<string, string> = {
 
 const stageTabs: { id: Stage; label: string; Icon: React.ComponentType<{ size?: number }> }[] = [
   { id: 'reels', label: 'Reels', Icon: Film },
+  { id: 'director', label: 'Director', Icon: WandSparkles },
   { id: 'map', label: 'Places', Icon: Globe2 },
   { id: 'albums', label: 'Albums', Icon: Images },
   { id: 'story', label: 'Timeline', Icon: CalendarHeart },
@@ -82,6 +85,7 @@ const Memoriya: React.FC = () => {
   const [memories, setMemories] = useState<Memory[]>(() => restored?.memories || []);
   const [selected, setSelected] = useState<Memory | null>(() => restored?.memories?.[0] || null);
   const [viewerMemory, setViewerMemory] = useState<Memory | null>(null);
+  const [directorOpen, setDirectorOpen] = useState(false);
   const [activeReaction, setActiveReaction] = useState('Love');
   const [accessToken, setAccessToken] = useState(restored?.accessToken || '');
   const [nextPageToken, setNextPageToken] = useState(restored?.nextPageToken || '');
@@ -121,6 +125,7 @@ const Memoriya: React.FC = () => {
       return date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
     }) || filteredMemories[0] || null;
   }, [filteredMemories]);
+  const directorPlan = useMemo<DirectorPlan>(() => buildDirectorPlan(filteredMemories), [filteredMemories]);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -229,7 +234,7 @@ const Memoriya: React.FC = () => {
         thumbnail: isVideo ? '' : url,
         mimeType: file.type,
         tags: ['local', isVideo ? 'video' : 'photo'],
-        event: 'Local Media',
+        event: autoEventLabel(file.name, date, mediaFiles.length),
       } satisfies Memory;
     });
 
@@ -396,6 +401,10 @@ const Memoriya: React.FC = () => {
           />
         )}
 
+        {hasMemories && stage === 'director' && (
+          <DirectorStage plan={directorPlan} onPlay={() => setDirectorOpen(true)} onOpenMemory={openMemory} />
+        )}
+
         {hasMemories && stage === 'map' && (
           <MapStage locations={locations} openMemory={openMemory} />
         )}
@@ -429,9 +438,65 @@ const Memoriya: React.FC = () => {
       )}
 
       <MemoryLightbox memory={viewerMemory} memories={filteredMemories} onClose={() => setViewerMemory(null)} />
+      <MemoryLightbox
+        memory={directorOpen ? directorPlan.sequence[0] || null : null}
+        memories={directorPlan.sequence}
+        autoplay
+        mode="story"
+        template={directorPlan.template}
+        transitionStyle={directorPlan.transition}
+        speed="slow"
+        intensity="premium"
+        onClose={() => setDirectorOpen(false)}
+        onImportLocalMedia={() => localInputRef.current?.click()}
+      />
     </div>
   );
 };
+
+const DirectorStage: React.FC<{ plan: DirectorPlan; onPlay: () => void; onOpenMemory: (memory: Memory) => void }> = ({ plan, onPlay, onOpenMemory }) => (
+  <section className="memoriya-director-stage">
+    <div className="memoriya-director-hero">
+      <div>
+        <span className="memoriya-kicker"><WandSparkles size={15} /> Private auto-director</span>
+        <h2>{plan.title}</h2>
+        <p>{plan.subtitle} Your photos stay on this device while Memoriya uses dates, names, tags, and available locations to find the chapters and choose a natural rhythm. Start playback, then use the Music button to search open-source audio or load your own song.</p>
+        <div className="memoriya-director-actions">
+          <button className="memoriya-primary" onClick={onPlay} disabled={!plan.sequence.length}><Film size={17} /> Play on this screen</button>
+          <span className="memoriya-director-pill"><span /> TV-ready 16:9</span>
+          <span className="memoriya-director-pill"><span /> {plan.template} look</span>
+        </div>
+      </div>
+      <div className="memoriya-director-score">
+        <strong>{plan.sequence.length}</strong>
+        <span>selected frames</span>
+        <small>Event-aware cut</small>
+      </div>
+    </div>
+
+    <div className="memoriya-director-grid">
+      <div className="memoriya-director-preview">
+        {plan.sequence.slice(0, 6).map((memory, index) => (
+          <button key={memory.id} onClick={() => onOpenMemory(memory)} style={{ '--i': index } as React.CSSProperties}>
+            <OptimizedImage memory={memory} width={220} />
+            <span>{String(index + 1).padStart(2, '0')}</span>
+          </button>
+        ))}
+        {!plan.sequence.length && <div className="memoriya-director-empty"><WandSparkles size={28} /><span>Add a few photos to preview your film.</span></div>}
+      </div>
+      <div className="memoriya-director-events">
+        <div className="memoriya-director-section-head"><span>Cut list</span><small>{plan.clusters.length} chapters</small></div>
+        {plan.clusters.slice(0, 6).map((cluster, index) => (
+          <button key={cluster.id} onClick={() => onOpenMemory(cluster.cover)}>
+            <span className="memoriya-director-index">{String(index + 1).padStart(2, '0')}</span>
+            <span className="memoriya-director-event-copy"><strong>{cluster.title}</strong><small>{cluster.memories.length} frames · {cluster.monthRange}</small></span>
+            <ChevronRight size={16} />
+          </button>
+        ))}
+      </div>
+    </div>
+  </section>
+);
 
 const HeroImage = memo<{ memory: Memory; index: number; lightweight: boolean }>(({ memory, index, lightweight }) => (
   <motion.div
