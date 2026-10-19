@@ -577,6 +577,7 @@ const Memoriya: React.FC = () => {
         <MemoryReel
           memories={reelConfig.memories}
           title={reelConfig.title}
+          driveAccessToken={accessToken}
           hasMore={reelConfig.live && Boolean(accessToken)}
           loadingMore={loading}
           onNeedMore={() => void loadDrivePage()}

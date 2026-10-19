@@ -42,6 +42,14 @@ export interface DriveMediaPage {
   nextPageToken?: string;
 }
 
+export interface DriveAudioFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  createdTime?: string;
+  modifiedTime?: string;
+}
+
 // Read existing memories and allow the in-site camera to create new photos.
 // drive.file keeps write access limited to files created by Memoriya.
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
@@ -264,6 +272,27 @@ export class GoogleDriveService {
       accessToken,
     );
     return payload.files || [];
+  }
+
+  async listAudioFiles(accessToken: string): Promise<DriveAudioFile[]> {
+    const files: DriveAudioFile[] = [];
+    let pageToken = '';
+    do {
+      const params = new URLSearchParams({
+        q: "mimeType contains 'audio/' and trashed=false",
+        pageSize: '100',
+        orderBy: 'createdTime desc',
+        fields: 'nextPageToken,files(id,name,mimeType,createdTime,modifiedTime)',
+      });
+      if (pageToken) params.set('pageToken', pageToken);
+      const payload = await fetchDriveJson<{ nextPageToken?: string; files?: DriveAudioFile[] }>(
+        `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
+        accessToken,
+      );
+      files.push(...(payload.files || []));
+      pageToken = payload.nextPageToken || '';
+    } while (pageToken);
+    return files;
   }
 
   async uploadMedia(accessToken: string, file: File, folderId?: string): Promise<DriveMediaFile> {

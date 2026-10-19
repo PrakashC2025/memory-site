@@ -2739,6 +2739,18 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .memory-reel-upload { position: relative; overflow: hidden; }
 .memory-reel-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.memory-reel-drive-upload { border-color: rgba(54, 241, 205, 0.35); }
+.memory-reel-upload input:disabled { cursor: wait; }
+.memory-reel-music-note,
+.memory-reel-music-error,
+.memory-reel-music-heading {
+  margin: 0;
+  font-size: 0.74rem;
+}
+.memory-reel-music-note { color: rgba(255, 255, 255, 0.48); }
+.memory-reel-music-error { color: #ff9fb7; }
+.memory-reel-music-heading { color: rgba(255, 255, 255, 0.7); font-weight: 800; }
+.memory-reel-drive-songs { display: grid; gap: 0.45rem; }
 
 .memory-reel-track {
   display: grid;
