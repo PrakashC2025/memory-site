@@ -171,7 +171,11 @@ const Memoriya: React.FC = () => {
       driveFolderId,
       driveFolders,
     };
-    window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify(snapshot));
+    try {
+      window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify(snapshot));
+    } catch {
+      setMessage('Drive is connected for this tab, but browser storage is unavailable. Keep this tab open while using Memoriya.');
+    }
   }, [accessToken, driveFolderId, driveFolders, importCount, memories, nextPageToken]);
 
   useEffect(() => {

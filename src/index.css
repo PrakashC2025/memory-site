@@ -8510,3 +8510,85 @@ textarea:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Fullscreen Story Mode is a clean cinema surface. The browser's Escape/Back
+   action remains the exit affordance, so no editor chrome sits over the film. */
+.memory-reel-shell:fullscreen {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  padding: 0;
+  overflow: hidden;
+  background: #020307;
+}
+
+.memory-reel-shell:fullscreen .memory-reel-stage {
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+
+.memory-reel-shell:fullscreen .memory-reel-toolbar,
+.memory-reel-shell:fullscreen .memory-reel-progress-text,
+.memory-reel-shell:fullscreen .memory-reel-editor,
+.memory-reel-shell:fullscreen .memory-reel-music-panel {
+  display: none;
+}
+
+.memory-reel-fullscreen-controls {
+  display: none;
+}
+
+.memory-reel-shell:fullscreen .memory-reel-fullscreen-controls {
+  position: absolute;
+  left: 50%;
+  bottom: max(1.25rem, env(safe-area-inset-bottom));
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(6, 8, 14, 0.68);
+  box-shadow: 0 16px 55px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transform: translateX(-50%);
+  backdrop-filter: blur(18px) saturate(130%);
+}
+
+.memory-reel-shell:fullscreen .memory-reel-fullscreen-controls button {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.memory-reel-shell:fullscreen .memory-reel-fullscreen-controls button:first-child {
+  background: linear-gradient(135deg, rgba(244, 201, 138, 0.92), rgba(233, 135, 135, 0.9));
+  color: #171316;
+}
+
+.memory-reel-shell:fullscreen .memory-reel-fullscreen-controls button:hover,
+.memory-reel-shell:fullscreen .memory-reel-fullscreen-controls button:focus-visible {
+  border-color: rgba(244, 201, 138, 0.7);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+@media (max-width: 640px) {
+  .memory-reel-shell:fullscreen .memory-reel-fullscreen-controls {
+    bottom: max(0.8rem, env(safe-area-inset-bottom));
+  }
+
+  .memory-reel-shell:fullscreen .memory-reel-fullscreen-controls button {
+    width: 2.8rem;
+    height: 2.8rem;
+  }
+}

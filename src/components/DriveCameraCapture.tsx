@@ -200,8 +200,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
           pendingUploadsRef.current = Math.max(0, pendingUploadsRef.current - 1);
           setPendingUploads(pendingUploadsRef.current);
         });
-      setStatus('Saved to Drive — the live story will add it automatically.');
-      setStatus('Saved locally - upload is running in the background.');
+      setStatus('Upload started - you can capture another photo.');
     } catch (captureError) {
       setError(captureError instanceof Error ? captureError.message : 'Photo capture failed.');
       setStatus('Ready to try again.');

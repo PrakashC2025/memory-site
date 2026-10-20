@@ -5,7 +5,6 @@ import {
   ArrowDownToLine,
   Bot,
   CalendarDays,
-  Camera,
   ChevronDown,
   ChevronUp,
   Download,

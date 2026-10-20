@@ -1,6 +1,7 @@
 import type { Memory } from '../data/memories';
 
 export const DRIVE_SESSION_KEY = 'memoriya-drive-session-v1';
+export const DRIVE_MEMORIES_UPDATED_EVENT = 'memoriya-drive-memories-updated';
 
 interface DriveSessionSnapshot {
   accessToken: string;
@@ -73,6 +74,7 @@ export const saveDriveMemories = (memories: Memory[], accessToken: string, drive
       importCount: memories.length,
       savedAt: Date.now(),
     }));
+    window.dispatchEvent(new CustomEvent(DRIVE_MEMORIES_UPDATED_EVENT));
   } catch {
     // Session storage is optional; IndexedDB remains the playback cache.
   }

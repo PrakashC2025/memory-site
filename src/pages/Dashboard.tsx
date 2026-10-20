@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CalendarDays, Camera, Clock3, Film, FolderHeart, Heart, MapPin, Search, Sparkles, Star, TreePine } from 'lucide-react';
 import DriveConnectPanel from '../components/DriveConnectPanel';
@@ -9,7 +9,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
 import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
-import { readDriveMemories } from '../services/driveLibrary';
+import { DRIVE_MEMORIES_UPDATED_EVENT, readDriveMemories } from '../services/driveLibrary';
 import { buildRecapSections } from '../services/memoryOrganizer';
 
 interface Props {
@@ -33,7 +33,13 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
   const { config } = useTheme();
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [query, setQuery] = useState('');
-  const driveMemories = useMemo(() => readDriveMemories(), []);
+  const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
+
+  useEffect(() => {
+    const refreshDriveMemories = () => setDriveMemories(readDriveMemories());
+    window.addEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refreshDriveMemories);
+    return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refreshDriveMemories);
+  }, []);
 
   const years = groupMemoriesByYear(driveMemories);
   const favorites = driveMemories.filter(memory => memory.isFavorite);

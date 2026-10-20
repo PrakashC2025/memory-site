@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, X } from 'lucide-react';
+import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, X } from 'lucide-react';
 import type { Memory } from '../data/memories';
 import { googleDriveService, type DriveAudioFile } from '../services/googleDriveService';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
@@ -48,6 +48,7 @@ interface MemoryReelOptions {
   reducedMotion?: boolean;
   onProgress?: (progress: number, total: number) => void;
   onStateChange?: (playing: boolean) => void;
+  onAudioStateChange?: (playing: boolean) => void;
 }
 
 interface LoadedMedia {
@@ -141,6 +142,7 @@ export class MemoryReelController {
     const wasPlaying = !this.paused;
     const previousElapsed = this.elapsed;
     this.pause();
+    this.revokeObjectUrls();
     this.world.innerHTML = '';
     this.cards = [];
     if (!items.length) {
@@ -153,7 +155,10 @@ export class MemoryReelController {
     const readyPromise = new Promise<void>(resolve => { resolveReady = resolve; });
     const loaded: LoadedMedia[] = [];
     const reveal = (media: LoadedMedia) => {
-      if (this.destroyed || generation !== this.loadGeneration) return;
+      if (this.destroyed || generation !== this.loadGeneration) {
+        this.releaseObjectUrl(media.node instanceof HTMLImageElement ? media.node.src : '');
+        return;
+      }
       loaded.push(media);
       this.rebuildWall(loaded, preserveProgress || loaded.length > 1, previousElapsed, wasPlaying);
       if (!ready) {
@@ -266,6 +271,10 @@ export class MemoryReelController {
                   finish(null);
                   return;
                 }
+                if (finished) {
+                  this.releaseObjectUrl(objectUrl);
+                  return;
+                }
                 image.src = objectUrl;
               })
               .catch(() => finish(null));
@@ -308,7 +317,7 @@ export class MemoryReelController {
     this.poster.classList.add('off');
     this.options.onStateChange?.(true);
     this.last = performance.now();
-    void this.audio?.play().catch(() => undefined);
+    void this.playAudio();
     const tick = (now: number) => {
       if (this.paused || this.destroyed) return;
       this.elapsed += (now - this.last) / 1000;
@@ -321,7 +330,7 @@ export class MemoryReelController {
           this.paused = true;
           this.options.onStateChange?.(false);
           this.cards.forEach(card => card.video?.pause());
-          this.audio?.pause();
+          this.pauseAudio();
           return;
         }
       }
@@ -337,8 +346,36 @@ export class MemoryReelController {
     this.raf = 0;
     this.poster.classList.remove('off');
     this.cards.forEach(card => card.video?.pause());
-    this.audio?.pause();
+    this.pauseAudio();
     this.options.onStateChange?.(false);
+  }
+
+  async playAudio() {
+    if (!this.audio) {
+      this.options.onAudioStateChange?.(false);
+      return false;
+    }
+    try {
+      await this.audio.play();
+      this.options.onAudioStateChange?.(true);
+      return true;
+    } catch {
+      this.options.onAudioStateChange?.(false);
+      return false;
+    }
+  }
+
+  pauseAudio() {
+    this.audio?.pause();
+    this.options.onAudioStateChange?.(false);
+  }
+
+  async toggleAudio() {
+    if (this.audio && !this.audio.paused) {
+      this.pauseAudio();
+      return false;
+    }
+    return this.playAudio();
   }
 
   restart() {
@@ -376,7 +413,8 @@ export class MemoryReelController {
       this.audio.loop = false;
       this.audio.onended = () => this.advanceAudio();
     }
-    if (shouldResume) void this.audio?.play().catch(() => undefined);
+    if (shouldResume) void this.playAudio();
+    else this.options.onAudioStateChange?.(false);
   }
 
   nextAudio() {
@@ -400,7 +438,8 @@ export class MemoryReelController {
     this.audio = new Audio(this.audioQueue[this.audioIndex]);
     this.audio.loop = false;
     this.audio.onended = () => this.advanceAudio();
-    if (shouldResume) void this.audio.play().catch(() => undefined);
+    if (shouldResume) void this.playAudio();
+    else this.options.onAudioStateChange?.(false);
   }
 
   getProgress() {
@@ -413,13 +452,22 @@ export class MemoryReelController {
     this.pause();
     this.resizeObserver?.disconnect();
     if (this.resizeHandler) window.removeEventListener('resize', this.resizeHandler);
-    this.audio?.pause();
+    this.pauseAudio();
     if (this.audio) this.audio.onended = null;
     this.audio = undefined;
     this.world.innerHTML = '';
     this.cards = [];
+    this.revokeObjectUrls();
+  }
+
+  private revokeObjectUrls() {
     this.objectUrls.forEach(url => URL.revokeObjectURL(url));
     this.objectUrls.clear();
+  }
+
+  private releaseObjectUrl(url: string) {
+    if (!url || !this.objectUrls.delete(url)) return;
+    URL.revokeObjectURL(url);
   }
 
   private target(index: number) {
@@ -558,6 +606,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
   const [resolvedSources, setResolvedSources] = useState<ReelSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState(false);
+  const [audioPlaying, setAudioPlaying] = useState(false);
   const [progress, setProgress] = useState({ progress: 0, total: 0 });
   const [fullscreen, setFullscreen] = useState(false);
   const [titleDraft, setTitleDraft] = useState<MemoryReelTitle>({ line: title?.line || '', big: title?.big || '' });
@@ -626,6 +675,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
         }
       },
       onStateChange: setPlaying,
+      onAudioStateChange: setAudioPlaying,
     });
     controllerRef.current = controller;
     return () => {
@@ -773,6 +823,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
     setMusicError('');
     try {
       setMusicResults(await searchOpenSourceMusic(musicQuery));
+    } catch (error) {
+      setMusicResults([]);
+      setMusicError(error instanceof Error ? error.message : 'Music search failed. Please try again.');
     } finally {
       setMusicLoading(false);
     }
@@ -788,6 +841,17 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
     if (next && driveAccessToken && !driveSongs.length && !driveSongsLoading) void loadDriveSongs();
   };
 
+  const toggleMusic = async () => {
+    const controller = controllerRef.current;
+    if (!controller) return;
+    const started = await controller.toggleAudio();
+    if (!started && !audioPlaying && musicQueue.length) {
+      setMusicError('Tap Play music again to allow audio on this device.');
+    } else if (started) {
+      setMusicError('');
+    }
+  };
+
   return (
     <div className="memory-reel-overlay" role="dialog" aria-modal="true" aria-label="Memory story reel">
       <div className="memory-reel-shell">
@@ -799,11 +863,21 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
           <button type="button" onClick={() => controllerRef.current?.restart()} disabled={loading}><RotateCcw size={16} /> Replay</button>
           <button type="button" onClick={toggleFullscreen}><>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</> {fullscreen ? 'Exit' : 'Fullscreen'}</button>
           <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Music2 size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : ''}</button>
+          {musicQueue.length > 0 && <button type="button" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}><Volume2 size={16} /> {audioPlaying ? 'Stop music' : 'Play music'}</button>}
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
             <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
           )}
           <button type="button" onClick={() => setLoopEnabled(value => !value)} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
           {onClose && <button type="button" className="memory-reel-close" onClick={onClose}><X size={17} /> Close</button>}
+        </div>
+        <div className="memory-reel-fullscreen-controls" aria-label="Fullscreen story controls">
+          <button type="button" onClick={() => playing ? controllerRef.current?.pause() : controllerRef.current?.play()} disabled={loading} aria-label={playing ? 'Pause story' : 'Play story'}>
+            {playing ? <Pause size={19} /> : <Play size={19} />}
+          </button>
+          {musicQueue.length > 0 && <button type="button" onClick={() => void toggleMusic()} aria-pressed={audioPlaying} aria-label={audioPlaying ? 'Stop music' : 'Play music'}>
+            <Volume2 size={19} />
+          </button>}
+          <button type="button" onClick={toggleFullscreen} aria-label="Exit fullscreen"><Minimize2 size={19} /></button>
         </div>
         <div className="memory-reel-progress-text">{loading ? 'Preparing your memories…' : `${Math.round(progress.progress)}s / ${Math.round(progress.total)}s`}</div>
         <div className="memory-reel-editor">

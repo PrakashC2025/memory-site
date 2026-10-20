@@ -74,7 +74,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [logout, user]);
 
   useEffect(() => {
-    let unsubscribe = () => undefined;
+    let unsubscribe: () => void = () => {};
     try {
       if (!isFirebaseConfigured) {
         setAuthLoading(false);

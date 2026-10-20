@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Check, Cloud, FolderOpen, Upload } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { googleDriveService, type DriveConnectionState } from '../services/googleDriveService';
-import { readDriveAccessToken, readDriveMemories } from '../services/driveLibrary';
+import { readDriveAccessToken, readDriveMemories, saveDriveMemories } from '../services/driveLibrary';
 
 const emptyState: DriveConnectionState = {
   connected: false,
@@ -13,6 +13,8 @@ const emptyState: DriveConnectionState = {
 
 const DriveConnectPanel: React.FC = () => {
   const { config } = useTheme();
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
   const [state, setState] = useState<DriveConnectionState>(() => {
     const memories = readDriveMemories();
     const accessToken = readDriveAccessToken();
@@ -43,6 +45,46 @@ const DriveConnectPanel: React.FC = () => {
     }
   };
 
+  const handleUpload = async (files: FileList | null) => {
+    const nextFiles = Array.from(files || []).filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
+    if (!nextFiles.length) return;
+
+    const accessToken = state.accessToken || readDriveAccessToken();
+    if (!accessToken) {
+      setState(current => ({ ...current, error: 'Connect Google Drive before uploading media.' }));
+      return;
+    }
+
+    setUploading(true);
+    setState(current => ({ ...current, error: undefined, message: 'Uploading media to Google Drive...' }));
+    try {
+      const uploaded = [];
+      for (const file of nextFiles) {
+        uploaded.push(await googleDriveService.uploadMedia(accessToken, file));
+      }
+      const currentMemories = readDriveMemories();
+      const importedMemories = uploaded.map(file => googleDriveService.toMemory(file, accessToken));
+      saveDriveMemories([...currentMemories, ...importedMemories], accessToken);
+      setState(current => ({
+        ...current,
+        connected: true,
+        accessToken,
+        error: undefined,
+        folders: current.folders.map(folder => folder.id === 'drive-root'
+          ? { ...folder, mediaCount: folder.mediaCount + uploaded.length }
+          : folder),
+        message: `${uploaded.length} ${uploaded.length === 1 ? 'memory is' : 'memories are'} now in Google Drive.`,
+      }));
+    } catch (error) {
+      setState(current => ({
+        ...current,
+        error: error instanceof Error ? error.message : 'Drive upload failed. Please try again.',
+      }));
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <div className="neon-card flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
       <div className="flex items-start gap-4">
@@ -59,6 +101,11 @@ const DriveConnectPanel: React.FC = () => {
               ? 'Selected folders are ready for metadata extraction and memory grouping.'
               : 'Connect Drive or upload media to generate a private memory world.'}
           </p>
+          {(state.message || state.error) && (
+            <p className={`mt-3 text-xs leading-5 ${state.error ? 'text-rose-200' : 'text-white/58'}`} role={state.error ? 'alert' : undefined}>
+              {state.error || state.message}
+            </p>
+          )}
           {state.connected && (
             <div className="mt-3 flex flex-wrap gap-2">
               {state.folders.map(folder => (
@@ -82,10 +129,26 @@ const DriveConnectPanel: React.FC = () => {
         >
           {state.loading ? 'Connecting...' : state.connected ? 'Connected' : 'Connect Drive'}
         </motion.button>
-        <button className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-black" style={{ color: config.primary, borderColor: config.primary + '44' }}>
+        <button
+          className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-black disabled:cursor-wait disabled:opacity-55"
+          style={{ color: config.primary, borderColor: config.primary + '44' }}
+          disabled={state.loading || uploading}
+          onClick={() => uploadInputRef.current?.click()}
+        >
           <Upload size={15} />
-          Upload
+          {uploading ? 'Uploading...' : 'Upload'}
         </button>
+        <input
+          ref={uploadInputRef}
+          type="file"
+          accept="image/*,video/*"
+          multiple
+          className="hidden"
+          onChange={event => {
+            void handleUpload(event.currentTarget.files);
+            event.currentTarget.value = '';
+          }}
+        />
       </div>
     </div>
   );
