@@ -1,4 +1,4 @@
-import type { Memory } from '../data/memories';
+import { visualMemoriesOnly, type Memory } from '../data/memories';
 
 export const DRIVE_SESSION_KEY = 'memoriya-drive-session-v1';
 export const DRIVE_MEMORIES_UPDATED_EVENT = 'memoriya-drive-memories-updated';
@@ -36,7 +36,7 @@ export const readDriveMemories = () => {
     // Story Mode can still play the IndexedDB blobs, while the main screen can
     // ask the user to sync again when Drive needs a fresh token.
     if (!snapshot.memories?.length) return [];
-    return snapshot.memories.map(memory => upgradeDriveImageUrls(memory));
+    return visualMemoriesOnly(snapshot.memories).map(memory => upgradeDriveImageUrls(memory));
   } catch {
     return [];
   }
@@ -114,15 +114,16 @@ export const readDriveFolders = () => {
 
 export const saveDriveMemories = (memories: Memory[], accessToken: string, driveFolderId = '') => {
   try {
+    const visualMemories = visualMemoriesOnly(memories);
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
     const current = stored ? JSON.parse(stored) as Partial<DriveSessionSnapshot> : {};
     window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
       ...current,
       accessToken,
-      memories,
+      memories: visualMemories,
       driveFolderId,
       nextPageToken: '',
-      importCount: memories.length,
+      importCount: visualMemories.length,
       savedAt: Date.now(),
     }));
     window.dispatchEvent(new CustomEvent(DRIVE_MEMORIES_UPDATED_EVENT));

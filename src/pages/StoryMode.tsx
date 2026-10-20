@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
-import type { Memory } from '../data/memories';
+import { isVisualMemory, type Memory } from '../data/memories';
 import { acquireDriveSyncLock, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, clearDriveChangePageToken, readDriveAccessToken, readDriveChangePageToken, readDriveFolderId, readDriveFolders, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
-import { googleDriveService, isDriveAuthorizationError, type DriveMediaFile } from '../services/googleDriveService';
+import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile, type DriveMediaFile } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, cacheDriveMemories, deleteCachedDriveMedia, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
 import { deleteCachedStoryMedia } from '../services/storyMediaCache';
 
@@ -52,7 +52,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   useEffect(() => {
     const onMemoriesUpdated = async () => {
       if (localMemories.length) return;
-      const next = readDriveMemories().filter(memory => !selectedFolderId || memory.driveFileId);
+      const next = readDriveMemories().filter(memory => isVisualMemory(memory) && (!selectedFolderId || memory.driveFileId));
       const hydrated = await hydrateCachedDriveMemories(next);
       releaseCachedObjectUrls(driveObjectUrlsRef.current);
       driveObjectUrlsRef.current = hydrated.objectUrls;
@@ -81,7 +81,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     let token = seed[0]?.authToken || readDriveAccessToken();
     const folderId = selectedFolderId;
     let active = true;
-    let known = [...seed];
+    let known = seed.filter(isVisualMemory);
     let syncBusy = false;
 
     const applyCached = async (next: Memory[]) => {
@@ -123,7 +123,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
           } while (changePageToken && active);
           if (!active) return;
 
-          const isMedia = (file: DriveMediaFile) => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || Boolean(file.thumbnailUrl || file.webContentLink);
+          const isMedia = (file: DriveMediaFile) => isVisualDriveFile(file);
           const inFolder = (file: DriveMediaFile) => !folderId || !file.parents || file.parents.includes(folderId);
           const removed = new Set([
             ...removedFileIds,

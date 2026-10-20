@@ -24,9 +24,9 @@ import DriveMediaPreview from '../components/DriveMediaPreview';
 import DriveCameraCapture from '../components/DriveCameraCapture';
 import MemoryLightbox from '../components/MemoryLightbox';
 import MemoryReel from '../components/MemoryReel';
-import type { Memory } from '../data/memories';
+import { isVisualMemory, type Memory } from '../data/memories';
 import { acquireDriveSyncLock, clearDriveChangePageToken, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_SESSION_KEY, readDriveAccessToken, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
-import { googleDriveService, isDriveAuthorizationError, type DriveConnectionState, type DriveFolder, type DriveMediaFile } from '../services/googleDriveService';
+import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile, type DriveConnectionState, type DriveFolder, type DriveMediaFile } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, deleteCachedDriveMedia } from '../services/driveCache';
 import { deleteCachedStoryMedia } from '../services/storyMediaCache';
 import { autoEventLabel, buildDirectorPlan, type DirectorPlan } from '../services/directorPlan';
@@ -85,7 +85,7 @@ const readDriveSession = (): DriveSessionSnapshot | null => {
     if (!snapshot.accessToken) return null;
     return {
       ...snapshot,
-      memories: (snapshot.memories || []).map(upgradeDriveImageUrls),
+      memories: (snapshot.memories || []).filter(isVisualMemory).map(upgradeDriveImageUrls),
     };
   } catch {
     return null;
@@ -162,7 +162,7 @@ const Memoriya: React.FC = () => {
 
   const filteredMemories = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const sorted = [...memories].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const sorted = memories.filter(isVisualMemory).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     if (!needle) return sorted;
     return sorted.filter(memory =>
       [memory.title, memory.caption, memory.location, memory.event, memory.type, memory.date, ...(memory.tags || [])]
@@ -235,7 +235,7 @@ const Memoriya: React.FC = () => {
       if (!active || driveSyncBusyRef.current || !acquireDriveSyncLock()) return;
       driveSyncBusyRef.current = true;
       try {
-        const isMedia = (file: DriveMediaFile) => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || Boolean(file.thumbnailUrl || file.webContentLink);
+        const isMedia = (file: DriveMediaFile) => isVisualDriveFile(file);
         const isInFolder = (file: DriveMediaFile) => !driveFolderId || !file.parents || file.parents.includes(driveFolderId);
         const applyChanges = (files: DriveMediaFile[], removedIds: string[], initial = false) => {
           if (!active) return;
@@ -360,7 +360,7 @@ const Memoriya: React.FC = () => {
   const appendDriveFiles = (files: DriveMediaFile[], token: string) => {
     void cacheDriveMediaFiles(files, token);
     const imported = files
-      .filter(file => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || file.thumbnailUrl || file.webContentLink)
+      .filter(isVisualDriveFile)
       .map(file => enrichDriveMemory(googleDriveService.toMemory(file, token), file));
     setMemories(current => {
       const importedById = new Map(imported.map(memory => [memory.id, memory]));
@@ -481,7 +481,7 @@ const Memoriya: React.FC = () => {
       }
       if (requestId !== folderRequestRef.current) return;
       const imported = page.files
-        .filter(file => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || file.thumbnailUrl || file.webContentLink)
+        .filter(isVisualDriveFile)
         .map(file => enrichDriveMemory(googleDriveService.toMemory(file, activeToken), file));
       void cacheDriveMediaFiles(page.files, activeToken);
       setMemories(current => {

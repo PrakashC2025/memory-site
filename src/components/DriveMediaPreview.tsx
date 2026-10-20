@@ -47,7 +47,8 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     // the complete original just because they entered the gallery. Only fetch
     // a video blob after its preview URL fails; images can still use the
     // authenticated fallback when needed.
-    if (!canUseDriveMedia || fallbackLoading || blobSrc || authAttemptedRef.current || (memory.type === 'video' && !failed) || (!eager && !failed)) return undefined;
+    const drivePreviewNeedsAuth = Boolean(memory.driveFileId && !imageCandidates.length);
+    if (!canUseDriveMedia || fallbackLoading || blobSrc || authAttemptedRef.current || (memory.type === 'video' && !failed && !drivePreviewNeedsAuth) || (!eager && !failed && !drivePreviewNeedsAuth)) return undefined;
     const controller = new AbortController();
     let cancelled = false;
     authAttemptedRef.current = true;
@@ -79,10 +80,10 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
       cancelled = true;
       controller.abort();
     };
-  }, [blobSrc, eager, failed, fallbackLoading, memory.authToken, memory.driveFileId, memory.id, memory.mimeType, memory.type]);
+  }, [blobSrc, eager, failed, fallbackLoading, imageCandidates.length, memory.authToken, memory.driveFileId, memory.id, memory.mimeType, memory.type]);
 
   const src = memory.type === 'video'
-    ? blobSrc || memory.url || ''
+    ? blobSrc || ''
     : blobSrc || imageCandidates[imageIndex] || '';
 
   const tryNextImage = () => {
@@ -109,7 +110,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           autoPlay={videoActive}
           loop
           preload={videoActive ? 'metadata' : 'none'}
-          poster={memory.thumbnail || undefined}
+          poster={memory.driveFileId ? undefined : memory.thumbnail || undefined}
           onLoadedData={() => setLoaded(true)}
           onError={handleVideoError}
           style={loaded ? undefined : { opacity: 0.48 }}
@@ -126,7 +127,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           onError={tryNextImage}
           style={loaded ? undefined : { opacity: 0.48 }}
         />
-      ) : memory.type === 'video' && memory.thumbnail ? (
+      ) : memory.type === 'video' && memory.thumbnail && !memory.driveFileId ? (
         <span
           className="drive-preview-video-poster"
           role="button"
@@ -161,14 +162,12 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
 };
 
 const buildImageCandidates = (memory: Memory) => {
-  const id = memory.driveFileId ? encodeURIComponent(memory.driveFileId) : '';
+  if (memory.driveFileId) return [];
   const thumbnail = memory.thumbnail;
   const resizedThumbnail = sharpenThumbnail(memory.thumbnail);
   const candidates = [
     thumbnail,
     resizedThumbnail,
-    id ? `https://drive.google.com/thumbnail?id=${id}&sz=w1600` : '',
-    id ? `https://lh3.googleusercontent.com/d/${id}=w1600` : '',
     memory.type === 'photo' ? memory.url : '',
   ];
   return Array.from(new Set(candidates.filter(Boolean)));

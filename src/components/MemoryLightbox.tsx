@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import type { Memory } from '../data/memories';
 import { googleDriveService } from '../services/googleDriveService';
+import { readCachedDriveMedia } from '../services/driveCache';
 import { saveDriveAccessToken } from '../services/driveLibrary';
 import { searchOpenSourceMusic } from '../services/openSourceMusic';
 import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
@@ -311,7 +312,7 @@ const EDIT_STYLE_TRANSITIONS: Record<StoryEditStyle, SlideshowTransition[]> = {
 
 const isVideoMemory = (memory: Memory) => memory.type === 'video';
 
-const getDecorativeMemorySrc = (memory: Memory) => memory.thumbnail || (!isVideoMemory(memory) ? memory.url : '');
+const getDecorativeMemorySrc = (memory: Memory) => memory.driveFileId ? '' : memory.thumbnail || (!isVideoMemory(memory) ? memory.url : '');
 
 const canFetchDriveMedia = (memory: Memory) => Boolean(memory.driveFileId && memory.authToken);
 
@@ -599,7 +600,7 @@ const MemoryLightbox: React.FC<Props> = ({
       setMediaSrc(driveBacked ? '' : current.url);
       return;
     }
-    const quickPreview = current.thumbnail || (driveBacked ? '' : current.url);
+    const quickPreview = driveBacked ? '' : current.thumbnail || current.url;
     setPreviewSrc(quickPreview);
     setMediaSrc(driveBacked ? '' : current.url);
   }, [current?.id, current?.url]);
@@ -614,7 +615,8 @@ const MemoryLightbox: React.FC<Props> = ({
     const loadDriveMedia = async () => {
       try {
         const cacheKey = getStoryMediaCacheKey(current);
-        const cachedBlob = await readCachedStoryMedia(cacheKey);
+        const driveCached = await readCachedDriveMedia(current.driveFileId || '');
+        const cachedBlob = driveCached?.blob || await readCachedStoryMedia(cacheKey);
         if (cachedBlob) {
           if (cancelled) return;
           objectUrl = URL.createObjectURL(cachedBlob);
@@ -647,7 +649,7 @@ const MemoryLightbox: React.FC<Props> = ({
         setMediaFailed(false);
         setHighResReady(true);
       } catch {
-        if (!controller.signal.aborted && !previewSrc && !current.thumbnail) {
+        if (!controller.signal.aborted && !previewSrc) {
           setMediaFailed(true);
         }
       }
@@ -905,7 +907,7 @@ const MemoryLightbox: React.FC<Props> = ({
     preload.forEach(item => {
       if (item && !isVideoMemory(item)) {
         const img = new Image();
-        const source = item.driveFileId ? item.thumbnail : item.url;
+        const source = item.driveFileId ? '' : item.url;
         if (source) img.src = source;
       }
     });
@@ -1236,7 +1238,7 @@ const MemoryLightbox: React.FC<Props> = ({
   const zoomScale = zoom * (activeTransition === 'ken-burns' && isPlaying ? 1.035 : 1);
   const counter = `${currentIdx + 1} / ${sequence.length}`;
   const isStoryMode = mode === 'story';
-  const baseImageSrc = previewSrc || current.thumbnail || driveObjectSrc || (current.driveFileId ? '' : current.url);
+  const baseImageSrc = previewSrc || driveObjectSrc || (current.driveFileId ? '' : current.thumbnail || current.url);
   const showHighResLayer = !isVideoMemory(current) && !mediaFailed && highResReady && mediaSrc && mediaSrc !== baseImageSrc;
   const progressSegments = sequence.map((_, index) => (index < currentIdx ? 100 : index === currentIdx ? progress : 0));
   const sideMemories = isStoryMode && sequence.length > 2
@@ -1399,7 +1401,7 @@ const MemoryLightbox: React.FC<Props> = ({
         onTouchEnd={event => handleTouchEnd(event.changedTouches[0].clientX, event.changedTouches[0].clientY)}
       >
         <div className="cinema-backdrop">
-          <img src={current.thumbnail || (current.driveFileId ? '' : current.url)} alt="" aria-hidden="true" />
+          <img src={current.driveFileId ? '' : current.thumbnail || current.url} alt="" aria-hidden="true" />
           <div className="cinema-backdrop-color" style={{ background: `radial-gradient(circle at 48% 35%, ${colors[0]}33, transparent 36%), radial-gradient(circle at 76% 65%, ${colors[1]}24, transparent 34%)` }} />
         </div>
 
@@ -1542,7 +1544,7 @@ const MemoryLightbox: React.FC<Props> = ({
                 {sequence.map((item, index) => {
                   const active = index === currentIdx;
                   const source = active
-                    ? (item.id === current.id && driveObjectSrc ? driveObjectSrc : item.driveFileId ? item.thumbnail : (item.url || item.thumbnail))
+                    ? (item.id === current.id && driveObjectSrc ? driveObjectSrc : item.driveFileId ? '' : (item.url || item.thumbnail))
                     : getDecorativeMemorySrc(item);
                   return (
                     <button
@@ -1563,7 +1565,7 @@ const MemoryLightbox: React.FC<Props> = ({
                           loading={active ? 'eager' : 'lazy'}
                           decoding="async"
                           onError={event => {
-                            const fallback = item.thumbnail || (item.driveFileId ? '' : item.url);
+                            const fallback = item.driveFileId ? '' : item.thumbnail || item.url;
                             if (fallback && event.currentTarget.src !== fallback) event.currentTarget.src = fallback;
                           }}
                         />
@@ -1623,7 +1625,7 @@ const MemoryLightbox: React.FC<Props> = ({
                     key={`${current.id}-${driveObjectSrc || mediaSrc || current.url}`}
                     ref={videoRef}
                     src={driveObjectSrc || mediaSrc || (current.driveFileId ? '' : current.url)}
-                    poster={current.thumbnail}
+                    poster={current.driveFileId ? undefined : current.thumbnail}
                     controls
                     autoPlay={isPlaying}
                     muted={isStoryMode ? true : muted}
@@ -2045,7 +2047,7 @@ const MemoryLightbox: React.FC<Props> = ({
                 style={{ borderColor: index === currentIdx ? colors[0] : 'rgba(255,255,255,0.16)' }}
                 aria-label={`Jump to slide ${index + 1}`}
               >
-                {item.thumbnail ? (
+                {!item.driveFileId && item.thumbnail ? (
                   <img src={item.thumbnail} alt={item.title} loading="lazy" />
                 ) : (
                   <div className="cinema-filmstrip-fallback">{item.type === 'video' ? <Play size={16} /> : <ImageIcon size={16} />}</div>

@@ -65,6 +65,11 @@ export interface DriveAudioFile {
   modifiedTime?: string;
 }
 
+export const isVisualDriveFile = (file: Pick<DriveMediaFile, 'mimeType'>) => {
+  const mimeType = (file.mimeType || '').toLowerCase();
+  return mimeType.startsWith('image/') || mimeType.startsWith('video/');
+};
+
 export const isDriveAuthorizationError = (error: unknown) =>
   error instanceof Error && /authorization expired|access was denied|unauthorized|invalid credentials/i.test(error.message);
 
@@ -255,7 +260,7 @@ export class GoogleDriveService {
         files?: Array<DriveMediaFile & { thumbnailLink?: string; webViewLink?: string }>;
       }>(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, accessToken);
 
-      const batch = (payload.files || []).map(file => ({
+      const batch = (payload.files || []).filter(isVisualDriveFile).map(file => ({
         ...file,
         thumbnailUrl: file.thumbnailUrl || file.thumbnailLink || file.webContentLink || file.webViewLink || '',
         webContentLink: file.webContentLink || file.webViewLink,
@@ -289,7 +294,7 @@ export class GoogleDriveService {
 
     return {
       nextPageToken: payload.nextPageToken,
-      files: (payload.files || []).map(file => ({
+      files: (payload.files || []).filter(isVisualDriveFile).map(file => ({
         ...file,
         thumbnailUrl: file.thumbnailUrl || file.thumbnailLink || file.webContentLink || file.webViewLink || '',
         webContentLink: file.webContentLink || file.webViewLink,

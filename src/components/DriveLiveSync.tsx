@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import type { Memory } from '../data/memories';
+import { isVisualMemory, type Memory } from '../data/memories';
 import {
   clearDriveChangePageToken,
   acquireDriveSyncLock,
@@ -14,11 +14,11 @@ import {
   saveDriveMemories,
 } from '../services/driveLibrary';
 import { cacheDriveMediaFiles, deleteCachedDriveMedia } from '../services/driveCache';
-import { googleDriveService, isDriveAuthorizationError, type DriveMediaFile } from '../services/googleDriveService';
+import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile, type DriveMediaFile } from '../services/googleDriveService';
 import { deleteCachedStoryMedia } from '../services/storyMediaCache';
 
 const isVisualMedia = (file: DriveMediaFile) =>
-  file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || Boolean(file.thumbnailUrl || file.webContentLink);
+  isVisualDriveFile(file);
 
 const DriveLiveSync: React.FC = () => {
   useEffect(() => {
@@ -108,7 +108,7 @@ const DriveLiveSync: React.FC = () => {
 
 const mergeDriveMemories = (current: Memory[], imported: Memory[], removed = new Set<string>()) => {
   const importedById = new Map(imported.map(memory => [memory.driveFileId, memory]));
-  const kept = current.filter(memory => !memory.driveFileId || !removed.has(memory.driveFileId));
+  const kept = current.filter(memory => isVisualMemory(memory) && (!memory.driveFileId || !removed.has(memory.driveFileId)));
   const replaced = kept.map(memory => memory.driveFileId && importedById.get(memory.driveFileId)
     ? importedById.get(memory.driveFileId)!
     : memory);

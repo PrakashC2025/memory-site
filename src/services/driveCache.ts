@@ -1,4 +1,4 @@
-import type { Memory } from '../data/memories';
+import { isVisualMemory, type Memory } from '../data/memories';
 import { googleDriveService, type DriveMediaFile } from './googleDriveService';
 import { withMediaFetch } from '../utils/mediaQueue';
 
@@ -90,7 +90,7 @@ export const cacheDriveMediaFiles = (files: DriveMediaFile[], accessToken: strin
 
 export const cacheDriveMemories = (memories: Memory[], accessToken: string) => {
   const files = memories
-    .filter(memory => memory.driveFileId)
+    .filter(memory => isVisualMemory(memory) && memory.driveFileId)
     .map(memory => ({
       id: memory.driveFileId as string,
       name: memory.title,

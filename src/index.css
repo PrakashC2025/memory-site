@@ -2896,6 +2896,22 @@ input[type="number"]::-webkit-inner-spin-button {
   white-space: nowrap;
 }
 
+.memory-reel-queue-select {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0;
+  border: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  text-align: left;
+  font: inherit;
+}
+
+.memory-reel-queue-select:hover,
+.memory-reel-queue-select:focus-visible {
+  color: #ffe3b4 !important;
+}
+
 .memory-reel-queue-item > div {
   display: flex;
   flex: 0 0 auto;
@@ -2915,6 +2931,19 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .memory-reel-queue-item button:disabled { cursor: not-allowed; opacity: 0.35; }
+
+.memory-reel-queue-item .memory-reel-queue-select {
+  width: auto;
+  height: auto;
+  display: block;
+  place-items: initial;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 
 @media (max-width: 760px) {
   .memory-reel-overlay { padding: 0; place-items: stretch; }

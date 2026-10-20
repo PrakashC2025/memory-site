@@ -51,7 +51,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
   const domeImages = useMemo(
     () =>
       driveMemories
-        .filter(memory => memory.type === 'photo' && (memory.thumbnail || memory.url))
+        .filter(memory => memory.type === 'photo' && !memory.driveFileId && (memory.thumbnail || memory.url))
         .slice(0, 48)
         .map(memory => ({
           src: optimizeDomeImageUrl(memory.thumbnail || memory.url),

@@ -20,6 +20,20 @@ export interface Memory {
   event?: string;
 }
 
+const AUDIO_FILE_EXTENSION = /\.(mp3|m4a|aac|ogg|oga|wav|flac|opus|webm|aiff|aif|amr|mka|wma)$/i;
+
+/** Runtime guard for media restored from Drive or browser session storage. */
+export const isAudioMemory = (memory: Pick<Memory, 'type' | 'mimeType' | 'title'>) =>
+  String(memory.type).toLowerCase() === 'audio'
+  || Boolean(memory.mimeType && memory.mimeType.toLowerCase().startsWith('audio/'))
+  || (String(memory.type).toLowerCase() !== 'video' && AUDIO_FILE_EXTENSION.test(memory.title || ''));
+
+/** Only photos and videos belong in the visual memory archive. */
+export const isVisualMemory = (memory: Pick<Memory, 'type' | 'mimeType' | 'title'>) =>
+  !isAudioMemory(memory) && (memory.type === 'photo' || memory.type === 'video');
+
+export const visualMemoriesOnly = (memories: Memory[]) => memories.filter(isVisualMemory);
+
 export interface MemoryYear {
   year: number;
   memories: Memory[];
