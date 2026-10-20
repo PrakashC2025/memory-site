@@ -54,6 +54,17 @@ const writeCached = async (item: CachedDriveMedia) => {
   });
 };
 
+export const deleteCachedDriveMedia = async (id: string) => {
+  if (!id) return;
+  const db = await getCache();
+  if (!db) return;
+  await new Promise<void>(resolve => {
+    const request = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).delete(id);
+    request.onsuccess = () => resolve();
+    request.onerror = () => resolve();
+  });
+};
+
 const downloadDriveMedia = async (file: DriveMediaFile, accessToken: string) => {
   const existing = await readCached(file.id);
   if (existing && existing.modifiedTime === file.modifiedTime) return;

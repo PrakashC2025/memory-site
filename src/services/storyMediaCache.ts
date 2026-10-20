@@ -67,3 +67,12 @@ export const writeCachedStoryMedia = async (key: string, blob: Blob, mimeType = 
     // Browsers may deny storage or evict large media. Story Mode can still use the current object URL.
   }
 };
+
+export const deleteCachedStoryMedia = async (key: string) => {
+  if (!key) return;
+  try {
+    await withStore<undefined>('readwrite', store => store.delete(key));
+  } catch {
+    // Cache cleanup is best effort; Drive metadata remains authoritative.
+  }
+};

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CalendarDays, Heart, MapPin, Sparkles, Star } from 'lucide-react';
 import MemoryLightbox from '../components/MemoryLightbox';
@@ -7,7 +7,7 @@ import { useTheme } from '../context/ThemeContext';
 import PageHero from '../components/PageHero';
 import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
-import { readDriveMemories } from '../services/driveLibrary';
+import { DRIVE_MEMORIES_UPDATED_EVENT, readDriveMemories } from '../services/driveLibrary';
 
 const MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -32,8 +32,17 @@ const Timeline: React.FC = () => {
   const { config } = useTheme();
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [filterYear, setFilterYear] = useState<number | null>(null);
+  const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
 
-  const driveMemories = useMemo(() => readDriveMemories(), []);
+  useEffect(() => {
+    const refresh = () => {
+      const next = readDriveMemories();
+      setDriveMemories(next);
+      setSelectedMemory(current => current && next.some(memory => memory.id === current.id) ? current : null);
+    };
+    window.addEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refresh);
+    return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refresh);
+  }, []);
   const years = groupMemoriesByYear(driveMemories);
   const filteredYears = filterYear ? years.filter(year => year.year === filterYear) : years;
 

@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
-import { DRIVE_ACCESS_TOKEN_UPDATED_EVENT, readDriveAccessToken, readDriveFolderId, readDriveFolders, readDriveMemories, saveDriveAccessToken, saveDriveMemories } from '../services/driveLibrary';
+import { DRIVE_ACCESS_TOKEN_UPDATED_EVENT, readDriveAccessToken, readDriveFolderId, readDriveFolders, readDriveMemories, removeDriveMemories, saveDriveAccessToken, saveDriveMemories } from '../services/driveLibrary';
 import { googleDriveService, isDriveAuthorizationError } from '../services/googleDriveService';
-import { cacheDriveMediaFiles, cacheDriveMemories, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
+import { cacheDriveMediaFiles, cacheDriveMemories, deleteCachedDriveMedia, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
+import { deleteCachedStoryMedia } from '../services/storyMediaCache';
 
 interface StoryModeProps {
   onExit: () => void;
@@ -124,7 +125,12 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         if (!active) return;
         const removedIds = new Set(known.filter(memory => memory.driveFileId && !seenIds.has(memory.id)).map(memory => memory.id));
         if (removedIds.size) {
+          const removedDriveFileIds = known
+            .filter(memory => removedIds.has(memory.id) && memory.driveFileId)
+            .map(memory => memory.driveFileId as string);
           known = known.filter(memory => !removedIds.has(memory.id));
+          removeDriveMemories(removedDriveFileIds);
+          void Promise.all(removedDriveFileIds.flatMap(id => [deleteCachedDriveMedia(id), deleteCachedStoryMedia(id)]));
           saveDriveMemories(known, token, folderId);
           setDriveMemories(current => current.filter(memory => !removedIds.has(memory.id)));
         }

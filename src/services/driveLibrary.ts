@@ -81,6 +81,29 @@ export const saveDriveMemories = (memories: Memory[], accessToken: string, drive
   }
 };
 
+export const removeDriveMemories = (driveFileIds: Iterable<string>) => {
+  const ids = new Set(Array.from(driveFileIds).filter(Boolean));
+  if (!ids.size) return;
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    if (!stored) return;
+    const current = JSON.parse(stored) as Partial<DriveSessionSnapshot>;
+    const memories = current.memories || [];
+    const next = memories.filter(memory => !memory.driveFileId || !ids.has(memory.driveFileId));
+    if (next.length === memories.length) return;
+    window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
+      ...current,
+      memories: next,
+      importCount: next.length,
+      nextPageToken: current.nextPageToken || '',
+      savedAt: Date.now(),
+    }));
+    window.dispatchEvent(new CustomEvent(DRIVE_MEMORIES_UPDATED_EVENT));
+  } catch {
+    // Session storage is optional; in-memory state still removes the media.
+  }
+};
+
 export const saveDriveAccessToken = (accessToken: string) => {
   if (!accessToken) return;
   try {

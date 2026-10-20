@@ -25,9 +25,10 @@ import DriveCameraCapture from '../components/DriveCameraCapture';
 import MemoryLightbox from '../components/MemoryLightbox';
 import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
-import { DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_SESSION_KEY, readDriveAccessToken, saveDriveAccessToken, upgradeDriveImageUrls } from '../services/driveLibrary';
+import { DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_SESSION_KEY, readDriveAccessToken, removeDriveMemories, saveDriveAccessToken, upgradeDriveImageUrls } from '../services/driveLibrary';
 import { googleDriveService, isDriveAuthorizationError, type DriveConnectionState, type DriveFolder, type DriveMediaFile } from '../services/googleDriveService';
-import { cacheDriveMediaFiles } from '../services/driveCache';
+import { cacheDriveMediaFiles, deleteCachedDriveMedia } from '../services/driveCache';
+import { deleteCachedStoryMedia } from '../services/storyMediaCache';
 import { autoEventLabel, buildDirectorPlan, type DirectorPlan } from '../services/directorPlan';
 
 type Stage = 'reels' | 'director' | 'map' | 'albums' | 'story';
@@ -124,6 +125,8 @@ const Memoriya: React.FC = () => {
   const folderPollRef = useRef<number | null>(null);
   const folderScanBusyRef = useRef(false);
   const localFileIdsRef = useRef(new Set<string>());
+  const memoriesRef = useRef<Memory[]>([]);
+  memoriesRef.current = memories;
 
   useEffect(() => {
     const checkMobileCamera = () => {
@@ -233,6 +236,10 @@ const Memoriya: React.FC = () => {
           .filter(file => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || file.thumbnailUrl || file.webContentLink)
           .map(file => enrichDriveMemory(googleDriveService.toMemory(file, accessToken), file));
         const currentDriveIds = new Set(imported.map(memory => memory.driveFileId).filter(Boolean));
+        const removedDriveIds = memoriesRef.current
+          .filter(memory => memory.driveFileId && !currentDriveIds.has(memory.driveFileId))
+          .map(memory => memory.driveFileId as string);
+        clearDeletedDriveMedia(removedDriveIds);
         setMemories(current => {
           const presentMemories = current.filter(memory => !memory.driveFileId || currentDriveIds.has(memory.driveFileId));
           const ids = new Set(presentMemories.map(memory => memory.id));
@@ -776,6 +783,7 @@ const Memoriya: React.FC = () => {
             setMessage(added ? 'Photo uploaded to Drive and added to the live story.' : 'Photo uploaded to Drive. Sync again if it is not visible yet.');
           }}
           onDeleted={fileId => {
+            clearDeletedDriveMedia([fileId]);
             setMemories(current => current.filter(memory => memory.driveFileId !== fileId));
             setSelected(current => current?.driveFileId === fileId ? null : current);
             setViewerMemory(current => current?.driveFileId === fileId ? null : current);
@@ -1136,6 +1144,13 @@ const useLightweightMode = () => {
     return () => window.removeEventListener('resize', check);
   }, []);
   return lightweight;
+};
+
+const clearDeletedDriveMedia = (driveFileIds: Iterable<string>) => {
+  const ids = Array.from(new Set(Array.from(driveFileIds).filter(Boolean)));
+  if (!ids.length) return;
+  removeDriveMemories(ids);
+  void Promise.all(ids.flatMap(id => [deleteCachedDriveMedia(id), deleteCachedStoryMedia(id)]));
 };
 
 type DeviceProfile = 'mobile' | 'tablet' | 'desktop' | 'tv';

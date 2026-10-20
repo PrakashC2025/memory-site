@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CalendarDays, Film, Heart, Search, Sparkles, Star } from 'lucide-react';
 import DriveMediaPreview from '../components/DriveMediaPreview';
@@ -7,7 +7,7 @@ import MemoryReel from '../components/MemoryReel';
 import { useTheme } from '../context/ThemeContext';
 import type { Memory } from '../data/memories';
 import PageHero from '../components/PageHero';
-import { readDriveMemories } from '../services/driveLibrary';
+import { DRIVE_MEMORIES_UPDATED_EVENT, readDriveMemories } from '../services/driveLibrary';
 import { buildRecapSections, getMemoryHeatmap, groupMemoriesByEvent } from '../services/memoryOrganizer';
 
 const EMOTION_COLORS: Record<string, string> = {
@@ -25,7 +25,17 @@ const EventExplorer: React.FC = () => {
   const [query, setQuery] = useState('');
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [reelConfig, setReelConfig] = useState<{ memories: Memory[]; title: { line: string; big: string } } | null>(null);
-  const driveMemories = useMemo(() => readDriveMemories(), []);
+  const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
+
+  useEffect(() => {
+    const refresh = () => {
+      const next = readDriveMemories();
+      setDriveMemories(next);
+      setSelectedMemory(current => current && next.some(memory => memory.id === current.id) ? current : null);
+    };
+    window.addEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refresh);
+    return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refresh);
+  }, []);
 
   const events = useMemo(() => groupMemoriesByEvent(driveMemories), [driveMemories]);
   const recaps = useMemo(() => buildRecapSections(driveMemories), [driveMemories]);

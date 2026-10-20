@@ -36,7 +36,11 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
   const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
 
   useEffect(() => {
-    const refreshDriveMemories = () => setDriveMemories(readDriveMemories());
+    const refreshDriveMemories = () => {
+      const next = readDriveMemories();
+      setDriveMemories(next);
+      setSelectedMemory(current => current && next.some(memory => memory.id === current.id) ? current : null);
+    };
     window.addEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refreshDriveMemories);
     return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refreshDriveMemories);
   }, []);
