@@ -81,9 +81,9 @@ const downloadDriveMedia = async (file: DriveMediaFile, accessToken: string) => 
   }
 };
 
-export const cacheDriveMediaFiles = (files: DriveMediaFile[], accessToken: string) => {
+export const cacheDriveMediaFiles = (files: DriveMediaFile[], accessToken: string, options?: { includeVideos?: boolean }) => {
   const visualFiles = files
-    .filter(file => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/'))
+    .filter(file => file.mimeType.startsWith('image/') || (options?.includeVideos && file.mimeType.startsWith('video/')))
     .sort((a, b) => Number(b.mimeType.startsWith('image/')) - Number(a.mimeType.startsWith('image/')));
   return Promise.all(visualFiles.map(file => downloadDriveMedia(file, accessToken))).then(() => undefined);
 };

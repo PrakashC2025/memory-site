@@ -4,9 +4,22 @@ export const DRIVE_SESSION_KEY = 'memoriya-drive-session-v1';
 export const DRIVE_MEMORIES_UPDATED_EVENT = 'memoriya-drive-memories-updated';
 export const DRIVE_ACCESS_TOKEN_UPDATED_EVENT = 'memoriya-drive-access-token-updated';
 
+let driveSyncLock = false;
+
+export const acquireDriveSyncLock = () => {
+  if (driveSyncLock) return false;
+  driveSyncLock = true;
+  return true;
+};
+
+export const releaseDriveSyncLock = () => {
+  driveSyncLock = false;
+};
+
 interface DriveSessionSnapshot {
   accessToken: string;
   nextPageToken: string;
+  changePageToken?: string;
   importCount: number;
   memories: Memory[];
   savedAt: number;
@@ -48,6 +61,43 @@ export const readDriveFolderId = () => {
     return (JSON.parse(stored) as DriveSessionSnapshot).driveFolderId || '';
   } catch {
     return '';
+  }
+};
+
+export const readDriveChangePageToken = () => {
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    if (!stored) return '';
+    return (JSON.parse(stored) as DriveSessionSnapshot).changePageToken || '';
+  } catch {
+    return '';
+  }
+};
+
+export const saveDriveChangePageToken = (changePageToken: string) => {
+  if (!changePageToken) return;
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    const current = stored ? JSON.parse(stored) as Partial<DriveSessionSnapshot> : {};
+    window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
+      ...current,
+      changePageToken,
+      savedAt: Date.now(),
+    }));
+  } catch {
+    // Session storage is optional; the current page keeps its in-memory token.
+  }
+};
+
+export const clearDriveChangePageToken = () => {
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    if (!stored) return;
+    const current = JSON.parse(stored) as Partial<DriveSessionSnapshot>;
+    delete current.changePageToken;
+    window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({ ...current, savedAt: Date.now() }));
+  } catch {
+    // Session storage is optional.
   }
 };
 
@@ -149,5 +199,5 @@ export const upgradeDriveImageUrls = (memory: Memory): Memory => {
 
 const sharpenStoredThumbnail = (url: string) =>
   url
-    .replace(/=s\d+(-[cp])?$/i, '=s1600')
-    .replace(/sz=w\d+/i, 'sz=w1600');
+    .replace(/=s\d+(-[cp])?$/i, '=s960')
+    .replace(/sz=w\d+/i, 'sz=w960');

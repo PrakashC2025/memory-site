@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import AppErrorBoundary from './components/AppErrorBoundary';
 import AnimatedBackground from './components/AnimatedBackground';
+import DriveLiveSync from './components/DriveLiveSync';
 import MusicPlayer from './components/MusicPlayer';
 import Navbar from './components/Navbar';
 import SplashCursor from './components/SplashCursor';
@@ -72,6 +73,7 @@ const AppContent: React.FC = () => {
 
   return (
     <>
+      <DriveLiveSync />
       <AnimatedBackground />
       {currentPage !== 'story' && (
         <SplashCursor

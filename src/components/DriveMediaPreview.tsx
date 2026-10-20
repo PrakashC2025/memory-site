@@ -22,6 +22,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [fallbackLoading, setFallbackLoading] = useState(false);
+  const [videoActive, setVideoActive] = useState(Boolean(eager));
   const authAttemptedRef = useRef(false);
 
   useEffect(() => {
@@ -32,6 +33,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     setLoaded(false);
     setFailed(false);
     setFallbackLoading(false);
+    setVideoActive(Boolean(eager));
     authAttemptedRef.current = false;
     return () => {
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
@@ -41,7 +43,11 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
 
   useEffect(() => {
     const canUseDriveMedia = Boolean(memory.authToken && memory.driveFileId);
-    if (!canUseDriveMedia || fallbackLoading || blobSrc || authAttemptedRef.current || (!eager && !failed)) return undefined;
+    // Video cards already have a lightweight Drive poster and should not fetch
+    // the complete original just because they entered the gallery. Only fetch
+    // a video blob after its preview URL fails; images can still use the
+    // authenticated fallback when needed.
+    if (!canUseDriveMedia || fallbackLoading || blobSrc || authAttemptedRef.current || (memory.type === 'video' && !failed) || (!eager && !failed)) return undefined;
     const controller = new AbortController();
     let cancelled = false;
     authAttemptedRef.current = true;
@@ -92,19 +98,17 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     setFailed(true);
   };
 
-  const showVideoPoster = memory.type === 'video' && failed && !fallbackLoading && Boolean(memory.thumbnail);
-
   return (
     <span className="drive-media-preview-wrap">
-      {memory.type === 'video' && !failed && src ? (
+      {memory.type === 'video' && !failed && src && (videoActive || !memory.thumbnail) ? (
         <video
           src={src}
           className={`${className} drive-media-preview`}
           muted
           playsInline
-          autoPlay
+          autoPlay={videoActive}
           loop
-          preload="metadata"
+          preload={videoActive ? 'metadata' : 'none'}
           poster={memory.thumbnail || undefined}
           onLoadedData={() => setLoaded(true)}
           onError={handleVideoError}
@@ -122,8 +126,15 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           onError={tryNextImage}
           style={loaded ? undefined : { opacity: 0.48 }}
         />
-      ) : showVideoPoster ? (
-        <span className="drive-preview-video-poster">
+      ) : memory.type === 'video' && memory.thumbnail ? (
+        <span
+          className="drive-preview-video-poster"
+          role="button"
+          tabIndex={0}
+          onClick={() => setVideoActive(true)}
+          onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setVideoActive(true); }}
+          aria-label={`Play preview for ${memory.title}`}
+        >
           <img
             src={memory.thumbnail}
             alt={alt ?? memory.title}
@@ -166,8 +177,8 @@ const buildImageCandidates = (memory: Memory) => {
 const sharpenThumbnail = (url: string) => {
   if (!url) return '';
   return url
-    .replace(/=s\d+(-[cp])?$/i, '=s1600')
-    .replace(/sz=w\d+/i, 'sz=w1600');
+    .replace(/=s\d+(-[cp])?$/i, '=s960')
+    .replace(/sz=w\d+/i, 'sz=w960');
 };
 
 export default DriveMediaPreview;

@@ -10,6 +10,8 @@ export interface DriveMediaFile {
   name: string;
   mimeType: string;
   thumbnailUrl: string;
+  parents?: string[];
+  trashed?: boolean;
   webContentLink?: string;
   createdTime?: string;
   modifiedTime?: string;
@@ -41,6 +43,18 @@ export interface DriveConnectionState {
 export interface DriveMediaPage {
   files: DriveMediaFile[];
   nextPageToken?: string;
+}
+
+export interface DriveChange {
+  fileId: string;
+  removed?: boolean;
+  file?: DriveMediaFile;
+}
+
+export interface DriveChangePage {
+  changes: DriveChange[];
+  nextPageToken?: string;
+  newStartPageToken?: string;
 }
 
 export interface DriveAudioFile {
@@ -293,6 +307,48 @@ export class GoogleDriveService {
     return files;
   }
 
+  async getStartPageToken(accessToken: string): Promise<string> {
+    const params = new URLSearchParams({
+      supportsAllDrives: 'true',
+      fields: 'startPageToken',
+    });
+    const payload = await fetchDriveJson<{ startPageToken?: string }>(
+      `https://www.googleapis.com/drive/v3/changes/startPageToken?${params.toString()}`,
+      accessToken,
+    );
+    return payload.startPageToken || '';
+  }
+
+  async listChanges(accessToken: string, pageToken: string): Promise<DriveChangePage> {
+    const params = new URLSearchParams({
+      pageToken,
+      pageSize: '100',
+      spaces: 'drive',
+      includeItemsFromAllDrives: 'true',
+      includeCorpusRemovals: 'true',
+      supportsAllDrives: 'true',
+      fields: 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,parents,trashed,imageMediaMetadata,videoMediaMetadata))',
+    });
+    const payload = await fetchDriveJson<{
+      nextPageToken?: string;
+      newStartPageToken?: string;
+      changes?: Array<DriveChange & { file?: DriveMediaFile & { thumbnailLink?: string; webViewLink?: string } }>;
+    }>(`https://www.googleapis.com/drive/v3/changes?${params.toString()}`, accessToken);
+
+    return {
+      nextPageToken: payload.nextPageToken,
+      newStartPageToken: payload.newStartPageToken,
+      changes: (payload.changes || []).map(change => change.file ? {
+        ...change,
+        file: {
+          ...change.file,
+          thumbnailUrl: change.file.thumbnailUrl || change.file.thumbnailLink || change.file.webContentLink || change.file.webViewLink || '',
+          webContentLink: change.file.webContentLink || change.file.webViewLink,
+        },
+      } : change),
+    };
+  }
+
   async listFolders(accessToken: string): Promise<Array<{ id: string; name: string }>> {
     const params = new URLSearchParams({
       q: "mimeType='application/vnd.google-apps.folder' and trashed=false",
@@ -331,7 +387,7 @@ export class GoogleDriveService {
       );
       files.push(...(payload.files || []).filter(file =>
         file.mimeType.toLowerCase().startsWith('audio/') ||
-        /\.(mp3|m4a|aac|ogg|oga|wav|flac|opus|webm|aiff|aif|mka)$/i.test(file.name)
+        /\.(mp3|m4a|aac|ogg|oga|wav|flac|opus|webm|aiff|aif|amr|mka|wma)$/i.test(file.name)
       ));
       pageToken = payload.nextPageToken || '';
     } while (pageToken);
@@ -452,6 +508,43 @@ export class GoogleDriveService {
     }
   }
 
+  async updateMedia(accessToken: string, fileId: string, file: File): Promise<DriveMediaFile> {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&supportsAllDrives=true&fields=id,name,mimeType,createdTime,modifiedTime,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': file.type || 'image/jpeg',
+        },
+        signal: controller.signal,
+        body: file,
+      });
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error('Google Drive authorization expired. Reconnect Google Drive and try again.');
+        }
+        throw new Error(`Drive image update failed (${response.status}).`);
+      }
+      const updated = await response.json() as DriveMediaFile & { thumbnailLink?: string };
+      return {
+        ...updated,
+        id: updated.id || fileId,
+        name: updated.name || file.name,
+        mimeType: updated.mimeType || file.type || 'image/jpeg',
+        thumbnailUrl: updated.thumbnailUrl || updated.thumbnailLink || updated.webContentLink || '',
+      };
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Drive image update took too long. Please try again.');
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
   async deleteMedia(accessToken: string, fileId: string): Promise<void> {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
@@ -542,6 +635,6 @@ export const googleDriveService = new GoogleDriveService();
 const sharpenDriveThumbnail = (url: string, _accessToken?: string) => {
   if (!url) return url;
   return url
-    .replace(/=s\d+(-[cp])?$/i, '=s1600')
-    .replace(/sz=w\d+/i, 'sz=w1600');
+    .replace(/=s\d+(-[cp])?$/i, '=s960')
+    .replace(/sz=w\d+/i, 'sz=w960');
 };

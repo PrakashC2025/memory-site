@@ -3038,6 +3038,7 @@ input[type="number"]::-webkit-inner-spin-button {
   right: 0.75rem;
   bottom: 0.75rem;
   display: flex;
+  flex-direction: column;
   gap: 0.45rem;
 }
 
@@ -3088,6 +3089,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .memoriya-camera-controls > button,
+.memoriya-camera-flip-stack > button,
 .memoriya-camera-filter {
   display: inline-flex;
   align-items: center;
@@ -3102,6 +3104,10 @@ input[type="number"]::-webkit-inner-spin-button {
   font-size: 0.78rem;
   font-weight: 900;
 }
+
+.memoriya-camera-flip-stack { display: flex; flex-direction: column; gap: 0.45rem; min-width: 0; }
+.memoriya-camera-flip-stack > button { width: 100%; }
+.memoriya-camera-preview-toggle { font-size: 0.7rem !important; }
 
 .memoriya-camera-controls button { cursor: pointer; }
 .memoriya-camera-controls button:disabled { cursor: wait; opacity: 0.5; }
@@ -3427,7 +3433,7 @@ input[type="number"]::-webkit-inner-spin-button {
   .memoriya-camera-viewfinder video { object-fit: cover; }
   .memoriya-camera-viewfinder-tools { top: max(5.7rem, calc(env(safe-area-inset-top) + 4.8rem)); right: 0.95rem; bottom: auto; z-index: 10; }
   .memoriya-camera-viewfinder-tools button { min-width: 2.7rem; min-height: 2.7rem; padding: 0.55rem; }
-  .memoriya-camera-viewfinder-tools button:first-child { padding-inline: 0.8rem; }
+  .memoriya-camera-viewfinder-tools button { padding: 0.55rem; }
 
   .memoriya-camera-last-shot-button { left: 1rem; bottom: 10.5rem; width: 3.7rem; height: 3.7rem; border-radius: 1rem; }
 
@@ -3443,6 +3449,7 @@ input[type="number"]::-webkit-inner-spin-button {
   }
 
   .memoriya-camera-controls > button,
+  .memoriya-camera-flip-stack > button,
   .memoriya-camera-filter { min-height: 3.15rem; padding: 0.55rem 0.7rem; border-color: rgba(255, 255, 255, 0.22); background: rgba(3, 5, 12, 0.68); backdrop-filter: blur(12px); pointer-events: auto; }
   .memoriya-camera-controls > button { font-size: 0.72rem; }
   .memoriya-camera-shutter { width: 5.15rem; height: 5.15rem; border-width: 5px !important; }
