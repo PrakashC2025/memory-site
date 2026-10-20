@@ -726,6 +726,7 @@ const Memoriya: React.FC = () => {
           hasMore={reelConfig.live && Boolean(accessToken)}
           loadingMore={loading}
           onNeedMore={() => void loadDrivePage()}
+          onDriveReconnect={() => void connectDrive()}
           onClose={() => setReelConfig(null)}
         />
       )}

@@ -118,7 +118,12 @@ const fetchDriveJson = async <T,>(url: string, accessToken: string): Promise<T> 
       headers: { Authorization: `Bearer ${accessToken}` },
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`Drive scan failed (${response.status}).`);
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('Google Drive authorization expired or access was denied. Reconnect Google Drive and try again.');
+      }
+      throw new Error(`Drive scan failed (${response.status}).`);
+    }
     return await response.json() as T;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
@@ -281,10 +286,12 @@ export class GoogleDriveService {
     let pageToken = '';
     do {
       const params = new URLSearchParams({
-        q: "mimeType contains 'audio/' and trashed=false",
+        q: "(mimeType contains 'audio/' or name contains '.mp3' or name contains '.m4a' or name contains '.aac' or name contains '.ogg' or name contains '.oga' or name contains '.wav' or name contains '.flac') and trashed=false",
         pageSize: '100',
-        orderBy: 'createdTime desc',
+        orderBy: 'modifiedTime desc',
         fields: 'nextPageToken,files(id,name,mimeType,createdTime,modifiedTime)',
+        spaces: 'drive',
+        includeItemsFromAllDrives: 'true',
       });
       if (pageToken) params.set('pageToken', pageToken);
       const payload = await fetchDriveJson<{ nextPageToken?: string; files?: DriveAudioFile[] }>(
@@ -295,6 +302,33 @@ export class GoogleDriveService {
       pageToken = payload.nextPageToken || '';
     } while (pageToken);
     return files;
+  }
+
+  async downloadMediaFile(accessToken: string, fileId: string): Promise<Blob> {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error('Google Drive authorization expired. Reconnect Google Drive and try again.');
+        }
+        throw new Error(`Drive audio could not be downloaded (${response.status}).`);
+      }
+      const blob = await response.blob();
+      if (!blob.size) throw new Error('Drive returned an empty audio file.');
+      return blob;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Drive audio took too long to download. Please try again.');
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
   async uploadMedia(accessToken: string, file: File, folderId?: string, signal?: AbortSignal): Promise<DriveMediaFile> {

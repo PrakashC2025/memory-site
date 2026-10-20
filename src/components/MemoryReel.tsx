@@ -62,6 +62,7 @@ interface MemoryReelProps {
   driveFolderId?: string;
   driveFolders?: Array<{ id: string; name: string }>;
   onDriveFolderChange?: (folderId: string) => void;
+  onDriveReconnect?: () => void;
   onClose?: () => void;
 }
 
@@ -749,12 +750,9 @@ interface MusicQueueItem {
   driveFileId?: string;
 }
 
-const driveAudioUrl = (fileId: string, accessToken: string) =>
-  `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&access_token=${encodeURIComponent(accessToken)}`;
-
 const FULLSCREEN_CONTROLS_HIDE_DELAY = 3600;
 
-const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, template: initialTemplate = 'orbit', autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onClose }) => {
+const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, template: initialTemplate = 'orbit', autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onDriveReconnect, onClose }) => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<MemoryReelController | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
@@ -779,6 +777,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [driveUploadLoading, setDriveUploadLoading] = useState(false);
   const [musicError, setMusicError] = useState('');
   const [audioLoading, setAudioLoading] = useState(false);
+  const [trackLoadingId, setTrackLoadingId] = useState('');
   const [musicName, setMusicName] = useState('');
   const [musicQueue, setMusicQueue] = useState<MusicQueueItem[]>(() => audio ? [{ id: 'initial-audio', src: audio, label: 'Background music' }] : []);
   const [loopEnabled, setLoopEnabled] = useState(loop);
@@ -953,11 +952,32 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setMusicQueue(current => [...current, ...nextTracks]);
   };
 
-  const chooseMusicTrack = (track: OpenSourceMusicTrack) => {
-    setMusicName(`${track.title} · ${track.artist}`);
-    setMusicQueue(current => current.some(item => item.src === track.previewUrl)
-      ? current
-      : [...current, { id: track.id, src: track.previewUrl, label: `${track.title} · ${track.artist}` }]);
+  const downloadRemoteAudio = async (source: string) => {
+    const response = await fetch(source);
+    if (!response.ok) throw new Error(`Audio source returned ${response.status}.`);
+    const blob = await response.blob();
+    if (!blob.size) throw new Error('The audio source returned an empty file.');
+    const objectUrl = URL.createObjectURL(blob);
+    audioObjectUrlsRef.current.push(objectUrl);
+    return objectUrl;
+  };
+
+  const chooseMusicTrack = async (track: OpenSourceMusicTrack) => {
+    if (trackLoadingId) return;
+    if (musicQueue.some(item => item.src === track.previewUrl || item.id === track.id)) return;
+    setTrackLoadingId(track.id);
+    setMusicError('');
+    try {
+      const src = await downloadRemoteAudio(track.previewUrl);
+      setMusicName(`${track.title} · ${track.artist}`);
+      setMusicQueue(current => current.some(item => item.id === track.id)
+        ? current
+        : [...current, { id: track.id, src, label: `${track.title} · ${track.artist}`, source: 'online' }]);
+    } catch (error) {
+      setMusicError(error instanceof Error ? `This search result could not be loaded: ${error.message}` : 'This search result could not be loaded.');
+    } finally {
+      setTrackLoadingId('');
+    }
   };
 
   const moveMusic = (index: number, direction: -1 | 1) => {
@@ -1003,13 +1023,26 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     return () => window.clearInterval(interval);
   }, [driveAccessToken]);
 
-  const chooseDriveSong = (song: DriveAudioFile) => {
+  const chooseDriveSong = async (song: DriveAudioFile) => {
     if (!driveAccessToken) return;
-    const src = driveAudioUrl(song.id, driveAccessToken);
-    setMusicName(song.name);
-    setMusicQueue(current => current.some(item => item.driveFileId === song.id)
-      ? current
-      : [...current, { id: `drive-audio-${song.id}`, src, label: song.name, source: 'drive', driveFileId: song.id }]);
+    const trackId = `drive-audio-${song.id}`;
+    if (trackLoadingId) return;
+    if (musicQueue.some(item => item.driveFileId === song.id || item.id === trackId)) return;
+    setTrackLoadingId(trackId);
+    setMusicError('');
+    try {
+      const blob = await googleDriveService.downloadMediaFile(driveAccessToken, song.id);
+      const src = URL.createObjectURL(blob);
+      audioObjectUrlsRef.current.push(src);
+      setMusicName(song.name);
+      setMusicQueue(current => current.some(item => item.driveFileId === song.id)
+        ? current
+        : [...current, { id: trackId, src, label: song.name, source: 'drive', driveFileId: song.id }]);
+    } catch (error) {
+      setMusicError(error instanceof Error ? `Drive audio could not be loaded: ${error.message}` : 'Drive audio could not be loaded.');
+    } finally {
+      setTrackLoadingId('');
+    }
   };
 
   const uploadSongsToDrive = async (files: FileList | File[]) => {
@@ -1025,9 +1058,11 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       const uploadedTracks: MusicQueueItem[] = [];
       for (const file of nextFiles) {
         const uploaded = await googleDriveService.uploadMedia(driveAccessToken, file);
+        const localSrc = URL.createObjectURL(file);
+        audioObjectUrlsRef.current.push(localSrc);
         uploadedTracks.push({
           id: `drive-audio-${uploaded.id}`,
-          src: driveAudioUrl(uploaded.id, driveAccessToken),
+          src: localSrc,
           label: uploaded.name || file.name,
           source: 'drive',
           driveFileId: uploaded.id,
@@ -1156,7 +1191,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               {driveAccessToken && <button type="button" onClick={() => void loadDriveSongs()} disabled={driveSongsLoading}><Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : 'Load Drive songs'}</button>}
             </div>
             <p className="memory-reel-music-note">Only photos and videos appear in the story. Songs are used as the audio queue.</p>
-            {musicError && <p className="memory-reel-music-error" role="alert">{musicError}</p>}
+            {musicError && <div className="memory-reel-music-error" role="alert">
+              <p>{musicError}</p>
+              {onDriveReconnect && /authorization expired|access was denied|reconnect google drive/i.test(musicError) && <button type="button" onClick={() => void onDriveReconnect()}>Reconnect Drive</button>}
+            </div>}
             {musicName && <p className="memory-reel-current-music">Now selected: {musicName}</p>}
             {musicQueue.length > 0 && (
               <div className="memory-reel-queue">
@@ -1179,15 +1217,15 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               <div className="memory-reel-drive-songs">
                 <div className="memory-reel-music-heading">Songs stored in Drive</div>
                 {driveSongs.map(song => (
-                  <button type="button" className="memory-reel-track" key={song.id} onClick={() => chooseDriveSong(song)}>
-                    <strong>{song.name}</strong><span>Drive audio · click to add to queue</span>
+                  <button type="button" className="memory-reel-track" key={song.id} onClick={() => void chooseDriveSong(song)} disabled={Boolean(trackLoadingId && trackLoadingId !== `drive-audio-${song.id}`)}>
+                    <strong>{trackLoadingId === `drive-audio-${song.id}` ? 'Loading audio…' : song.name}</strong><span>Drive audio · click to load and play</span>
                   </button>
                 ))}
               </div>
             )}
             {musicResults.map(track => (
-              <button type="button" className="memory-reel-track" key={track.id} onClick={() => chooseMusicTrack(track)}>
-                <strong>{track.title}</strong><span>{track.artist}</span>
+              <button type="button" className="memory-reel-track" key={track.id} onClick={() => void chooseMusicTrack(track)} disabled={Boolean(trackLoadingId && trackLoadingId !== track.id)}>
+                <strong>{trackLoadingId === track.id ? 'Loading audio…' : track.title}</strong><span>{track.artist}</span>
               </button>
             ))}
           </div>

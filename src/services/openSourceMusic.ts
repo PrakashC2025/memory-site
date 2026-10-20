@@ -16,7 +16,10 @@ interface ArchiveDoc {
   creator?: string | string[];
 }
 
-const AUDIO_EXTENSION_PATTERN = /\.(mp3|m4a|aac|ogg|oga|wav|flac)$/i;
+// Prefer formats that play reliably in Chrome, Safari, Android TV, and mobile
+// browsers. Archive items often include a lossless FLAC first, even when an
+// MP3 or OGG version is available beside it.
+const AUDIO_EXTENSION_PATTERN = /\.(mp3|m4a|aac|ogg|oga|wav)$/i;
 
 const parseCreator = (creator?: string | string[]) =>
   Array.isArray(creator) ? creator.filter(Boolean).join(', ') : creator || 'Internet Archive';

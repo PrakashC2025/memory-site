@@ -2851,7 +2851,9 @@ input[type="number"]::-webkit-inner-spin-button {
   font-size: 0.74rem;
 }
 .memory-reel-music-note { color: rgba(255, 255, 255, 0.48); }
-.memory-reel-music-error { color: #ff9fb7; }
+.memory-reel-music-error { display: flex; align-items: center; justify-content: space-between; gap: .75rem; color: #ff9fb7; }
+.memory-reel-music-error p { margin: 0; }
+.memory-reel-music-error button { flex: 0 0 auto; min-height: 32px; padding: .42rem .65rem; border: 1px solid rgba(255, 159, 183, .35); border-radius: 999px; background: rgba(255, 159, 183, .1); color: #ffd6df; font: inherit; font-size: .7rem; font-weight: 850; cursor: pointer; }
 .memory-reel-music-heading { color: rgba(255, 255, 255, 0.7); font-weight: 800; }
 .memory-reel-drive-songs { display: grid; gap: 0.45rem; }
 
@@ -2868,6 +2870,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .memory-reel-track span { color: rgba(255, 255, 255, 0.55); font-size: 0.74rem; }
+.memory-reel-track:disabled { cursor: wait; opacity: .6; }
 
 .memory-reel-queue {
   display: grid;
