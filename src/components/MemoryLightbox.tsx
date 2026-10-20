@@ -591,14 +591,17 @@ const MemoryLightbox: React.FC<Props> = ({
     setMediaFailed(false);
     setHighResReady(false);
     setDriveObjectSrc('');
+    const driveBacked = canFetchDriveMedia(current);
     if (isVideoMemory(current)) {
       setPreviewSrc('');
-      setMediaSrc(current.url);
+      // Do not put an expired access-token URL into a media element. The
+      // authenticated/cache-first loader below owns Drive media playback.
+      setMediaSrc(driveBacked ? '' : current.url);
       return;
     }
-    const quickPreview = current.thumbnail || current.url;
+    const quickPreview = current.thumbnail || (driveBacked ? '' : current.url);
     setPreviewSrc(quickPreview);
-    setMediaSrc(current.url);
+    setMediaSrc(driveBacked ? '' : current.url);
   }, [current?.id, current?.url]);
 
   useEffect(() => {
@@ -660,7 +663,7 @@ const MemoryLightbox: React.FC<Props> = ({
   }, [current?.authToken, current?.driveFileId, current?.id, current?.thumbnail]);
 
   useEffect(() => {
-    if (!current || isVideoMemory(current) || mediaFailed || !current.url) {
+    if (!current || current.driveFileId || isVideoMemory(current) || mediaFailed || !current.url) {
       return;
     }
 
@@ -694,7 +697,7 @@ const MemoryLightbox: React.FC<Props> = ({
 
   const handlePreviewError = () => {
     if (!current) return;
-    if (!isVideoMemory(current) && current.url && previewSrc !== current.url) {
+    if (!current.driveFileId && !isVideoMemory(current) && current.url && previewSrc !== current.url) {
       setPreviewSrc(current.url);
       setImageLoaded(false);
       return;
@@ -902,7 +905,8 @@ const MemoryLightbox: React.FC<Props> = ({
     preload.forEach(item => {
       if (item && !isVideoMemory(item)) {
         const img = new Image();
-        img.src = item.url;
+        const source = item.driveFileId ? item.thumbnail : item.url;
+        if (source) img.src = source;
       }
     });
   }, [current, currentIdx, sequence]);
@@ -935,21 +939,29 @@ const MemoryLightbox: React.FC<Props> = ({
       emitToast('Choose a song first.');
       return;
     }
-    setStoryMusicPlaying(value => {
-      const next = !value;
-      if (audioSrc && storyAudioElementRef.current) {
-        if (next) void storyAudioElementRef.current.play().catch(() => emitToast('Tap play to allow music.'));
-        else storyAudioElementRef.current.pause();
+    const next = !storyMusicPlaying;
+    if (audioSrc && storyAudioElementRef.current) {
+      if (!next) {
+        storyAudioElementRef.current.pause();
+        setStoryMusicPlaying(false);
+        return;
       }
-      if (youtubeSrc && storyYouTubeFrameRef.current?.contentWindow) {
-        storyYouTubeFrameRef.current.contentWindow.postMessage(JSON.stringify({
-          event: 'command',
-          func: next ? 'playVideo' : 'pauseVideo',
-          args: [],
-        }), '*');
-      }
-      return next;
-    });
+      void storyAudioElementRef.current.play()
+        .then(() => setStoryMusicPlaying(true))
+        .catch(() => {
+          setStoryMusicPlaying(false);
+          emitToast('Tap play again to allow music on this device.');
+        });
+      return;
+    }
+    if (youtubeSrc && storyYouTubeFrameRef.current?.contentWindow) {
+      storyYouTubeFrameRef.current.contentWindow.postMessage(JSON.stringify({
+        event: 'command',
+        func: next ? 'playVideo' : 'pauseVideo',
+        args: [],
+      }), '*');
+    }
+    setStoryMusicPlaying(next);
   };
 
   const toggleMute = () => {
@@ -1019,7 +1031,10 @@ const MemoryLightbox: React.FC<Props> = ({
     setMusicOpen(true);
     setSettingsOpen(false);
     setMuted(true);
-    setStoryMusicPlaying(true);
+    // Selecting a remote/local file must not pretend that playback succeeded.
+    // The browser may reject autoplay; the visible Play button remains honest
+    // and starts the element from the user's gesture.
+    setStoryMusicPlaying(shouldUseYouTube);
     stopAmbientMusic();
     showChrome(true);
   };
@@ -1142,7 +1157,7 @@ const MemoryLightbox: React.FC<Props> = ({
         void writeCachedStoryMedia(cacheKey, blob, current.mimeType || blob.type);
       }
       if (!blob) {
-        const source = driveObjectSrc || mediaSrc || current.url;
+        const source = driveObjectSrc || mediaSrc || (current.driveFileId ? '' : current.url);
         if (!source) throw new Error('The original media is not ready yet.');
         const response = await fetch(source);
         if (!response.ok) throw new Error(`Media download failed (${response.status}).`);
@@ -1221,7 +1236,7 @@ const MemoryLightbox: React.FC<Props> = ({
   const zoomScale = zoom * (activeTransition === 'ken-burns' && isPlaying ? 1.035 : 1);
   const counter = `${currentIdx + 1} / ${sequence.length}`;
   const isStoryMode = mode === 'story';
-  const baseImageSrc = previewSrc || current.thumbnail || driveObjectSrc || current.url;
+  const baseImageSrc = previewSrc || current.thumbnail || driveObjectSrc || (current.driveFileId ? '' : current.url);
   const showHighResLayer = !isVideoMemory(current) && !mediaFailed && highResReady && mediaSrc && mediaSrc !== baseImageSrc;
   const progressSegments = sequence.map((_, index) => (index < currentIdx ? 100 : index === currentIdx ? progress : 0));
   const sideMemories = isStoryMode && sequence.length > 2
@@ -1384,7 +1399,7 @@ const MemoryLightbox: React.FC<Props> = ({
         onTouchEnd={event => handleTouchEnd(event.changedTouches[0].clientX, event.changedTouches[0].clientY)}
       >
         <div className="cinema-backdrop">
-          <img src={current.thumbnail || current.url} alt="" aria-hidden="true" />
+          <img src={current.thumbnail || (current.driveFileId ? '' : current.url)} alt="" aria-hidden="true" />
           <div className="cinema-backdrop-color" style={{ background: `radial-gradient(circle at 48% 35%, ${colors[0]}33, transparent 36%), radial-gradient(circle at 76% 65%, ${colors[1]}24, transparent 34%)` }} />
         </div>
 
@@ -1526,7 +1541,9 @@ const MemoryLightbox: React.FC<Props> = ({
               >
                 {sequence.map((item, index) => {
                   const active = index === currentIdx;
-                  const source = active ? (item.url || item.thumbnail) : getDecorativeMemorySrc(item);
+                  const source = active
+                    ? (item.id === current.id && driveObjectSrc ? driveObjectSrc : item.driveFileId ? item.thumbnail : (item.url || item.thumbnail))
+                    : getDecorativeMemorySrc(item);
                   return (
                     <button
                       key={`${item.id}-camera-wall`}
@@ -1546,7 +1563,7 @@ const MemoryLightbox: React.FC<Props> = ({
                           loading={active ? 'eager' : 'lazy'}
                           decoding="async"
                           onError={event => {
-                            const fallback = item.thumbnail || item.url;
+                            const fallback = item.thumbnail || (item.driveFileId ? '' : item.url);
                             if (fallback && event.currentTarget.src !== fallback) event.currentTarget.src = fallback;
                           }}
                         />
@@ -1605,7 +1622,7 @@ const MemoryLightbox: React.FC<Props> = ({
                   <video
                     key={`${current.id}-${driveObjectSrc || mediaSrc || current.url}`}
                     ref={videoRef}
-                    src={driveObjectSrc || mediaSrc || current.url}
+                    src={driveObjectSrc || mediaSrc || (current.driveFileId ? '' : current.url)}
                     poster={current.thumbnail}
                     controls
                     autoPlay={isPlaying}
@@ -1864,11 +1881,12 @@ const MemoryLightbox: React.FC<Props> = ({
                     ref={storyAudioElementRef}
                     src={audioSrc}
                     controls
-                    autoPlay
-                      onPlay={() => {
-                        setMuted(true);
-                        setStoryMusicPlaying(true);
-                      }}
+                    autoPlay={false}
+                    preload="auto"
+                    onPlay={() => {
+                      setMuted(true);
+                      setStoryMusicPlaying(true);
+                    }}
                     onPause={() => setStoryMusicPlaying(false)}
                     onError={() => {
                       setStoryMusicPlaying(false);
