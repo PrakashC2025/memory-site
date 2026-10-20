@@ -49,7 +49,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     // authenticated fallback when needed.
     const drivePreviewNeedsAuth = Boolean(
       memory.driveFileId
-      && (!imageCandidates.length || (memory.type === 'video' && videoActive)),
+      && (memory.type === 'video' ? videoActive : !imageCandidates.length),
     );
     if (!canUseDriveMedia || fallbackLoading || blobSrc || authAttemptedRef.current || (memory.type === 'video' && !failed && !drivePreviewNeedsAuth) || (!eager && !failed && !drivePreviewNeedsAuth)) return undefined;
     const controller = new AbortController();
@@ -130,7 +130,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           onError={tryNextImage}
           style={loaded ? undefined : { opacity: 0.48 }}
         />
-      ) : memory.type === 'video' && memory.thumbnail && !videoActive ? (
+      ) : memory.type === 'video' && !videoActive ? (
         <span
           className="drive-preview-video-poster"
           role="button"
@@ -139,13 +139,22 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setVideoActive(true); }}
           aria-label={`Play preview for ${memory.title}`}
         >
-          <img
-            src={memory.thumbnail}
-            alt={alt ?? memory.title}
-            className={`${className} drive-media-preview`}
-            loading={eager ? 'eager' : 'lazy'}
-            decoding="async"
-          />
+          {memory.thumbnail ? (
+            <img
+              src={memory.thumbnail}
+              alt={alt ?? memory.title}
+              className={`${className} drive-media-preview`}
+              loading={eager ? 'eager' : 'lazy'}
+              decoding="async"
+              onError={() => setFailed(true)}
+            />
+          ) : (
+            <span className={`drive-preview-fallback ${className} drive-media-preview`}>
+              <Play size={24} />
+              <strong>{memory.title}</strong>
+              <small>Video preview · click to load</small>
+            </span>
+          )}
           <span aria-hidden="true"><Play size={24} /></span>
         </span>
       ) : fallbackLoading ? (
