@@ -103,6 +103,7 @@ const Memoriya: React.FC = () => {
   const [viewerMemory, setViewerMemory] = useState<Memory | null>(null);
   const [reelConfig, setReelConfig] = useState<{ memories: Memory[]; title: { line: string; big: string }; live: boolean } | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [mobileCameraAvailable, setMobileCameraAvailable] = useState(false);
   const [activeReaction, setActiveReaction] = useState('Love');
   const [accessToken, setAccessToken] = useState(restored?.accessToken || '');
   const [driveFolderId, setDriveFolderId] = useState(restored?.driveFolderId || '');
@@ -121,6 +122,20 @@ const Memoriya: React.FC = () => {
   const folderPollRef = useRef<number | null>(null);
   const folderScanBusyRef = useRef(false);
   const localFileIdsRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    const checkMobileCamera = () => {
+      const userAgent = navigator.userAgent.toLowerCase();
+      const isAndroidTv = /android\s*tv|googletv|aftb|afts|aftm|aftt|bravia|shield/.test(userAgent);
+      const isAndroidPhone = /android/.test(userAgent) && /mobile/.test(userAgent);
+      const isAppleMobile = /iphone|ipod|ipad/.test(userAgent)
+        || (/macintosh/.test(userAgent) && navigator.maxTouchPoints > 1 && window.innerWidth <= 1024);
+      setMobileCameraAvailable(!isAndroidTv && (isAndroidPhone || isAppleMobile));
+    };
+    checkMobileCamera();
+    window.addEventListener('resize', checkMobileCamera, { passive: true });
+    return () => window.removeEventListener('resize', checkMobileCamera);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -558,7 +573,7 @@ const Memoriya: React.FC = () => {
             <button className="memoriya-glass-button" onClick={() => void connectLocalFolder()}>
               <FolderOpen size={17} /> Link local folder
             </button>
-            {accessToken && <button className="memoriya-glass-button" onClick={() => setCameraOpen(true)}><Camera size={17} /> Drive camera</button>}
+            {accessToken && mobileCameraAvailable && <button className="memoriya-glass-button memoriya-camera-launch" onClick={() => setCameraOpen(true)}><Camera size={17} /> Drive camera</button>}
             {accessToken && driveFolders.length > 0 && (
               <label className="memoriya-glass-button memoriya-drive-folder-select">
                 <FolderOpen size={17} />
@@ -684,12 +699,18 @@ const Memoriya: React.FC = () => {
       )}
 
       <MemoryLightbox memory={viewerMemory} memories={filteredMemories} onClose={() => setViewerMemory(null)} />
-      {cameraOpen && accessToken && (
+      {cameraOpen && accessToken && mobileCameraAvailable && (
         <DriveCameraCapture
           accessToken={accessToken}
           onUploaded={file => {
             const added = appendDriveFiles([file], accessToken);
             setMessage(added ? 'Photo uploaded to Drive and added to the live story.' : 'Photo uploaded to Drive. Sync again if it is not visible yet.');
+          }}
+          onDeleted={fileId => {
+            setMemories(current => current.filter(memory => memory.driveFileId !== fileId));
+            setSelected(current => current?.driveFileId === fileId ? null : current);
+            setViewerMemory(current => current?.driveFileId === fileId ? null : current);
+            setMessage('Photo deleted from Drive and removed from this story.');
           }}
           onClose={() => setCameraOpen(false)}
         />

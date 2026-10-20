@@ -1,5 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, Check, FlipHorizontal, Grid3X3, Lightbulb, Loader2, Maximize2, X } from 'lucide-react';
+import {
+  Camera,
+  Check,
+  Edit3,
+  FlipHorizontal,
+  Grid3X3,
+  Lightbulb,
+  Loader2,
+  Maximize2,
+  RotateCcw,
+  Share2,
+  Trash2,
+  X,
+} from 'lucide-react';
 import type { DriveMediaFile } from '../services/googleDriveService';
 import { googleDriveService } from '../services/googleDriveService';
 
@@ -10,12 +23,19 @@ interface ImageCaptureLike {
 interface Props {
   accessToken: string;
   onUploaded: (file: DriveMediaFile) => void;
+  onDeleted?: (fileId: string) => void;
   onClose: () => void;
 }
 
 interface DriveFolderChoice {
   id: string;
   name: string;
+}
+
+interface CapturedPhoto {
+  sourceBlob: Blob;
+  file: File;
+  url: string;
 }
 
 const CAMERA_FILTERS = {
@@ -29,17 +49,28 @@ const CAMERA_FILTERS = {
 
 type CameraFilter = keyof typeof CAMERA_FILTERS;
 
-const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose }) => {
+const fileName = () => `memoriya-${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
+
+const blobToFile = (blob: Blob) => new File([blob], fileName(), { type: 'image/jpeg' });
+
+const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDeleted, onClose }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const trackRef = useRef<MediaStreamTrack | null>(null);
   const imageCaptureRef = useRef<ImageCaptureLike | null>(null);
   const previewUrlRef = useRef('');
-  const pendingUploadsRef = useRef(0);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const uploadInFlightRef = useRef(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [filter, setFilter] = useState<CameraFilter>('natural');
   const [previewUrl, setPreviewUrl] = useState('');
+  const [capturedPhoto, setCapturedPhoto] = useState<CapturedPhoto | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<DriveMediaFile | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editFilter, setEditFilter] = useState<CameraFilter>('natural');
+  const [editRotation, setEditRotation] = useState(0);
   const [showLastShot, setShowLastShot] = useState(false);
   const [gridEnabled, setGridEnabled] = useState(false);
   const [torchEnabled, setTorchEnabled] = useState(false);
@@ -53,6 +84,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
   const [folderId, setFolderId] = useState('drive-root');
   const [folders, setFolders] = useState<DriveFolderChoice[]>([]);
   const [pendingUploads, setPendingUploads] = useState(0);
+
+  useEffect(() => {
+    document.body.classList.add('memoriya-camera-active');
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.classList.remove('memoriya-camera-active');
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
 
   useEffect(() => {
     void googleDriveService.listFolders(accessToken)
@@ -110,7 +151,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
         const ImageCaptureConstructor = (window as unknown as { ImageCapture?: new (track: MediaStreamTrack) => ImageCaptureLike }).ImageCapture;
         imageCaptureRef.current = ImageCaptureConstructor ? new ImageCaptureConstructor(track) : null;
         setCameraReady(true);
-        setStatus('Ready — tap capture to upload to Drive');
+        setStatus('Ready — tap the shutter to save a photo');
       } catch (captureError) {
         if (!cancelled) setError(captureError instanceof Error ? captureError.message : 'Camera permission was denied.');
       }
@@ -127,8 +168,32 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
   }, [facingMode]);
 
   useEffect(() => () => {
+    uploadAbortRef.current?.abort();
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
   }, []);
+
+  const renderPhotoBlob = async (blob: Blob, nextFilter: CameraFilter, rotation = 0) => {
+    if (nextFilter === 'natural' && rotation % 360 === 0) return blob;
+    const bitmap = await createImageBitmap(blob);
+    const canvas = canvasRef.current;
+    if (!canvas) return blob;
+    const quarterTurn = Math.abs(rotation % 180) === 90;
+    canvas.width = quarterTurn ? bitmap.height : bitmap.width;
+    canvas.height = quarterTurn ? bitmap.width : bitmap.height;
+    const context = canvas.getContext('2d');
+    if (!context) return blob;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.save();
+    context.translate(canvas.width / 2, canvas.height / 2);
+    context.rotate(rotation * Math.PI / 180);
+    context.filter = CAMERA_FILTERS[nextFilter].css;
+    context.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2, bitmap.width, bitmap.height);
+    context.restore();
+    bitmap.close();
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(nextBlob => nextBlob ? resolve(nextBlob) : reject(new Error('Could not prepare the photo.')), 'image/jpeg', 0.96);
+    });
+  };
 
   const captureFromVideo = async () => {
     const video = videoRef.current;
@@ -138,7 +203,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
     canvas.height = video.videoHeight;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Could not prepare the photo canvas.');
-    context.filter = CAMERA_FILTERS[filter].css;
+    context.filter = 'none';
     if (facingMode === 'user') {
       context.translate(canvas.width, 0);
       context.scale(-1, 1);
@@ -149,25 +214,63 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
     });
   };
 
-  const applyFilterToBlob = async (blob: Blob) => {
-    if (filter === 'natural') return blob;
-    const bitmap = await createImageBitmap(blob);
-    const canvas = canvasRef.current;
-    if (!canvas) return blob;
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const context = canvas.getContext('2d');
-    if (!context) return blob;
-    context.filter = CAMERA_FILTERS[filter].css;
-    context.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height);
-    bitmap.close();
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(nextBlob => nextBlob ? resolve(nextBlob) : reject(new Error('Could not apply the camera look.')), 'image/jpeg', 0.96);
-    });
+  const startUpload = async (file: File) => {
+    if (uploadInFlightRef.current) return;
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
+    uploadInFlightRef.current = true;
+    setPendingUploads(1);
+    setError('');
+    setStatus('Uploading securely to Drive…');
+    try {
+      const uploaded = await googleDriveService.uploadMedia(accessToken, file, folderId, controller.signal);
+      if (controller.signal.aborted) return;
+      setUploadedFile(uploaded);
+      onUploaded(uploaded);
+      setStatus('Photo saved to Drive and added to your live story.');
+    } catch (uploadError) {
+      if (controller.signal.aborted) {
+        setStatus('Upload paused while you review the photo.');
+      } else {
+        setError(uploadError instanceof Error ? `Drive upload failed: ${uploadError.message}` : 'Drive upload failed.');
+        setStatus('Upload paused. Review the photo, then resume.');
+      }
+    } finally {
+      uploadInFlightRef.current = false;
+      uploadAbortRef.current = null;
+      setPendingUploads(0);
+    }
+  };
+
+  const resumeUpload = (file: File, attempt = 0) => {
+    if (!uploadInFlightRef.current) {
+      void startUpload(file);
+      return;
+    }
+    if (attempt < 40) window.setTimeout(() => resumeUpload(file, attempt + 1), 50);
+  };
+
+  const pauseUpload = () => {
+    if (uploadAbortRef.current) uploadAbortRef.current.abort();
+    if (!uploadedFile) setStatus('Upload paused while you review the photo.');
+  };
+
+  const openReview = () => {
+    pauseUpload();
+    setReviewOpen(true);
+    setShowLastShot(true);
+  };
+
+  const closeReview = () => {
+    setReviewOpen(false);
+    setEditMode(false);
+    if (capturedPhoto && !uploadedFile) {
+      resumeUpload(capturedPhoto.file);
+    }
   };
 
   const capturePhoto = async () => {
-    if (!cameraReady || capturing) return;
+    if (!cameraReady || capturing || uploadInFlightRef.current) return;
     setCapturing(true);
     setError('');
     setStatus('Capturing high-quality photo…');
@@ -175,37 +278,94 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
       const rawBlob = imageCaptureRef.current
         ? await imageCaptureRef.current.takePhoto().catch(() => captureFromVideo())
         : await captureFromVideo();
-      const blob = await applyFilterToBlob(rawBlob);
+      const blob = await renderPhotoBlob(rawBlob, filter);
       const localPreviewUrl = URL.createObjectURL(blob);
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
       previewUrlRef.current = localPreviewUrl;
+      const photo = { sourceBlob: rawBlob, file: blobToFile(blob), url: localPreviewUrl };
+      setCapturedPhoto(photo);
+      setUploadedFile(null);
       setPreviewUrl(localPreviewUrl);
+      setEditFilter(filter);
+      setEditRotation(0);
       setShowLastShot(true);
-      setStatus('Uploading securely to Drive…');
-      const file = new File([blob], `memoriya-${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`, { type: 'image/jpeg' });
-      setCapturing(false);
-      pendingUploadsRef.current += 1;
-      setPendingUploads(pendingUploadsRef.current);
-      void googleDriveService.uploadMedia(accessToken, file, folderId)
-        .then(uploaded => {
-          onUploaded(uploaded);
-          setError('');
-          setStatus('Photo saved locally and added to your live Drive story.');
-        })
-        .catch(uploadError => {
-          setError(uploadError instanceof Error ? `Photo is safe locally, but Drive upload failed: ${uploadError.message}` : 'Photo is safe locally, but Drive upload failed.');
-          setStatus('Ready for another photo.');
-        })
-        .finally(() => {
-          pendingUploadsRef.current = Math.max(0, pendingUploadsRef.current - 1);
-          setPendingUploads(pendingUploadsRef.current);
-        });
-      setStatus('Upload started - you can capture another photo.');
+      setReviewOpen(false);
+      void startUpload(photo.file);
     } catch (captureError) {
       setError(captureError instanceof Error ? captureError.message : 'Photo capture failed.');
       setStatus('Ready to try again.');
     } finally {
       setCapturing(false);
+    }
+  };
+
+  const deletePhoto = async () => {
+    if (!capturedPhoto) return;
+    pauseUpload();
+    try {
+      if (uploadedFile) {
+        await googleDriveService.deleteMedia(accessToken, uploadedFile.id);
+        onDeleted?.(uploadedFile.id);
+      }
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = '';
+      setPreviewUrl('');
+      setCapturedPhoto(null);
+      setUploadedFile(null);
+      setReviewOpen(false);
+      setEditMode(false);
+      setStatus('Photo deleted. Ready for another memory.');
+      setError('');
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Could not delete the photo from Drive.');
+    }
+  };
+
+  const saveEdit = async () => {
+    if (!capturedPhoto || capturing) return;
+    setCapturing(true);
+    setError('');
+    pauseUpload();
+    try {
+      if (uploadedFile) {
+        await googleDriveService.deleteMedia(accessToken, uploadedFile.id);
+        onDeleted?.(uploadedFile.id);
+      }
+      const blob = await renderPhotoBlob(capturedPhoto.sourceBlob, editFilter, editRotation);
+      const localPreviewUrl = URL.createObjectURL(blob);
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = localPreviewUrl;
+      const photo = { sourceBlob: capturedPhoto.sourceBlob, file: blobToFile(blob), url: localPreviewUrl };
+      setCapturedPhoto(photo);
+      setUploadedFile(null);
+      setPreviewUrl(localPreviewUrl);
+      setFilter(editFilter);
+      setEditMode(false);
+      setStatus('Edited photo ready. Uploading the new version…');
+      resumeUpload(photo.file);
+    } catch (editError) {
+      setError(editError instanceof Error ? editError.message : 'Could not save the edit.');
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  const sharePhoto = async () => {
+    if (!capturedPhoto || !navigator.share) {
+      setStatus('Sharing is not available in this browser.');
+      return;
+    }
+    try {
+      const shareData: ShareData = {
+        files: [capturedPhoto.file],
+        title: 'Memoriya memory',
+        text: 'A new memory from Memoriya',
+      };
+      if (navigator.canShare && !navigator.canShare(shareData)) throw new Error('This browser cannot share photos.');
+      await navigator.share(shareData);
+    } catch (shareError) {
+      if (shareError instanceof DOMException && shareError.name === 'AbortError') return;
+      setStatus(shareError instanceof Error ? shareError.message : 'Could not share this photo.');
     }
   };
 
@@ -226,13 +386,18 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
     <div className="memoriya-camera-overlay" role="dialog" aria-modal="true" aria-label="Drive camera">
       <section className="memoriya-camera-panel">
         <header>
-          <div><span className="memoriya-kicker"><Camera size={15} /> Drive camera</span><h2>Capture a new memory</h2></div>
+          <div><span className="memoriya-kicker"><Camera size={15} /> Mobile camera</span><h2>Capture a new memory</h2></div>
           <button type="button" onClick={onClose} aria-label="Close camera"><X size={20} /></button>
         </header>
         <div className="memoriya-camera-viewfinder">
           <video ref={videoRef} muted playsInline autoPlay style={{ filter: CAMERA_FILTERS[filter].css, transform: facingMode === 'user' ? 'scaleX(-1)' : undefined }} />
           {!cameraReady && <div className="memoriya-camera-status"><Loader2 className="memoriya-spin-icon" size={28} /><span>{error || status}</span></div>}
-          {previewUrl && showLastShot && <img className="memoriya-camera-last-shot" src={previewUrl} alt="Last captured memory" />}
+          {previewUrl && showLastShot && (
+            <button type="button" className="memoriya-camera-last-shot-button" onClick={openReview} aria-label="Review last captured photo">
+              <img src={previewUrl} alt="Last captured memory" />
+              <span>Review</span>
+            </button>
+          )}
           {gridEnabled && <div className="memoriya-camera-grid" aria-hidden="true" />}
           <div className="memoriya-camera-viewfinder-tools">
             {previewUrl && <button type="button" onClick={() => setShowLastShot(value => !value)}>{showLastShot ? 'Live' : 'Last photo'}</button>}
@@ -261,8 +426,37 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onClose 
           </select>
         </label>
         <p className={`memoriya-camera-message ${error ? 'is-error' : ''}`}>{error || status}</p>
-        {pendingUploads > 0 && <p className="memoriya-camera-saved"><Loader2 size={15} className="memoriya-spin-icon" /> {pendingUploads} upload{pendingUploads === 1 ? '' : 's'} running in background</p>}
-        {previewUrl && !capturing && !error && pendingUploads === 0 && <p className="memoriya-camera-saved"><Check size={15} /> Latest photo is saved locally and in your connected Drive.</p>}
+        {pendingUploads > 0 && <p className="memoriya-camera-saved"><Loader2 size={15} className="memoriya-spin-icon" /> Uploading securely in the background</p>}
+        {uploadedFile && !reviewOpen && <p className="memoriya-camera-saved"><Check size={15} /> Latest photo is saved to Drive and your live story.</p>}
+        {reviewOpen && capturedPhoto && (
+          <div className="memoriya-camera-review" role="dialog" aria-label="Review captured photo">
+            <div className="memoriya-camera-review-header">
+              <div><span className="memoriya-kicker">Memory review</span><strong>Keep this moment?</strong></div>
+              <button type="button" onClick={closeReview} aria-label="Close photo review"><X size={19} /></button>
+            </div>
+            <div className="memoriya-camera-review-preview">
+              <img src={capturedPhoto.url} alt="Captured memory preview" style={{ filter: CAMERA_FILTERS[editMode ? editFilter : 'natural'].css, transform: `rotate(${editRotation}deg)` }} />
+            </div>
+            <div className="memoriya-camera-review-actions">
+              <button type="button" onClick={() => void deletePhoto()} disabled={capturing}><Trash2 size={17} /> Delete</button>
+              <button type="button" onClick={() => setEditMode(value => !value)} disabled={capturing}><Edit3 size={17} /> Edit</button>
+              <button type="button" onClick={() => void sharePhoto()} disabled={capturing}><Share2 size={17} /> Share</button>
+            </div>
+            {editMode && (
+              <div className="memoriya-camera-edit-tools">
+                <label>Look
+                  <select value={editFilter} onChange={event => setEditFilter(event.target.value as CameraFilter)}>
+                    {Object.entries(CAMERA_FILTERS).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
+                  </select>
+                </label>
+                <button type="button" onClick={() => setEditRotation(value => (value + 90) % 360)}><RotateCcw size={16} /> Rotate</button>
+                <button type="button" className="memoriya-camera-save-edit" onClick={() => void saveEdit()} disabled={capturing}><Check size={16} /> Save edit</button>
+              </div>
+            )}
+            <p>{uploadedFile ? 'Saved to Drive. Your story is up to date.' : 'Upload is paused while you review this photo.'}</p>
+            <button type="button" className="memoriya-camera-review-done" onClick={closeReview}>{uploadedFile ? 'Done' : 'Resume upload'}</button>
+          </div>
+        )}
         <canvas ref={canvasRef} className="hidden" />
       </section>
     </div>

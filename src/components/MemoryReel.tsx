@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, X } from 'lucide-react';
+import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import type { Memory } from '../data/memories';
 import { googleDriveService, type DriveAudioFile } from '../services/googleDriveService';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
@@ -12,12 +12,38 @@ export interface MemoryReelTitle {
   big?: string;
 }
 
+export type MemoryReelTemplate =
+  | 'orbit'
+  | 'cinema'
+  | 'filmstrip'
+  | 'polaroid'
+  | 'mosaic'
+  | 'spotlight'
+  | 'super8'
+  | 'dreamscape'
+  | 'scrapbook'
+  | 'neon-grid';
+
+export const MEMORY_REEL_TEMPLATES: Array<{ id: MemoryReelTemplate; name: string; description: string }> = [
+  { id: 'orbit', name: 'Cinematic Memory Orbit', description: 'The original floating 3D wall with depth and camera movement.' },
+  { id: 'cinema', name: 'Wide Cinema', description: 'A full-frame director cut with a slow, elegant Ken Burns drift.' },
+  { id: 'filmstrip', name: 'Filmstrip Journey', description: 'A living horizontal reel that keeps nearby moments in view.' },
+  { id: 'polaroid', name: 'Polaroid Afterglow', description: 'Warm stacked prints that feel like a memory journal.' },
+  { id: 'mosaic', name: 'Memory Mosaic', description: 'A modern gallery grid that lets the whole archive breathe.' },
+  { id: 'spotlight', name: 'Spotlight Premiere', description: 'One hero moment under a soft theater light.' },
+  { id: 'super8', name: 'Super 8 Dream', description: 'A nostalgic film look with warm grain and vintage color.' },
+  { id: 'dreamscape', name: 'Dreamscape Dissolve', description: 'Soft, slow transitions for intimate and emotional stories.' },
+  { id: 'scrapbook', name: 'Editorial Scrapbook', description: 'Layered cards and paper tones inspired by a travel journal.' },
+  { id: 'neon-grid', name: 'Neon Memory Gallery', description: 'A vivid midnight gallery with luminous edges and energy.' },
+];
+
 interface ReelSource {
   id: string;
   src: string;
   fallbackSrc?: string;
   driveFileId?: string;
   authToken?: string;
+  rotation?: number;
   type: 'image' | 'video';
   label: string;
 }
@@ -26,6 +52,7 @@ interface MemoryReelProps {
   memories: Memory[];
   title?: MemoryReelTitle;
   audio?: string;
+  template?: MemoryReelTemplate;
   autoPlay?: boolean;
   loop?: boolean;
   hasMore?: boolean;
@@ -42,6 +69,7 @@ interface MemoryReelOptions {
   items: ReelSource[];
   title?: MemoryReelTitle;
   audio?: string;
+  template?: MemoryReelTemplate;
   hold?: number;
   move?: number;
   loop?: boolean;
@@ -101,6 +129,10 @@ export class MemoryReelController {
   private audio?: HTMLAudioElement;
   private audioQueue: string[] = [];
   private audioIndex = 0;
+  private audioContext?: AudioContext;
+  private audioAnalyser?: AnalyserNode;
+  private audioSource?: MediaElementAudioSourceNode;
+  private audioData?: Uint8Array<ArrayBuffer>;
   private objectUrls = new Set<string>();
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
@@ -112,6 +144,7 @@ export class MemoryReelController {
       move: 1.2,
       loop: false,
       reducedMotion: false,
+      template: 'orbit',
       ...options,
     };
     this.world = Object.assign(document.createElement('div'), { className: 'world' });
@@ -125,6 +158,7 @@ export class MemoryReelController {
     this.poster.onclick = () => this.play();
     this.el.innerHTML = '';
     this.el.append(this.world, this.ambient, vignette, this.titleEl, this.progressEl, tap, this.poster);
+    this.applyTemplateClass();
     if (this.options.audio) this.setAudio(this.options.audio);
 
     this.resizeObserver = typeof ResizeObserver !== 'undefined'
@@ -249,6 +283,8 @@ export class MemoryReelController {
       if (isVideo) {
         const video = document.createElement('video');
         Object.assign(video, { src: item.src, muted: true, loop: true, playsInline: true, preload: 'auto' });
+        video.defaultMuted = true;
+        video.volume = 0;
         video.className = 'm';
         video.onloadedmetadata = () => finish({ node: video, video, aspect: video.videoWidth / video.videoHeight || 1.6 });
         video.onerror = () => finish(null);
@@ -256,7 +292,13 @@ export class MemoryReelController {
         const image = new Image();
         image.className = 'm';
         image.decoding = 'async';
-        image.onload = () => finish({ node: image, aspect: image.naturalWidth / image.naturalHeight || 1.5 });
+        image.style.imageOrientation = 'from-image';
+        image.onload = () => {
+          const aspect = image.naturalWidth / image.naturalHeight || 1.5;
+          const isQuarterTurn = ((item.rotation || 0) / 90) % 2 === 1;
+          if (item.rotation) image.style.rotate = `${item.rotation}deg`;
+          finish({ node: image, aspect: isQuarterTurn ? 1 / aspect : aspect });
+        };
         image.onerror = () => {
           if (item.fallbackSrc && !attemptedFallback) {
             attemptedFallback = true;
@@ -310,6 +352,69 @@ export class MemoryReelController {
     this.scale = this.el.clientHeight > 0 ? this.el.clientHeight / 720 : 1;
   }
 
+  setTemplate(template: MemoryReelTemplate) {
+    this.options.template = template;
+    this.applyTemplateClass();
+    this.render(this.elapsed);
+  }
+
+  private applyTemplateClass() {
+    MEMORY_REEL_TEMPLATES.forEach(item => this.el.classList.remove(`memory-reel-template-${item.id}`));
+    this.el.classList.add(`memory-reel-template-${this.options.template || 'orbit'}`);
+  }
+
+  private playMutedVideo(video: HTMLVideoElement) {
+    video.muted = true;
+    video.defaultMuted = true;
+    video.volume = 0;
+    void video.play().catch(() => undefined);
+  }
+
+  private connectAudioAnalysis() {
+    if (!this.audio) return;
+    const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) return;
+
+    try {
+      this.audioSource?.disconnect();
+      this.audioAnalyser?.disconnect();
+      this.audioContext ||= new AudioContextConstructor();
+      const analyser = this.audioContext.createAnalyser();
+      analyser.fftSize = 64;
+      analyser.smoothingTimeConstant = 0.82;
+      const source = this.audioContext.createMediaElementSource(this.audio);
+      source.connect(analyser);
+      analyser.connect(this.audioContext.destination);
+      this.audioSource = source;
+      this.audioAnalyser = analyser;
+      this.audioData = new Uint8Array(analyser.frequencyBinCount);
+    } catch {
+      // Cross-origin audio may not expose an analyser. Keep normal playback
+      // working and let the visualizer use its gentle time-based fallback.
+      this.audioSource = undefined;
+      this.audioAnalyser = undefined;
+      this.audioData = undefined;
+    }
+  }
+
+  private disconnectAudioAnalysis() {
+    this.audioSource?.disconnect();
+    this.audioAnalyser?.disconnect();
+    this.audioSource = undefined;
+    this.audioAnalyser = undefined;
+    this.audioData = undefined;
+  }
+
+  private readAudioLevel() {
+    if (!this.audio || this.audio.paused) return 0;
+    if (this.audioAnalyser && this.audioData) {
+      this.audioAnalyser.getByteFrequencyData(this.audioData);
+      const average = this.audioData.reduce((sum, value) => sum + value, 0) / this.audioData.length / 255;
+      return Math.min(1, average * 1.8);
+    }
+    return 0.05 + Math.abs(Math.sin(this.audio.currentTime * 5.2)) * 0.08;
+  }
+
   play() {
     if (!this.cards.length || this.destroyed || !this.paused && this.raf) return;
     if (this.elapsed >= this.total) this.elapsed = 0;
@@ -356,6 +461,8 @@ export class MemoryReelController {
       return false;
     }
     try {
+      if (!this.audioContext && navigator.userActivation?.isActive) this.connectAudioAnalysis();
+      if (this.audioContext?.state === 'suspended') await this.audioContext.resume();
       await this.audio.play();
       this.options.onAudioStateChange?.(true);
       return true;
@@ -408,10 +515,12 @@ export class MemoryReelController {
       this.audio.onended = null;
       this.audio.src = '';
     }
+    this.disconnectAudioAnalysis();
     this.audio = this.audioQueue.length ? new Audio(this.audioQueue[this.audioIndex]) : undefined;
     if (this.audio) {
       this.audio.loop = false;
       this.audio.onended = () => this.advanceAudio();
+      if (this.audioContext) this.connectAudioAnalysis();
     }
     if (shouldResume) void this.playAudio();
     else this.options.onAudioStateChange?.(false);
@@ -435,9 +544,11 @@ export class MemoryReelController {
       this.audio.pause();
       this.audio.onended = null;
     }
+    this.disconnectAudioAnalysis();
     this.audio = new Audio(this.audioQueue[this.audioIndex]);
     this.audio.loop = false;
     this.audio.onended = () => this.advanceAudio();
+    if (this.audioContext) this.connectAudioAnalysis();
     if (shouldResume) void this.playAudio();
     else this.options.onAudioStateChange?.(false);
   }
@@ -454,6 +565,9 @@ export class MemoryReelController {
     if (this.resizeHandler) window.removeEventListener('resize', this.resizeHandler);
     this.pauseAudio();
     if (this.audio) this.audio.onended = null;
+    this.disconnectAudioAnalysis();
+    void this.audioContext?.close().catch(() => undefined);
+    this.audioContext = undefined;
     this.audio = undefined;
     this.world.innerHTML = '';
     this.cards = [];
@@ -480,6 +594,9 @@ export class MemoryReelController {
     const step = hold + move;
     const count = this.cards.length;
     if (!count) return;
+    const audioLevel = this.readAudioLevel();
+    const audioScale = 1 + audioLevel * 0.035;
+    this.ambient.style.opacity = (0.68 + audioLevel * 0.16).toFixed(3);
 
     let shot = Math.min(count - 1, Math.floor(time / step));
     let local = time - shot * step;
@@ -488,6 +605,13 @@ export class MemoryReelController {
     let progress = 1;
     let dip = 0;
     let holdProgress = 0;
+    this.el.style.setProperty('--reel-active', String(shot));
+    this.cards.forEach((card, index) => {
+      card.card.classList.toggle('is-active', index === shot);
+      card.card.style.setProperty('--reel-offset', `${(index - shot) * 34}vw`);
+      card.card.style.setProperty('--reel-angle', `${((index % 5) - 2) * 3}deg`);
+      card.card.style.setProperty('--reel-depth', `${Math.min(Math.abs(index - shot) * 18, 120)}px`);
+    });
 
     if (shot === 0 && local < hold) {
       holdProgress = local / hold;
@@ -504,13 +628,13 @@ export class MemoryReelController {
 
     if (this.options.reducedMotion) {
       const visibleShot = shot > 0 && local < move && progress < 0.5 ? shot - 1 : shot;
-      this.world.style.transform = `scale(${this.scale}) translate3d(0,0,0)`;
+      this.world.style.transform = `scale(${this.scale * audioScale}) translate3d(0,0,0)`;
       this.cards.forEach((card, index) => {
         card.card.style.transform = `translate3d(${-card.width / 2}px,${-card.height / 2}px,0)`;
         card.card.style.opacity = index === visibleShot ? '1' : '0';
         card.card.style.filter = 'none';
         if (card.video) {
-          if (index === visibleShot && !this.paused) void card.video.play().catch(() => undefined);
+          if (index === visibleShot && !this.paused) this.playMutedVideo(card.video);
           else card.video.pause();
         }
       });
@@ -524,7 +648,7 @@ export class MemoryReelController {
       };
       const push = 100 + clamp(holdProgress, 0, 1) * 180 - dip * 360;
       const sway = Math.sin(time * 0.7) * 3 * (1 - dip);
-      this.world.style.transform = `scale(${this.scale}) translate3d(0,0,${push}px) rotateY(${-6 + sway}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${-camera.x}px,${-camera.y}px,${-camera.z}px)`;
+      this.world.style.transform = `scale(${this.scale * audioScale}) translate3d(0,0,${push}px) rotateY(${-6 + sway}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${-camera.x}px,${-camera.y}px,${-camera.z}px)`;
       const flyBlur = dip * 5;
       let focusedIndex = 0;
       let focusedDistance = Number.POSITIVE_INFINITY;
@@ -541,7 +665,7 @@ export class MemoryReelController {
         card.card.style.filter = (blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : '') + (near ? '' : ' brightness(.9)');
         if (card.video) {
           const active = near && !this.paused;
-          if (active && card.video.paused) void card.video.play().catch(() => undefined);
+          if (active && card.video.paused) this.playMutedVideo(card.video);
           else if (!active && !card.video.paused) card.video.pause();
         }
       });
@@ -580,6 +704,7 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal, drive
       fallbackSrc: authenticatedFallback,
       driveFileId: memory.driveFileId,
       authToken: memory.authToken || driveAccessToken,
+      rotation: memory.orientation,
       type: video ? 'video' : 'image',
       label: memory.title,
     } satisfies ReelSource];
@@ -599,7 +724,9 @@ interface MusicQueueItem {
 const driveAudioUrl = (fileId: string, accessToken: string) =>
   `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&access_token=${encodeURIComponent(accessToken)}`;
 
-const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onClose }) => {
+const FULLSCREEN_CONTROLS_HIDE_DELAY = 3600;
+
+const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, template: initialTemplate = 'orbit', autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onClose }) => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<MemoryReelController | null>(null);
   const audioObjectUrlsRef = useRef<string[]>([]);
@@ -609,9 +736,12 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [progress, setProgress] = useState({ progress: 0, total: 0 });
   const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [titleDraft, setTitleDraft] = useState<MemoryReelTitle>({ line: title?.line || '', big: title?.big || '' });
   const [activeTitle, setActiveTitle] = useState<MemoryReelTitle | undefined>(title);
   const [musicOpen, setMusicOpen] = useState(false);
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [template, setTemplate] = useState<MemoryReelTemplate>(initialTemplate);
   const [musicQuery, setMusicQuery] = useState('');
   const [musicResults, setMusicResults] = useState<OpenSourceMusicTrack[]>([]);
   const [musicLoading, setMusicLoading] = useState(false);
@@ -626,6 +756,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
   const moreRequestedRef = useRef(false);
   const hasLoadedSourcesRef = useRef(false);
   const moreConfigRef = useRef({ hasMore, loadingMore, onNeedMore });
+  const fullscreenControlsTimerRef = useRef<number | null>(null);
+  const driveSongsRequestRef = useRef(false);
   moreConfigRef.current = { hasMore, loadingMore, onNeedMore };
 
   useEffect(() => {
@@ -666,6 +798,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
       audio: undefined,
       loop: loopEnabled,
       reducedMotion,
+      template,
       onProgress: (current, total) => {
         setProgress({ progress: current, total });
         const more = moreConfigRef.current;
@@ -683,6 +816,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
       controllerRef.current = null;
     };
   }, [audio, reducedMotion]);
+
+  useEffect(() => {
+    controllerRef.current?.setTemplate(template);
+  }, [template]);
 
   useEffect(() => {
     const controller = controllerRef.current;
@@ -715,6 +852,51 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
     document.addEventListener('fullscreenchange', onFullscreen);
     return () => document.removeEventListener('fullscreenchange', onFullscreen);
   }, []);
+
+  useEffect(() => {
+    const clearHideTimer = () => {
+      if (fullscreenControlsTimerRef.current !== null) {
+        window.clearTimeout(fullscreenControlsTimerRef.current);
+        fullscreenControlsTimerRef.current = null;
+      }
+    };
+
+    const scheduleHide = () => {
+      clearHideTimer();
+      if (fullscreen && playing) {
+        fullscreenControlsTimerRef.current = window.setTimeout(() => {
+          setFullscreenControlsVisible(false);
+          fullscreenControlsTimerRef.current = null;
+        }, FULLSCREEN_CONTROLS_HIDE_DELAY);
+      }
+    };
+
+    const revealControls = () => {
+      if (!fullscreen) return;
+      setFullscreenControlsVisible(true);
+      scheduleHide();
+    };
+
+    if (!fullscreen) {
+      clearHideTimer();
+      setFullscreenControlsVisible(true);
+      return clearHideTimer;
+    }
+
+    setFullscreenControlsVisible(true);
+    scheduleHide();
+    window.addEventListener('pointermove', revealControls, { passive: true });
+    window.addEventListener('pointerdown', revealControls, { passive: true });
+    window.addEventListener('touchstart', revealControls, { passive: true });
+    window.addEventListener('keydown', revealControls);
+    return () => {
+      clearHideTimer();
+      window.removeEventListener('pointermove', revealControls);
+      window.removeEventListener('pointerdown', revealControls);
+      window.removeEventListener('touchstart', revealControls);
+      window.removeEventListener('keydown', revealControls);
+    };
+  }, [fullscreen, playing]);
 
   useEffect(() => () => {
     audioObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
@@ -766,6 +948,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
       setMusicError('Connect Google Drive to load songs stored there.');
       return;
     }
+    if (driveSongsRequestRef.current) return;
+    driveSongsRequestRef.current = true;
     setDriveSongsLoading(true);
     setMusicError('');
     try {
@@ -774,8 +958,19 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
       setMusicError(error instanceof Error ? error.message : 'Drive songs could not be loaded.');
     } finally {
       setDriveSongsLoading(false);
+      driveSongsRequestRef.current = false;
     }
   };
+
+  useEffect(() => {
+    if (!driveAccessToken) {
+      setDriveSongs([]);
+      return undefined;
+    }
+    void loadDriveSongs();
+    const interval = window.setInterval(() => void loadDriveSongs(), 10000);
+    return () => window.clearInterval(interval);
+  }, [driveAccessToken]);
 
   const chooseDriveSong = (song: DriveAudioFile) => {
     if (!driveAccessToken) return;
@@ -838,7 +1033,13 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
   const openMusic = () => {
     const next = !musicOpen;
     setMusicOpen(next);
+    if (next) setTemplateOpen(false);
     if (next && driveAccessToken && !driveSongs.length && !driveSongsLoading) void loadDriveSongs();
+  };
+
+  const openTemplates = () => {
+    setTemplateOpen(value => !value);
+    setMusicOpen(false);
   };
 
   const toggleMusic = async () => {
@@ -862,7 +1063,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
           </button>
           <button type="button" onClick={() => controllerRef.current?.restart()} disabled={loading}><RotateCcw size={16} /> Replay</button>
           <button type="button" onClick={toggleFullscreen}><>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</> {fullscreen ? 'Exit' : 'Fullscreen'}</button>
-          <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Music2 size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : ''}</button>
+          <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Music2 size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : driveSongs.length ? `(${driveSongs.length} Drive)` : ''}</button>
+          <button type="button" className={templateOpen ? 'is-active' : ''} aria-expanded={templateOpen} onClick={openTemplates}><WandSparkles size={16} /> Template</button>
           {musicQueue.length > 0 && <button type="button" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}><Volume2 size={16} /> {audioPlaying ? 'Stop music' : 'Play music'}</button>}
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
             <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
@@ -870,7 +1072,11 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
           <button type="button" onClick={() => setLoopEnabled(value => !value)} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
           {onClose && <button type="button" className="memory-reel-close" onClick={onClose}><X size={17} /> Close</button>}
         </div>
-        <div className="memory-reel-fullscreen-controls" aria-label="Fullscreen story controls">
+        <div
+          className={`memory-reel-fullscreen-controls${fullscreenControlsVisible ? '' : ' is-hidden'}`}
+          aria-label="Fullscreen story controls"
+          aria-hidden={!fullscreenControlsVisible}
+        >
           <button type="button" onClick={() => playing ? controllerRef.current?.pause() : controllerRef.current?.play()} disabled={loading} aria-label={playing ? 'Pause story' : 'Play story'}>
             {playing ? <Pause size={19} /> : <Play size={19} />}
           </button>
@@ -887,6 +1093,11 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
         </div>
         {musicOpen && (
           <div className="memory-reel-music-panel">
+            {musicQueue.length > 0 && (
+              <button type="button" className="memory-reel-music-primary" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}>
+                <Volume2 size={16} /> {audioPlaying ? 'Stop music' : 'Play selected music'}
+              </button>
+            )}
             <div className="memory-reel-music-search">
               <input value={musicQuery} onChange={event => setMusicQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void searchMusic(); }} placeholder="Search free music…" />
               <button type="button" onClick={() => void searchMusic()} disabled={musicLoading}><Search size={15} /> {musicLoading ? 'Searching…' : 'Search'}</button>
@@ -929,6 +1140,28 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
                 <strong>{track.title}</strong><span>{track.artist}</span>
               </button>
             ))}
+          </div>
+        )}
+        {templateOpen && (
+          <div className="memory-reel-template-panel" aria-label="Choose a cinematic Story Mode template">
+            <div className="memory-reel-template-heading">
+              <div><WandSparkles size={16} /><strong>Choose your cinematic look</strong></div>
+              <span>{MEMORY_REEL_TEMPLATES.find(item => item.id === template)?.name}</span>
+            </div>
+            <div className="memory-reel-template-grid">
+              {MEMORY_REEL_TEMPLATES.map((item, index) => (
+                <button
+                  type="button"
+                  key={item.id}
+                  className={template === item.id ? 'is-active' : ''}
+                  onClick={() => setTemplate(item.id)}
+                  aria-pressed={template === item.id}
+                >
+                  <span className="memory-reel-template-number">{String(index + 1).padStart(2, '0')}</span>
+                  <span><strong>{item.name}</strong><small>{item.description}</small></span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>

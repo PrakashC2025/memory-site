@@ -10,6 +10,7 @@ export interface Memory {
   thumbnail: string;
   authToken?: string;
   driveFileId?: string;
+  orientation?: number;
   mimeType?: string;
   location?: string;
   emotion?: 'joy' | 'nostalgia' | 'love' | 'adventure' | 'friendship' | 'celebration' | 'farewell';

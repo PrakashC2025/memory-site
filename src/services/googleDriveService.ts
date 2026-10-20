@@ -17,6 +17,7 @@ export interface DriveMediaFile {
     time?: string;
     width?: number;
     height?: number;
+    rotation?: number;
     location?: { latitude: number; longitude: number };
   };
   videoMediaMetadata?: {
@@ -296,7 +297,7 @@ export class GoogleDriveService {
     return files;
   }
 
-  async uploadMedia(accessToken: string, file: File, folderId?: string): Promise<DriveMediaFile> {
+  async uploadMedia(accessToken: string, file: File, folderId?: string, signal?: AbortSignal): Promise<DriveMediaFile> {
     const boundary = `memoriya-${Date.now().toString(36)}`;
     const metadata: { name: string; mimeType: string; parents?: string[] } = {
       name: file.name || `memoriya-${Date.now()}.jpg`,
@@ -318,6 +319,7 @@ export class GoogleDriveService {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': `multipart/related; boundary=${boundary}`,
       },
+      signal,
       body,
     });
     if (!response.ok) {
@@ -329,6 +331,16 @@ export class GoogleDriveService {
       ...uploaded,
       thumbnailUrl: uploaded.thumbnailUrl || uploaded.thumbnailLink || uploaded.webContentLink || '',
     };
+  }
+
+  async deleteMedia(accessToken: string, fileId: string): Promise<void> {
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`Drive delete failed (${response.status}).`);
+    }
   }
 
   toMemory(file: DriveMediaFile, accessToken?: string): import('../data/memories').Memory {
@@ -351,6 +363,7 @@ export class GoogleDriveService {
       thumbnail: previewUrl,
       authToken: accessToken,
       driveFileId: file.id,
+      orientation: normalizeDriveRotation(file.imageMediaMetadata?.rotation),
       mimeType: file.mimeType,
       location: file.imageMediaMetadata?.location ? 'Drive GPS metadata' : undefined,
       tags: ['drive', isVideo ? 'video' : 'photo'],
@@ -367,6 +380,12 @@ export class GoogleDriveService {
     );
   }
 }
+
+export const normalizeDriveRotation = (rotation?: number) => {
+  if (!Number.isFinite(rotation)) return 0;
+  const quarterTurns = Math.round((rotation as number) / 90);
+  return (((quarterTurns % 4) + 4) % 4) * 90;
+};
 
 export const normalizeDriveDate = (value?: string) => {
   if (!value) return new Date().toISOString();

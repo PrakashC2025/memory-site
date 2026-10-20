@@ -2599,6 +2599,7 @@ input[type="number"]::-webkit-inner-spin-button {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  image-orientation: from-image;
   background: #090d16;
 }
 
@@ -2810,6 +2811,23 @@ input[type="number"]::-webkit-inner-spin-button {
   background: rgba(10, 13, 22, 0.86);
 }
 
+.memory-reel-music-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 42px;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid rgba(255, 208, 138, 0.4);
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(255, 208, 138, 0.2), rgba(242, 120, 137, 0.16));
+  color: #ffe3b4;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
 .memory-reel-upload { position: relative; overflow: hidden; }
 .memory-reel-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .memory-reel-drive-upload { border-color: rgba(54, 241, 205, 0.35); }
@@ -2910,6 +2928,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .memoriya-camera-panel {
+  position: relative;
   width: min(980px, 100%);
   padding: clamp(0.8rem, 3vw, 1.4rem);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -2954,18 +2973,48 @@ input[type="number"]::-webkit-inner-spin-button {
   background: #02040a;
 }
 
-.memoriya-camera-viewfinder video,
-.memoriya-camera-last-shot {
+.memoriya-camera-viewfinder video {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.memoriya-camera-last-shot {
+.memoriya-camera-last-shot-button {
   position: absolute;
-  inset: 0;
-  pointer-events: none;
+  left: 0.8rem;
+  bottom: 0.8rem;
+  z-index: 5;
+  display: grid;
+  width: 4rem;
+  height: 4rem;
+  padding: 0.16rem;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  border-radius: 1.1rem;
+  background: rgba(5, 7, 14, 0.76);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.memoriya-camera-last-shot-button img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 0.86rem;
+  object-fit: cover;
+}
+
+.memoriya-camera-last-shot-button span {
+  position: absolute;
+  right: 0.25rem;
+  bottom: 0.25rem;
+  padding: 0.16rem 0.28rem;
+  border-radius: 999px;
+  background: rgba(5, 7, 14, 0.78);
+  color: #fff;
+  font-size: 0.54rem;
+  font-weight: 900;
 }
 
 .memoriya-camera-viewfinder-tools {
@@ -3122,11 +3171,178 @@ input[type="number"]::-webkit-inner-spin-button {
 .memoriya-camera-settings input[type='range'] { width: 150px; accent-color: #ffd08a; }
 .memoriya-camera-settings output { min-width: 3rem; color: #fff; }
 
+.memoriya-camera-review {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  gap: 0.75rem;
+  padding: clamp(0.8rem, 3vw, 1.4rem);
+  border-radius: inherit;
+  background: linear-gradient(155deg, rgba(17, 22, 38, 0.99), rgba(4, 6, 13, 0.995));
+  color: #fff;
+}
+
+.memoriya-camera-review-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.memoriya-camera-review-header strong {
+  display: block;
+  margin-top: 0.22rem;
+  font-size: 1.05rem;
+}
+
+.memoriya-camera-review-header button,
+.memoriya-camera-review-actions button,
+.memoriya-camera-edit-tools button,
+.memoriya-camera-review-done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.38rem;
+  min-height: 2.65rem;
+  padding: 0.62rem 0.78rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.memoriya-camera-review-header button {
+  width: 2.45rem;
+  min-height: 2.45rem;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.memoriya-camera-review-preview {
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 1rem;
+  background: radial-gradient(circle at 50% 30%, rgba(255, 208, 138, 0.12), transparent 42%), #03050a;
+}
+
+.memoriya-camera-review-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 0.55rem;
+}
+
+.memoriya-camera-review-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.memoriya-camera-review-actions button:first-child {
+  color: #ffb0bc;
+  border-color: rgba(255, 176, 188, 0.26);
+}
+
+.memoriya-camera-edit-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.memoriya-camera-edit-tools label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.65rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.85rem;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.memoriya-camera-edit-tools select {
+  max-width: 6.8rem;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+}
+
+.memoriya-camera-edit-tools option { background: #111522; color: #fff; }
+.memoriya-camera-save-edit { color: #9bffec !important; }
+
+.memoriya-camera-review > p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.74rem;
+  text-align: center;
+}
+
+.memoriya-camera-review-done {
+  width: 100%;
+  border: 0;
+  background: linear-gradient(135deg, #ffd08a, #f27889);
+  color: #171316;
+}
+
+.memoriya-camera-launch { display: none; }
+
+@media (max-width: 899px) and (pointer: coarse) {
+  .memoriya-camera-launch { display: inline-flex; }
+}
+
 @media (max-width: 520px) {
   .memoriya-camera-overlay { padding: 0; place-items: stretch; }
   .memoriya-camera-panel { min-height: 100dvh; border: 0; border-radius: 0; display: flex; flex-direction: column; justify-content: center; }
   .memoriya-camera-viewfinder { aspect-ratio: 3 / 4; }
   .memoriya-camera-controls { margin-top: 1rem; }
+}
+
+@media (max-width: 899px) and (pointer: coarse) {
+  .memoriya-camera-overlay {
+    padding: 0;
+    place-items: stretch;
+  }
+
+  .memoriya-camera-panel {
+    width: 100%;
+    min-height: 100svh;
+    padding: max(0.8rem, env(safe-area-inset-top)) max(0.8rem, env(safe-area-inset-right)) max(0.8rem, env(safe-area-inset-bottom)) max(0.8rem, env(safe-area-inset-left));
+    border: 0;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .memoriya-camera-viewfinder {
+    aspect-ratio: 3 / 4;
+    max-height: 67svh;
+    border-radius: 1.35rem;
+  }
+
+  .memoriya-camera-controls { margin-top: 1rem; }
+  .memoriya-camera-shutter { width: 4.6rem; height: 4.6rem; }
+  .memoriya-camera-destination { margin-top: 0.8rem; }
+  .memoriya-camera-destination select { min-width: 0; max-width: 62%; }
+  .memoriya-camera-review { border-radius: 0; }
+}
+
+@media (min-width: 900px), (pointer: fine) {
+  .memoriya-camera-launch { display: none !important; }
 }
 
 .memoriya-story-launch,
@@ -8557,6 +8773,16 @@ textarea:focus-visible {
   box-shadow: 0 16px 55px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   transform: translateX(-50%);
   backdrop-filter: blur(18px) saturate(130%);
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 240ms ease, transform 240ms ease, visibility 240ms ease;
+}
+
+.memory-reel-shell:fullscreen .memory-reel-fullscreen-controls.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, 0.65rem);
 }
 
 .memory-reel-shell:fullscreen .memory-reel-fullscreen-controls button {
@@ -8591,4 +8817,313 @@ textarea:focus-visible {
     width: 2.8rem;
     height: 2.8rem;
   }
+}
+
+/* Cinematic template picker */
+.memory-reel-template-panel {
+  position: relative;
+  z-index: 25;
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(19, 23, 38, 0.96), rgba(8, 11, 20, 0.94));
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
+}
+
+.memory-reel-template-heading,
+.memory-reel-template-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.memory-reel-template-heading {
+  justify-content: space-between;
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 0.76rem;
+}
+
+.memory-reel-template-heading > div { color: #ffd08a; }
+.memory-reel-template-heading strong { color: #fff; font-size: 0.82rem; }
+
+.memory-reel-template-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.memory-reel-template-grid button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.6rem;
+  min-height: 78px;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+.memory-reel-template-grid button:hover,
+.memory-reel-template-grid button:focus-visible,
+.memory-reel-template-grid button.is-active {
+  border-color: rgba(255, 208, 138, 0.68);
+  background: linear-gradient(135deg, rgba(255, 208, 138, 0.16), rgba(229, 125, 171, 0.1));
+  box-shadow: 0 0 24px rgba(255, 208, 138, 0.12);
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.memory-reel-template-number {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid rgba(255, 208, 138, 0.3);
+  border-radius: 9px;
+  color: #ffd08a;
+  font-size: 0.7rem;
+  font-weight: 900;
+}
+
+.memory-reel-template-grid button span:last-child {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.memory-reel-template-grid strong {
+  overflow: hidden;
+  font-size: 0.76rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-reel-template-grid small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 0.66rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.memory-reel-shell:fullscreen .memory-reel-template-panel { display: none; }
+
+/* The ten looks share the same media loader and story timing, but each gets
+   its own composition so users can direct the same memories in a new mood. */
+.memory-reel-stage[class*="memory-reel-template-"] .world {
+  transition: transform 700ms cubic-bezier(.22, .61, .36, 1);
+}
+
+.memory-reel-stage.memory-reel-template-cinema .world,
+.memory-reel-stage.memory-reel-template-dreamscape .world,
+.memory-reel-stage.memory-reel-template-super8 .world,
+.memory-reel-stage.memory-reel-template-spotlight .world {
+  inset: 0 !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  transform: none !important;
+}
+
+.memory-reel-stage.memory-reel-template-cinema .card,
+.memory-reel-stage.memory-reel-template-dreamscape .card,
+.memory-reel-stage.memory-reel-template-super8 .card,
+.memory-reel-stage.memory-reel-template-spotlight .card {
+  left: 5% !important;
+  top: 5% !important;
+  width: 90% !important;
+  height: 90% !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: none !important;
+  opacity: 0 !important;
+  transition: opacity 900ms ease, filter 900ms ease, transform 900ms ease !important;
+}
+
+.memory-reel-stage.memory-reel-template-cinema .card.is-active,
+.memory-reel-stage.memory-reel-template-dreamscape .card.is-active,
+.memory-reel-stage.memory-reel-template-super8 .card.is-active,
+.memory-reel-stage.memory-reel-template-spotlight .card.is-active { opacity: 1 !important; }
+
+.memory-reel-stage.memory-reel-template-cinema .card.is-active > .m {
+  animation: memory-reel-ken-burns 10s ease-in-out infinite alternate;
+}
+
+.memory-reel-stage.memory-reel-template-cinema .ambient { opacity: 0.3 !important; filter: blur(32px) saturate(1.28) brightness(.7); }
+
+.memory-reel-stage.memory-reel-template-filmstrip .world {
+  inset: 0 !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  transform: none !important;
+}
+
+.memory-reel-stage.memory-reel-template-filmstrip .card {
+  left: 50% !important;
+  top: 50% !important;
+  width: min(29vw, 430px) !important;
+  height: 70% !important;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px !important;
+  transform: translate3d(calc(var(--reel-offset) - 50%), -50%, 0) rotateZ(var(--reel-angle)) !important;
+  opacity: 0.26 !important;
+}
+
+.memory-reel-stage.memory-reel-template-filmstrip .card.is-active {
+  z-index: 12;
+  border-color: rgba(255, 208, 138, 0.8);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), 0 0 36px rgba(255, 208, 138, 0.18);
+  transform: translate3d(-50%, -50%, 0) scale(1.08) !important;
+  opacity: 1 !important;
+}
+
+.memory-reel-stage.memory-reel-template-polaroid .world {
+  inset: 0 !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  transform: none !important;
+}
+
+.memory-reel-stage.memory-reel-template-polaroid .card {
+  left: 50% !important;
+  top: 50% !important;
+  width: min(54vw, 590px) !important;
+  height: 76% !important;
+  padding: 14px 14px 48px !important;
+  border-radius: 5px !important;
+  background: #f8f2e8 !important;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.52);
+  transform: translate3d(-50%, -50%, 0) rotate(var(--reel-angle)) translateY(var(--reel-depth)) scale(.74) !important;
+  opacity: 0.18 !important;
+}
+
+.memory-reel-stage.memory-reel-template-polaroid .card.is-active {
+  z-index: 12;
+  transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(1.04) !important;
+  opacity: 1 !important;
+}
+
+.memory-reel-stage.memory-reel-template-polaroid .card .m { border-radius: 2px; background: #e9dfd1; }
+.memory-reel-stage.memory-reel-template-polaroid .ambient { opacity: 0.32 !important; filter: blur(30px) sepia(.2) saturate(.8) brightness(.74); }
+
+.memory-reel-stage.memory-reel-template-mosaic .world,
+.memory-reel-stage.memory-reel-template-neon-grid .world,
+.memory-reel-stage.memory-reel-template-scrapbook .world {
+  inset: 4% !important;
+  left: 4% !important;
+  top: 4% !important;
+  width: 92% !important;
+  height: 92% !important;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: clamp(0.35rem, 1vw, 0.8rem);
+  align-content: center;
+  transform: none !important;
+}
+
+.memory-reel-stage.memory-reel-template-mosaic .card,
+.memory-reel-stage.memory-reel-template-neon-grid .card,
+.memory-reel-stage.memory-reel-template-scrapbook .card {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  width: auto !important;
+  height: auto !important;
+  min-height: 0;
+  aspect-ratio: 4 / 3;
+  transform: none !important;
+  opacity: 0.76 !important;
+}
+
+.memory-reel-stage.memory-reel-template-mosaic .card.is-active,
+.memory-reel-stage.memory-reel-template-neon-grid .card.is-active,
+.memory-reel-stage.memory-reel-template-scrapbook .card.is-active {
+  z-index: 8;
+  transform: scale(1.06) !important;
+  opacity: 1 !important;
+}
+
+.memory-reel-stage.memory-reel-template-mosaic .card.is-active { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.82), 0 18px 42px rgba(0, 0, 0, 0.46); }
+
+.memory-reel-stage.memory-reel-template-neon-grid { background: radial-gradient(circle at 50% 35%, #1c1036, #070914 62%, #020307); }
+.memory-reel-stage.memory-reel-template-neon-grid .card { border: 1px solid rgba(99, 248, 255, 0.32); box-shadow: 0 0 18px rgba(54, 241, 205, 0.08); }
+.memory-reel-stage.memory-reel-template-neon-grid .card.is-active { border-color: #63f8ff; box-shadow: 0 0 0 2px rgba(99, 248, 255, 0.48), 0 0 40px rgba(222, 91, 255, 0.38); }
+.memory-reel-stage.memory-reel-template-neon-grid .ambient { opacity: 0.22 !important; filter: blur(28px) saturate(1.7) brightness(.6); }
+
+.memory-reel-stage.memory-reel-template-scrapbook .world { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.memory-reel-stage.memory-reel-template-scrapbook .card { border: 8px solid #f5eee1; border-bottom-width: 28px; border-radius: 3px; background: #f5eee1; box-shadow: 0 16px 28px rgba(0, 0, 0, 0.38); }
+.memory-reel-stage.memory-reel-template-scrapbook .card:nth-child(3n + 1) { transform: rotate(-2deg) !important; }
+.memory-reel-stage.memory-reel-template-scrapbook .card:nth-child(3n + 2) { transform: rotate(1.5deg) !important; }
+.memory-reel-stage.memory-reel-template-scrapbook .card:nth-child(3n) { transform: rotate(3deg) !important; }
+.memory-reel-stage.memory-reel-template-scrapbook .card.is-active { transform: scale(1.08) rotate(0deg) !important; box-shadow: 0 0 0 2px #ffd08a, 0 22px 45px rgba(0, 0, 0, 0.5); }
+
+.memory-reel-stage.memory-reel-template-spotlight .card { left: 14% !important; top: 10% !important; width: 72% !important; height: 80% !important; filter: blur(7px) brightness(.45) !important; }
+.memory-reel-stage.memory-reel-template-spotlight .card.is-active { filter: none !important; transform: scale(1.02) !important; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55), 0 0 80px rgba(255, 208, 138, 0.28) !important; }
+.memory-reel-stage.memory-reel-template-spotlight .ambient { opacity: 0.52 !important; filter: blur(42px) saturate(.7) brightness(.5); }
+
+.memory-reel-stage.memory-reel-template-super8::after {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  content: '';
+  opacity: 0.26;
+  background: repeating-linear-gradient(0deg, rgba(255, 240, 194, 0.04) 0 1px, transparent 1px 4px), radial-gradient(circle at 30% 20%, rgba(255, 223, 153, 0.18), transparent 28%);
+  mix-blend-mode: screen;
+}
+
+.memory-reel-stage.memory-reel-template-super8 .card.is-active > .m { filter: sepia(.22) saturate(.85) contrast(1.12) brightness(.94); animation: memory-reel-film-jitter 5s steps(2, end) infinite; }
+.memory-reel-stage.memory-reel-template-super8 .ambient { opacity: 0.35 !important; filter: blur(35px) sepia(.42) saturate(.85) brightness(.58); }
+
+.memory-reel-stage.memory-reel-template-dreamscape .card.is-active { filter: saturate(.88) brightness(1.06) !important; transform: scale(1.03) !important; }
+.memory-reel-stage.memory-reel-template-dreamscape .card.is-active > .m { animation: memory-reel-dream-breathe 8s ease-in-out infinite alternate; }
+.memory-reel-stage.memory-reel-template-dreamscape .ambient { opacity: 0.4 !important; filter: blur(38px) saturate(1.35) brightness(.72); }
+
+@keyframes memory-reel-ken-burns {
+  from { transform: scale(1.02) translate3d(-1%, -0.5%, 0); }
+  to { transform: scale(1.1) translate3d(1%, 0.7%, 0); }
+}
+
+@keyframes memory-reel-film-jitter {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1.02); }
+  50% { transform: translate3d(0.4%, -0.2%, 0) scale(1.035); }
+}
+
+@keyframes memory-reel-dream-breathe {
+  from { transform: scale(1.02); filter: blur(0); }
+  to { transform: scale(1.08); filter: blur(.4px); }
+}
+
+@media (max-width: 900px) {
+  .memory-reel-template-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .memory-reel-stage.memory-reel-template-mosaic .world,
+  .memory-reel-stage.memory-reel-template-neon-grid .world { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .memory-reel-template-heading { align-items: flex-start; flex-direction: column; }
+  .memory-reel-template-grid { grid-template-columns: minmax(0, 1fr); }
+  .memory-reel-stage.memory-reel-template-mosaic .world,
+  .memory-reel-stage.memory-reel-template-neon-grid .world,
+  .memory-reel-stage.memory-reel-template-scrapbook .world { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.4rem; }
+  .memory-reel-stage.memory-reel-template-polaroid .card { width: 76% !important; height: 70% !important; }
+  .memory-reel-stage.memory-reel-template-filmstrip .card { width: 52vw !important; }
 }
