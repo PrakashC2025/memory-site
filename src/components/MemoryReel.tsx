@@ -872,6 +872,7 @@ interface MusicQueueItem {
 }
 
 const STORY_MUSIC_STORAGE_KEY = 'memoriya-story-music-v1';
+const STORY_TEMPLATE_STORAGE_KEY = 'memoriya-story-template-v1';
 
 interface StoredStoryMusic {
   driveSongs: DriveAudioFile[];
@@ -902,6 +903,18 @@ const writeStoredStoryMusic = (value: StoredStoryMusic) => {
   }
 };
 
+const readStoredStoryTemplate = (fallback: MemoryReelTemplate): MemoryReelTemplate => {
+  try {
+    const stored = window.localStorage.getItem(STORY_TEMPLATE_STORAGE_KEY) as MemoryReelTemplate | null;
+    return stored && MEMORY_REEL_TEMPLATES.some(item => item.id === stored) ? stored : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const buildDriveAudioUrl = (song: DriveAudioFile, token: string) =>
+  `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(song.id)}?alt=media&access_token=${encodeURIComponent(token)}`;
+
 const FULLSCREEN_CONTROLS_HIDE_DELAY = 3600;
 
 const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, template: initialTemplate = 'orbit', autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onDriveReconnect, onClose }) => {
@@ -922,7 +935,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [activeTitle, setActiveTitle] = useState<MemoryReelTitle | undefined>(title);
   const [musicOpen, setMusicOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
-  const [template, setTemplate] = useState<MemoryReelTemplate>(initialTemplate);
+  const [template, setTemplate] = useState<MemoryReelTemplate>(() => readStoredStoryTemplate(initialTemplate));
   const [musicQuery, setMusicQuery] = useState('');
   const [musicResults, setMusicResults] = useState<OpenSourceMusicTrack[]>([]);
   const [musicLoading, setMusicLoading] = useState(false);
@@ -962,18 +975,18 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         if (!savedTrack.cacheKey) return null;
         try {
           let blob = await readCachedStoryMedia(savedTrack.cacheKey);
+          let directDriveSource = '';
           if (!blob && savedTrack.driveFileId && driveAccessToken) {
             const song = stored.driveSongs.find(item => item.id === savedTrack.driveFileId);
             if (song) {
-              const result = await googleDriveService.downloadMediaFileWithReconnect(driveAccessToken, song.id);
-              if (result.accessToken !== driveAccessToken) saveDriveAccessToken(result.accessToken);
-              blob = normalizeDriveAudioBlob(result.blob, song);
-              void writeCachedStoryMedia(savedTrack.cacheKey, blob, blob.type);
+              // Restore the queue immediately even when IndexedDB is cold. The
+              // direct Drive source can play now and the cache can warm later.
+              directDriveSource = buildDriveAudioUrl(song, driveAccessToken);
             }
           }
-          if (!blob || !active) return null;
-          const src = URL.createObjectURL(blob);
-          audioObjectUrlsRef.current.push(src);
+          if ((!blob && !directDriveSource) || !active) return null;
+          const src = blob ? URL.createObjectURL(blob) : directDriveSource;
+          if (blob) audioObjectUrlsRef.current.push(src);
           return { ...savedTrack, src } satisfies MusicQueueItem;
         } catch {
           return null;
@@ -1082,6 +1095,11 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
   useEffect(() => {
     controllerRef.current?.setTemplate(template);
+    try {
+      window.localStorage.setItem(STORY_TEMPLATE_STORAGE_KEY, template);
+    } catch {
+      // Template persistence is optional; the current Story Mode remains active.
+    }
   }, [template]);
 
   useEffect(() => {
@@ -1253,6 +1271,21 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const driveAudioCacheKey = (song: DriveAudioFile) =>
     `drive-audio-${song.id}-${song.modifiedTime || 'current'}`;
 
+  const driveAudioUrl = (song: DriveAudioFile, token: string) =>
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(song.id)}?alt=media&access_token=${encodeURIComponent(token)}`;
+
+  const warmDriveAudioCache = async (song: DriveAudioFile, cacheKey: string, token: string) => {
+    if (await readCachedStoryMedia(cacheKey)) return;
+    try {
+      const result = await googleDriveService.downloadMediaFileWithReconnect(token, song.id);
+      const playableBlob = normalizeDriveAudioBlob(result.blob, song);
+      await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
+    } catch {
+      // The queue already has a direct authenticated source. Cache warming is
+      // best-effort so a slow Drive download can never block queue insertion.
+    }
+  };
+
   const chooseMusicTrack = async (track: OpenSourceMusicTrack) => {
     if (trackLoadingId) return;
     if (musicQueue.some(item => item.src === track.previewUrl || item.id === track.id)) return;
@@ -1296,7 +1329,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       setMusicError('');
     } catch {
       setAudioPlaying(false);
-      setMusicError('Tap Play music once to allow audio on this device.');
+      setMusicError(track.source === 'drive'
+        ? 'Drive audio could not play. Tap Reconnect Drive, then select the queued song again.'
+        : 'Tap Play music once to allow audio on this device.');
     }
   };
 
@@ -1361,10 +1396,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     }
   }, [driveAccessToken]);
 
-  const chooseDriveSong = async (song: DriveAudioFile) => {
+  const chooseDriveSong = (song: DriveAudioFile) => {
     if (!driveAccessToken) return;
     const trackId = `drive-audio-${song.id}`;
-    if (trackLoadingId) return;
     const existingTrack = musicQueue.find(item => item.driveFileId === song.id || item.id === trackId);
     if (existingTrack) {
       audioManuallyStoppedRef.current = true;
@@ -1377,44 +1411,27 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       setMusicError('');
       return;
     }
-    setTrackLoadingId(trackId);
     setMusicError('');
-    try {
-      const cacheKey = driveAudioCacheKey(song);
-      const cachedBlob = await readCachedStoryMedia(cacheKey);
-      let playableBlob: Blob;
-
-      if (cachedBlob) {
-        playableBlob = normalizeDriveAudioBlob(cachedBlob, song);
-      } else {
-        let result: { blob: Blob; accessToken: string };
-        try {
-          result = await googleDriveService.downloadMediaFileWithReconnect(driveAccessToken, song.id);
-        } catch (error) {
-          throw error;
-        }
-        if (result.accessToken !== driveAccessToken) saveDriveAccessToken(result.accessToken);
-        playableBlob = normalizeDriveAudioBlob(result.blob, song);
-        await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
-      }
-
-      const src = URL.createObjectURL(playableBlob);
-      audioObjectUrlsRef.current.push(src);
-      // Adding a Drive song must only add it to the queue. Playback is an
-      // explicit action from the queue or the Play music button.
-      audioManuallyStoppedRef.current = true;
-      audioPauseGuardRef.current = true;
-      audioPlayerRef.current?.pause();
-      audioPauseGuardRef.current = false;
-      setAudioPlaying(false);
-      setMusicName(song.name);
-      const selectedTrack = { id: trackId, src, label: song.name, source: 'drive', driveFileId: song.id, cacheKey } satisfies MusicQueueItem;
-      setMusicQueue(current => [selectedTrack, ...current.filter(item => item.driveFileId !== song.id && item.id !== trackId)]);
-    } catch (error) {
-      setMusicError(error instanceof Error ? `Drive audio could not be loaded: ${error.message}` : 'Drive audio could not be loaded.');
-    } finally {
-      setTrackLoadingId('');
-    }
+    const cacheKey = driveAudioCacheKey(song);
+    // Queue insertion is immediate. The authenticated Drive URL lets the
+    // native audio element start directly from the user's tap on mobile and
+    // TV, while the IndexedDB cache warms without blocking the UI.
+    const selectedTrack = {
+      id: trackId,
+      src: driveAudioUrl(song, driveAccessToken),
+      label: song.name,
+      source: 'drive',
+      driveFileId: song.id,
+      cacheKey,
+    } satisfies MusicQueueItem;
+    audioManuallyStoppedRef.current = true;
+    audioPauseGuardRef.current = true;
+    audioPlayerRef.current?.pause();
+    audioPauseGuardRef.current = false;
+    setAudioPlaying(false);
+    setMusicName(song.name);
+    setMusicQueue(current => [selectedTrack, ...current.filter(item => item.driveFileId !== song.id && item.id !== trackId)]);
+    void warmDriveAudioCache(song, cacheKey, driveAccessToken);
   };
 
   const uploadSongsToDrive = async (files: FileList | File[]) => {
@@ -1490,7 +1507,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
   const playStoryAudio = async () => {
     const element = audioPlayerRef.current;
-    const source = musicQueue[0]?.src;
+    const sourceTrack = musicQueue[0];
+    const source = sourceTrack?.src;
     if (!element || !source || audioManuallyStoppedRef.current) return false;
     if (element.src !== source) {
       audioPauseGuardRef.current = true;
@@ -1506,7 +1524,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       return true;
     } catch {
       setAudioPlaying(false);
-      setMusicError('Tap Play music once to allow audio on this device.');
+      setMusicError(sourceTrack?.source === 'drive'
+        ? 'Drive audio could not play. Tap Reconnect Drive, then select the queued song again.'
+        : 'Tap Play music once to allow audio on this device.');
       return false;
     }
   };
@@ -1605,7 +1625,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           onError={() => {
             setAudioLoading(false);
             setAudioPlaying(false);
-            setMusicError('This audio file was downloaded, but this browser or TV cannot decode its format. MP3, M4A/AAC, WAV, OGG, and Opus are the most compatible choices.');
+            setMusicError(musicQueue[0]?.source === 'drive'
+              ? 'Drive audio could not play. Tap Reconnect Drive, then select the queued song again.'
+              : 'This audio file was downloaded, but this browser or TV cannot decode its format. MP3, M4A/AAC, WAV, OGG, and Opus are the most compatible choices.');
           }}
         />
         <div
@@ -1644,7 +1666,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             <p className="memory-reel-music-note">Only photos and videos appear in the story. Songs are used as the audio queue. Drive is checked only when you press “Load Drive songs”.</p>
             {musicError && <div className="memory-reel-music-error" role="alert">
               <p>{musicError}</p>
-              {onDriveReconnect && /authorization expired|access was denied|reconnect google drive/i.test(musicError) && <button type="button" onClick={() => void onDriveReconnect()}>Reconnect Drive</button>}
+              {onDriveReconnect && /authorization expired|access was denied|reconnect(?: google)? drive|drive audio could not play/i.test(musicError) && <button type="button" onClick={() => void onDriveReconnect()}>Reconnect Drive</button>}
             </div>}
             {musicName && <p className="memory-reel-current-music">Now selected: {musicName}</p>}
             {musicQueue.length > 0 && (
@@ -1668,8 +1690,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               <div className="memory-reel-drive-songs">
                 <div className="memory-reel-music-heading">Songs stored in Drive</div>
                 {driveSongs.map(song => (
-                  <button type="button" className="memory-reel-track" key={song.id} onClick={() => void chooseDriveSong(song)} disabled={Boolean(trackLoadingId && trackLoadingId !== `drive-audio-${song.id}`)}>
-                    <strong>{trackLoadingId === `drive-audio-${song.id}` ? 'Loading audio…' : song.name}</strong>
+                  <button type="button" className="memory-reel-track" key={song.id} onClick={() => chooseDriveSong(song)}>
+                    <strong>{musicQueue.some(track => track.driveFileId === song.id) ? '✓ Queued · ' : ''}{song.name}</strong>
                   </button>
                 ))}
               </div>

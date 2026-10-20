@@ -98,7 +98,9 @@ export const cacheDriveMemories = (memories: Memory[], accessToken: string) => {
       thumbnailUrl: memory.thumbnail || '',
       createdTime: memory.date,
     } satisfies DriveMediaFile));
-  return cacheDriveMediaFiles(files, accessToken);
+  // Story Mode needs the original video locally so playback can start without
+  // waiting on a second Drive request after the cinematic reel opens.
+  return cacheDriveMediaFiles(files, accessToken, { includeVideos: true });
 };
 
 export const hydrateCachedDriveMemories = async (memories: Memory[]) => {
