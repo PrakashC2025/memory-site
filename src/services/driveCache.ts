@@ -1,5 +1,5 @@
 import type { Memory } from '../data/memories';
-import type { DriveMediaFile } from './googleDriveService';
+import { googleDriveService, type DriveMediaFile } from './googleDriveService';
 import { withMediaFetch } from '../utils/mediaQueue';
 
 const DB_NAME = 'memoriya-drive-cache-v1';
@@ -58,16 +58,12 @@ const downloadDriveMedia = async (file: DriveMediaFile, accessToken: string) => 
   const existing = await readCached(file.id);
   if (existing && existing.modifiedTime === file.modifiedTime) return;
   try {
-    const response = await withMediaFetch(() => fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}?alt=media`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      cache: 'force-cache',
-    }));
-    if (!response.ok) return;
+    const blob = await withMediaFetch(() => googleDriveService.downloadMediaFile(accessToken, file.id));
     await writeCached({
       id: file.id,
       modifiedTime: file.modifiedTime,
       mimeType: file.mimeType,
-      blob: await response.blob(),
+      blob,
     });
   } catch {
     // A cache miss must never prevent the live Drive story from playing.

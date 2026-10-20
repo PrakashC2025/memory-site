@@ -2,6 +2,7 @@ import type { Memory } from '../data/memories';
 
 export const DRIVE_SESSION_KEY = 'memoriya-drive-session-v1';
 export const DRIVE_MEMORIES_UPDATED_EVENT = 'memoriya-drive-memories-updated';
+export const DRIVE_ACCESS_TOKEN_UPDATED_EVENT = 'memoriya-drive-access-token-updated';
 
 interface DriveSessionSnapshot {
   accessToken: string;
@@ -77,6 +78,38 @@ export const saveDriveMemories = (memories: Memory[], accessToken: string, drive
     window.dispatchEvent(new CustomEvent(DRIVE_MEMORIES_UPDATED_EVENT));
   } catch {
     // Session storage is optional; IndexedDB remains the playback cache.
+  }
+};
+
+export const saveDriveAccessToken = (accessToken: string) => {
+  if (!accessToken) return;
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    const current = stored ? JSON.parse(stored) as Partial<DriveSessionSnapshot> : {};
+    const memories = (current.memories || []).map(memory => memory.driveFileId
+      ? { ...memory, authToken: accessToken }
+      : memory);
+    window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
+      ...current,
+      accessToken,
+      memories,
+      nextPageToken: current.nextPageToken || '',
+      importCount: current.importCount || memories.length,
+      savedAt: Date.now(),
+    }));
+    window.dispatchEvent(new CustomEvent(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, { detail: accessToken }));
+  } catch {
+    // A fresh token is still usable in the current request when storage is unavailable.
+  }
+};
+
+export const clearDriveSession = () => {
+  try {
+    window.sessionStorage.removeItem(DRIVE_SESSION_KEY);
+    window.dispatchEvent(new CustomEvent(DRIVE_MEMORIES_UPDATED_EVENT));
+    window.dispatchEvent(new CustomEvent(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, { detail: '' }));
+  } catch {
+    // Session storage is optional.
   }
 };
 

@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
-import { readDriveAccessToken, readDriveFolderId, readDriveFolders, readDriveMemories, saveDriveMemories } from '../services/driveLibrary';
-import { googleDriveService } from '../services/googleDriveService';
+import { DRIVE_ACCESS_TOKEN_UPDATED_EVENT, readDriveAccessToken, readDriveFolderId, readDriveFolders, readDriveMemories, saveDriveAccessToken, saveDriveMemories } from '../services/driveLibrary';
+import { googleDriveService, isDriveAuthorizationError } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, cacheDriveMemories, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
 
 interface StoryModeProps {
@@ -13,16 +13,18 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const localInputRef = useRef<HTMLInputElement>(null);
   const [localMemories, setLocalMemories] = useState<Memory[]>([]);
   const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
+  const [driveAccessToken, setDriveAccessToken] = useState(() => readDriveAccessToken());
   const [driveFolders, setDriveFolders] = useState<Array<{ id: string; name: string }>>(() => {
     const savedFolders = readDriveFolders();
     return readDriveAccessToken() ? [{ id: '', name: 'All My Drive photos' }, ...savedFolders] : [];
   });
   const [selectedFolderId, setSelectedFolderId] = useState(() => readDriveFolderId());
-  const [driveLoading, setDriveLoading] = useState(() => Boolean(readDriveAccessToken() && !readDriveMemories().length));
+  const [driveLoading, setDriveLoading] = useState(() => Boolean(driveAccessToken && !readDriveMemories().length));
   const [driveError, setDriveError] = useState('');
   const folderChangedRef = useRef(false);
   const objectUrlsRef = useRef<string[]>([]);
   const driveObjectUrlsRef = useRef<string[]>([]);
+  const driveTokenRefreshAtRef = useRef(0);
   const storyMemories = localMemories.length ? localMemories : driveMemories;
 
   useEffect(() => {
@@ -31,6 +33,19 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       objectUrlsRef.current = [];
       releaseCachedObjectUrls(driveObjectUrlsRef.current);
     };
+  }, []);
+
+  useEffect(() => {
+    const onTokenUpdated = (event: Event) => {
+      const token = (event as CustomEvent<string>).detail;
+      if (!token) return;
+      setDriveAccessToken(token);
+      setDriveMemories(current => current.map(memory => memory.driveFileId
+        ? { ...memory, authToken: token }
+        : memory));
+    };
+    window.addEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
+    return () => window.removeEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
   }, []);
 
   useEffect(() => {
@@ -43,12 +58,12 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         // unavailable or the short-lived access token needs renewal.
         setDriveFolders(current => current.length ? current : [{ id: '', name: 'All My Drive photos' }]);
       });
-  }, []);
+  }, [driveAccessToken]);
 
   useEffect(() => {
     const seed = folderChangedRef.current ? [] : readDriveMemories();
     folderChangedRef.current = false;
-    const token = seed[0]?.authToken || readDriveAccessToken();
+    let token = seed[0]?.authToken || readDriveAccessToken();
     const folderId = selectedFolderId;
     let active = true;
     let known = [...seed];
@@ -69,7 +84,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     if (token) void cacheDriveMemories(known, token).then(() => applyCached(known));
 
     const syncDrive = async () => {
-      if (!token || syncBusy) return;
+      if (syncBusy) return;
+      token = readDriveAccessToken() || token;
+      if (!token) return;
       syncBusy = true;
       setDriveError('');
       try {
@@ -102,7 +119,18 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
           }
           pageToken = page.nextPageToken || '';
         } while (pageToken && active);
-      } catch {
+      } catch (syncError) {
+        if (isDriveAuthorizationError(syncError) && Date.now() - driveTokenRefreshAtRef.current > 60000) {
+          driveTokenRefreshAtRef.current = Date.now();
+          try {
+            token = await googleDriveService.refreshAccessToken();
+            saveDriveAccessToken(token);
+            setDriveError('Drive session refreshed. New media will appear shortly.');
+            return;
+          } catch {
+            // Show the cached story and let the user reconnect from Memoriya.
+          }
+        }
         setDriveError('Drive is temporarily unavailable. Cached memories will keep playing.');
       } finally {
         syncBusy = false;
@@ -116,7 +144,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       active = false;
       window.clearInterval(interval);
     };
-  }, [selectedFolderId]);
+  }, [driveAccessToken, selectedFolderId]);
 
   const changeDriveFolder = (folderId: string) => {
     if (folderId === selectedFolderId) return;
@@ -129,7 +157,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   };
 
   const importLocalFiles = (files: FileList | null) => {
-    const mediaFiles = Array.from(files || []).filter(file => file.type.startsWith('image/'));
+    const mediaFiles = Array.from(files || []).filter(file =>
+      file.type.startsWith('image/') || file.type.startsWith('video/')
+    );
     if (!mediaFiles.length) return;
 
     objectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
@@ -138,6 +168,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     const now = new Date();
     const nextMemories = mediaFiles.map((file, index) => {
       const url = URL.createObjectURL(file);
+      const isVideo = file.type.startsWith('video/');
       objectUrlsRef.current.push(url);
       return {
         id: `local-${file.name}-${file.lastModified}-${index}`,
@@ -146,11 +177,11 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         date: new Date(file.lastModified || now.getTime()).toISOString(),
         year: new Date(file.lastModified || now.getTime()).getFullYear(),
         month: new Date(file.lastModified || now.getTime()).getMonth() + 1,
-        type: 'photo',
+        type: isVideo ? 'video' : 'photo',
         url,
-        thumbnail: url,
+        thumbnail: isVideo ? '' : url,
         mimeType: file.type,
-        tags: ['local', 'photo'],
+        tags: ['local', isVideo ? 'video' : 'photo'],
         event: 'Local Story',
       } satisfies Memory;
     });
@@ -162,7 +193,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     <input
       ref={localInputRef}
       type="file"
-      accept="image/*"
+      accept="image/*,video/*"
       multiple
       className="hidden"
       onChange={event => {
@@ -205,7 +236,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       <MemoryReel
         memories={storyMemories}
         title={{ line: storyMemories[0].event || 'Memoriya story', big: String(storyMemories[0].year) }}
-        driveAccessToken={readDriveAccessToken() || storyMemories[0].authToken}
+        driveAccessToken={driveAccessToken || storyMemories[0].authToken}
         driveFolderId={selectedFolderId}
         driveFolders={driveFolders}
         onDriveFolderChange={changeDriveFolder}

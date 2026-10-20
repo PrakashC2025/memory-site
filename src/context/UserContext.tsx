@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { User } from '../data/memories';
 import { authService, isFirebaseConfigured } from '../services/firebaseService';
+import { clearDriveSession, readDriveAccessToken, saveDriveAccessToken } from '../services/driveLibrary';
+import { googleDriveService } from '../services/googleDriveService';
 
 const IDLE_TIMEOUT_MS = 60 * 60 * 1000;
 
@@ -57,12 +59,17 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     driveConnected: false,
     accessLevel: 'owner',
     memorySpaceId: firebaseUser.uid,
+    authProvider: firebaseUser.providerData.some(provider => provider.providerId === 'google.com') ? 'google' : 'password',
   }), []);
 
   const logout = useCallback(async () => {
     setAuthError('');
-    await authService.logout();
-    setUser(null);
+    try {
+      await authService.logout();
+    } finally {
+      clearDriveSession();
+      setUser(null);
+    }
   }, []);
 
   const resetIdleTimer = useCallback(() => {
@@ -81,8 +88,21 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return unsubscribe;
       }
       unsubscribe = authService.onChange(firebaseUser => {
-        setUser(firebaseUser ? mapFirebaseUser(firebaseUser) : null);
+        const nextUser = firebaseUser ? mapFirebaseUser(firebaseUser) : null;
+        setUser(nextUser);
         setAuthLoading(false);
+        if (!nextUser) {
+          clearDriveSession();
+          return;
+        }
+        // Firebase restores the Google session locally. If the Drive token was
+        // only stored in memory/session storage, silently restore the same
+        // Google account's Drive grant without asking the user to reconnect.
+        if (nextUser?.authProvider === 'google' && !readDriveAccessToken()) {
+          void googleDriveService.refreshAccessToken(nextUser.email)
+            .then(saveDriveAccessToken)
+            .catch(() => undefined);
+        }
       });
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Firebase authentication failed to initialize.');
@@ -131,7 +151,22 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signIn = (email: string, password: string) => runAuth(() => authService.signIn(email, password));
   const createAccount = (name: string, email: string, password: string) => runAuth(() => authService.createAccount(name, email, password));
-  const signInWithGoogle = () => runAuth(() => authService.signInWithGoogle());
+  const signInWithGoogle = async () => {
+    setAuthLoading(true);
+    setAuthError('');
+    try {
+      const result = await authService.signInWithGoogle();
+      if (user?.email && result.user.email && user.email !== result.user.email) clearDriveSession();
+      setUser(mapFirebaseUser(result.user));
+      googleDriveService.setLoginHint(result.user.email || undefined);
+      if (result.driveAccessToken) saveDriveAccessToken(result.driveAccessToken);
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Google authentication failed.');
+      throw error;
+    } finally {
+      setAuthLoading(false);
+    }
+  };
 
   return (
     <UserContext.Provider

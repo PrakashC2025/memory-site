@@ -40,6 +40,7 @@ export interface User {
   driveConnected?: boolean;
   accessLevel?: 'owner' | 'family' | 'friend' | 'viewer';
   memorySpaceId?: string;
+  authProvider?: 'google' | 'password';
 }
 
 // High-quality Unsplash images for demo

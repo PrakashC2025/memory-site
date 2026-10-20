@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import type { Memory } from '../data/memories';
-import { googleDriveService, type DriveAudioFile } from '../services/googleDriveService';
+import { googleDriveService, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
+import { saveDriveAccessToken } from '../services/driveLibrary';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
 import { readCachedDriveMedia } from '../services/driveCache';
 import { readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
@@ -289,7 +290,27 @@ export class MemoryReelController {
         video.volume = 0;
         video.className = 'm';
         video.onloadedmetadata = () => finish({ node: video, video, aspect: video.videoWidth / video.videoHeight || 1.6 });
-        video.onerror = () => finish(null);
+        video.onerror = () => {
+          if (item.driveFileId && item.authToken && !attemptedAuthenticated) {
+            attemptedAuthenticated = true;
+            void this.loadAuthenticatedDriveImage(item)
+              .then(objectUrl => {
+                if (!objectUrl) {
+                  finish(null);
+                  return;
+                }
+                if (finished) {
+                  this.releaseObjectUrl(objectUrl);
+                  return;
+                }
+                video.src = objectUrl;
+                video.load();
+              })
+              .catch(() => finish(null));
+            return;
+          }
+          finish(null);
+        };
       } else {
         const image = new Image();
         image.className = 'm';
@@ -336,14 +357,11 @@ export class MemoryReelController {
     const cacheKey = item.driveFileId;
     const driveCached = await readCachedDriveMedia(item.driveFileId);
     const cached = driveCached?.blob || await readCachedStoryMedia(cacheKey);
-    const blob = cached || await withMediaFetch(async () => {
-      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(item.driveFileId!)}?alt=media`, {
-        headers: { Authorization: `Bearer ${item.authToken}` },
-        cache: 'force-cache',
-      });
-      if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
-      return response.blob();
-    });
+    const result = cached
+      ? { blob: cached, accessToken: item.authToken }
+      : await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(item.authToken!, item.driveFileId!));
+    if (result.accessToken !== item.authToken) saveDriveAccessToken(result.accessToken);
+    const blob = result.blob;
     if (!cached) void writeCachedStoryMedia(cacheKey, blob, item.type === 'video' ? 'video/mp4' : blob.type);
     const objectUrl = URL.createObjectURL(blob);
     this.objectUrls.add(objectUrl);
@@ -773,6 +791,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [musicResults, setMusicResults] = useState<OpenSourceMusicTrack[]>([]);
   const [musicLoading, setMusicLoading] = useState(false);
   const [driveSongs, setDriveSongs] = useState<DriveAudioFile[]>([]);
+  const [driveSongsLoaded, setDriveSongsLoaded] = useState(false);
   const [driveSongsLoading, setDriveSongsLoading] = useState(false);
   const [driveUploadLoading, setDriveUploadLoading] = useState(false);
   const [musicError, setMusicError] = useState('');
@@ -811,6 +830,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       const videoSources = await resolveReelSources(videos, controller.signal, driveAccessToken);
       if (controller.signal.aborted) return;
       setResolvedSources(current => [...current, ...videoSources]);
+      // Resolve an empty input as a completed state too. This prevents the
+      // progress overlay from hanging when a live Drive folder is cleared or
+      // all of its media fails validation.
       if (!photoSources.length) setLoading(false);
     })();
     return () => {
@@ -953,13 +975,22 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   };
 
   const downloadRemoteAudio = async (source: string) => {
-    const response = await fetch(source);
-    if (!response.ok) throw new Error(`Audio source returned ${response.status}.`);
-    const blob = await response.blob();
-    if (!blob.size) throw new Error('The audio source returned an empty file.');
-    const objectUrl = URL.createObjectURL(blob);
-    audioObjectUrlsRef.current.push(objectUrl);
-    return objectUrl;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 20000);
+    try {
+      const response = await fetch(source, { signal: controller.signal });
+      if (!response.ok) throw new Error(`Audio source returned ${response.status}.`);
+      const blob = await response.blob();
+      if (!blob.size) throw new Error('The audio source returned an empty file.');
+      const objectUrl = URL.createObjectURL(blob);
+      audioObjectUrlsRef.current.push(objectUrl);
+      return objectUrl;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw new Error('Audio download took too long. Please try again.');
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   };
 
   const chooseMusicTrack = async (track: OpenSourceMusicTrack) => {
@@ -1007,12 +1038,14 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       let token = driveAccessToken;
       try {
         setDriveSongs(await googleDriveService.listAudioFiles(token));
+        setDriveSongsLoaded(true);
       } catch (error) {
-        if (!allowReconnect || !onDriveReconnect || !(error instanceof Error) || !/authorization expired|access was denied/i.test(error.message)) throw error;
+        if (!allowReconnect || !onDriveReconnect || !isDriveAuthorizationError(error)) throw error;
         const refreshedToken = await onDriveReconnect();
         if (!refreshedToken) throw error;
         token = refreshedToken;
         setDriveSongs(await googleDriveService.listAudioFiles(token));
+        setDriveSongsLoaded(true);
       }
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'Drive songs could not be loaded.');
@@ -1025,11 +1058,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   useEffect(() => {
     if (!driveAccessToken) {
       setDriveSongs([]);
-      return undefined;
+      setDriveSongsLoaded(false);
     }
-    void loadDriveSongs();
-    const interval = window.setInterval(() => void loadDriveSongs(), 10000);
-    return () => window.clearInterval(interval);
   }, [driveAccessToken]);
 
   const chooseDriveSong = async (song: DriveAudioFile) => {
@@ -1040,18 +1070,17 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setTrackLoadingId(trackId);
     setMusicError('');
     try {
-      let token = driveAccessToken;
-      let blob: Blob;
+      let result: { blob: Blob; accessToken: string };
       try {
-        blob = await googleDriveService.downloadMediaFile(token, song.id);
+        result = await googleDriveService.downloadMediaFileWithReconnect(driveAccessToken, song.id);
       } catch (error) {
-        if (!onDriveReconnect || !(error instanceof Error) || !/authorization expired|access was denied/i.test(error.message)) throw error;
+        if (!onDriveReconnect || !isDriveAuthorizationError(error)) throw error;
         const refreshedToken = await onDriveReconnect();
         if (!refreshedToken) throw error;
-        token = refreshedToken;
-        blob = await googleDriveService.downloadMediaFile(token, song.id);
+        result = { blob: await googleDriveService.downloadMediaFile(refreshedToken, song.id), accessToken: refreshedToken };
       }
-      const src = URL.createObjectURL(blob);
+      if (result.accessToken !== driveAccessToken) saveDriveAccessToken(result.accessToken);
+      const src = URL.createObjectURL(result.blob);
       audioObjectUrlsRef.current.push(src);
       setMusicName(song.name);
       setMusicQueue(current => current.some(item => item.driveFileId === song.id)
@@ -1075,8 +1104,18 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setMusicError('');
     try {
       const uploadedTracks: MusicQueueItem[] = [];
+      let token = driveAccessToken;
       for (const file of nextFiles) {
-        const uploaded = await googleDriveService.uploadMedia(driveAccessToken, file);
+        let uploaded: DriveAudioFile;
+        try {
+          uploaded = await googleDriveService.uploadMedia(token, file);
+        } catch (error) {
+          if (!onDriveReconnect || !isDriveAuthorizationError(error)) throw error;
+          const refreshedToken = await onDriveReconnect();
+          if (!refreshedToken) throw error;
+          token = refreshedToken;
+          uploaded = await googleDriveService.uploadMedia(token, file);
+        }
         const localSrc = URL.createObjectURL(file);
         audioObjectUrlsRef.current.push(localSrc);
         uploadedTracks.push({
@@ -1089,7 +1128,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       }
       setMusicName(uploadedTracks[0]?.label || '');
       setMusicQueue(current => [...current, ...uploadedTracks.filter(track => !current.some(item => item.driveFileId === track.driveFileId))]);
-      await loadDriveSongs();
+      await loadDriveSongs(true);
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'Song upload failed.');
     } finally {
@@ -1119,7 +1158,6 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const next = !musicOpen;
     setMusicOpen(next);
     if (next) setTemplateOpen(false);
-    if (next && driveAccessToken && !driveSongs.length && !driveSongsLoading) void loadDriveSongs();
   };
 
   const openTemplates = () => {
@@ -1209,7 +1247,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               <label className="memory-reel-upload memory-reel-drive-upload"><Upload size={15} /> {driveUploadLoading ? 'Uploading...' : 'Upload songs to Drive'}<input type="file" accept="audio/*" multiple disabled={driveUploadLoading || !driveAccessToken} onChange={event => { void uploadSongsToDrive(event.target.files || []); event.currentTarget.value = ''; }} /></label>
               {driveAccessToken && <button type="button" onClick={() => void loadDriveSongs(true)} disabled={driveSongsLoading}><Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : 'Load Drive songs'}</button>}
             </div>
-            <p className="memory-reel-music-note">Only photos and videos appear in the story. Songs are used as the audio queue.</p>
+            <p className="memory-reel-music-note">Only photos and videos appear in the story. Songs are used as the audio queue. Drive is checked only when you press “Load Drive songs”.</p>
             {musicError && <div className="memory-reel-music-error" role="alert">
               <p>{musicError}</p>
               {onDriveReconnect && /authorization expired|access was denied|reconnect google drive/i.test(musicError) && <button type="button" onClick={() => void onDriveReconnect()}>Reconnect Drive</button>}
@@ -1241,6 +1279,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
                   </button>
                 ))}
               </div>
+            )}
+            {driveAccessToken && driveSongsLoaded && !driveSongs.length && !musicError && (
+              <p className="memory-reel-music-note">No supported audio files were found in Drive. Upload an MP3, M4A, WAV, OGG, FLAC, AAC, or similar file, then press “Load Drive songs” again.</p>
             )}
             {musicResults.map(track => (
               <button type="button" className="memory-reel-track" key={track.id} onClick={() => void chooseMusicTrack(track)} disabled={Boolean(trackLoadingId && trackLoadingId !== track.id)}>

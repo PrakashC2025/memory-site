@@ -3256,6 +3256,22 @@ input[type="number"]::-webkit-inner-spin-button {
   border-radius: 0.55rem;
 }
 
+.memoriya-camera-review-preview.is-crop-square,
+.memoriya-camera-review-preview.is-crop-portrait,
+.memoriya-camera-review-preview.is-crop-landscape {
+  aspect-ratio: 1 / 1;
+}
+
+.memoriya-camera-review-preview.is-crop-portrait { aspect-ratio: 4 / 5; }
+.memoriya-camera-review-preview.is-crop-landscape { aspect-ratio: 16 / 9; }
+.memoriya-camera-review-preview.is-crop-square img,
+.memoriya-camera-review-preview.is-crop-portrait img,
+.memoriya-camera-review-preview.is-crop-landscape img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .memoriya-camera-review-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3354,6 +3370,119 @@ input[type="number"]::-webkit-inner-spin-button {
   .memoriya-camera-destination { margin-top: 0.8rem; }
   .memoriya-camera-destination select { min-width: 0; max-width: 62%; }
   .memoriya-camera-review { border-radius: 0; }
+
+  /* Mobile camera mode: the viewfinder owns the whole screen and controls
+     float above it like a native phone camera. */
+  .memoriya-camera-panel {
+    position: relative;
+    height: 100svh;
+    min-height: 100svh;
+    max-height: 100svh;
+    padding: 0;
+    overflow: hidden;
+    background: #020307;
+  }
+
+  .memoriya-camera-panel header {
+    position: absolute;
+    inset: max(0.8rem, env(safe-area-inset-top)) 0.8rem auto;
+    z-index: 30;
+    margin: 0;
+    padding: 0.65rem 0.75rem 0.65rem 0.9rem;
+    align-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 1.15rem;
+    background: rgba(3, 5, 12, 0.62);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(18px);
+  }
+
+  .memoriya-camera-panel header h2 { display: none; }
+  .memoriya-camera-panel header .memoriya-kicker { margin: 0; }
+
+  .memoriya-camera-viewfinder {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+    max-height: none;
+    aspect-ratio: auto;
+    border: 0;
+    border-radius: 0;
+    touch-action: none;
+  }
+
+  .memoriya-camera-viewfinder::after {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    content: '';
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.42), transparent 20%, transparent 68%, rgba(0, 0, 0, 0.58));
+  }
+
+  .memoriya-camera-viewfinder video { object-fit: cover; }
+  .memoriya-camera-viewfinder-tools { top: max(5.7rem, calc(env(safe-area-inset-top) + 4.8rem)); right: 0.95rem; bottom: auto; z-index: 10; }
+  .memoriya-camera-viewfinder-tools button { min-width: 2.7rem; min-height: 2.7rem; padding: 0.55rem; }
+  .memoriya-camera-viewfinder-tools button:first-child { padding-inline: 0.8rem; }
+
+  .memoriya-camera-last-shot-button { left: 1rem; bottom: 10.5rem; width: 3.7rem; height: 3.7rem; border-radius: 1rem; }
+
+  .memoriya-camera-controls {
+    position: absolute;
+    right: 0.9rem;
+    bottom: calc(8.4rem + env(safe-area-inset-bottom));
+    left: 0.9rem;
+    z-index: 12;
+    gap: 0.55rem;
+    margin: 0;
+    pointer-events: none;
+  }
+
+  .memoriya-camera-controls > button,
+  .memoriya-camera-filter { min-height: 3.15rem; padding: 0.55rem 0.7rem; border-color: rgba(255, 255, 255, 0.22); background: rgba(3, 5, 12, 0.68); backdrop-filter: blur(12px); pointer-events: auto; }
+  .memoriya-camera-controls > button { font-size: 0.72rem; }
+  .memoriya-camera-shutter { width: 5.15rem; height: 5.15rem; border-width: 5px !important; }
+  .memoriya-camera-filter { overflow: hidden; }
+  .memoriya-camera-filter select { max-width: 5.4rem; font-size: 0.72rem; }
+
+  .memoriya-camera-settings {
+    position: absolute;
+    right: 0.9rem;
+    bottom: calc(4.2rem + env(safe-area-inset-bottom));
+    left: 0.9rem;
+    z-index: 12;
+    justify-content: center;
+    margin: 0;
+    pointer-events: none;
+  }
+
+  .memoriya-camera-settings label,
+  .memoriya-camera-settings button { min-height: 2.35rem; padding: 0.45rem 0.7rem; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 999px; background: rgba(3, 5, 12, 0.66); backdrop-filter: blur(12px); pointer-events: auto; }
+  .memoriya-camera-settings label { min-width: 0; max-width: 100%; }
+  .memoriya-camera-settings input[type='range'] { width: min(42vw, 170px); }
+
+  .memoriya-camera-destination {
+    position: absolute;
+    right: 0.9rem;
+    bottom: calc(0.75rem + env(safe-area-inset-bottom));
+    left: 0.9rem;
+    z-index: 12;
+    margin: 0;
+    padding: 0.35rem 0.65rem 0.35rem 0.85rem;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 999px;
+    background: rgba(3, 5, 12, 0.64);
+    backdrop-filter: blur(12px);
+  }
+
+  .memoriya-camera-destination select { max-width: 65%; min-width: 0; padding: 0.4rem 0.55rem; border: 0; background: transparent; }
+  .memoriya-camera-message { position: absolute; right: 1rem; bottom: calc(12.3rem + env(safe-area-inset-bottom)); left: 1rem; z-index: 12; margin: 0; min-height: 1rem; font-size: 0.68rem; text-shadow: 0 1px 8px #000; pointer-events: none; }
+  .memoriya-camera-saved { position: absolute; right: 1rem; bottom: calc(14rem + env(safe-area-inset-bottom)); left: 1rem; z-index: 13; margin: 0; font-size: 0.68rem; pointer-events: none; }
+
+  .memoriya-camera-review { z-index: 40; padding: max(0.9rem, env(safe-area-inset-top)) 0.9rem max(0.9rem, env(safe-area-inset-bottom)); }
 }
 
 @media (min-width: 900px), (pointer: fine) {

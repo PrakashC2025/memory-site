@@ -33,6 +33,8 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import type { Memory } from '../data/memories';
+import { googleDriveService } from '../services/googleDriveService';
+import { saveDriveAccessToken } from '../services/driveLibrary';
 import { searchOpenSourceMusic } from '../services/openSourceMusic';
 import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 import { withMediaFetch } from '../utils/mediaQueue';
@@ -312,9 +314,6 @@ const isVideoMemory = (memory: Memory) => memory.type === 'video';
 const getDecorativeMemorySrc = (memory: Memory) => memory.thumbnail || (!isVideoMemory(memory) ? memory.url : '');
 
 const canFetchDriveMedia = (memory: Memory) => Boolean(memory.driveFileId && memory.authToken);
-
-const buildDriveMediaEndpoint = (memory: Memory) =>
-  memory.driveFileId ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(memory.driveFileId)}?alt=media` : '';
 
 const STORY_MUSIC_SUGGESTIONS = [
   { label: '96 Movie', query: '96 movie song' },
@@ -603,6 +602,7 @@ const MemoryLightbox: React.FC<Props> = ({
     if (!current || !canFetchDriveMedia(current)) return undefined;
 
     let objectUrl = '';
+    let cancelled = false;
     const controller = new AbortController();
 
     const loadDriveMedia = async () => {
@@ -610,7 +610,13 @@ const MemoryLightbox: React.FC<Props> = ({
         const cacheKey = getStoryMediaCacheKey(current);
         const cachedBlob = await readCachedStoryMedia(cacheKey);
         if (cachedBlob) {
+          if (cancelled) return;
           objectUrl = URL.createObjectURL(cachedBlob);
+          if (cancelled) {
+            URL.revokeObjectURL(objectUrl);
+            objectUrl = '';
+            return;
+          }
           setDriveObjectSrc(objectUrl);
           setMediaSrc(objectUrl);
           setMediaFailed(false);
@@ -618,19 +624,18 @@ const MemoryLightbox: React.FC<Props> = ({
           return;
         }
 
-        const endpoint = buildDriveMediaEndpoint(current);
-        if (!endpoint) return;
-        const blob = await withMediaFetch(async () => {
-          const response = await fetch(endpoint, {
-            headers: { Authorization: `Bearer ${current.authToken}` },
-            signal: controller.signal,
-            cache: 'force-cache',
-          });
-          if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
-          return response.blob();
-        });
+        if (!current.driveFileId || !current.authToken) return;
+        const result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(current.authToken!, current.driveFileId!, controller.signal), controller.signal);
+        if (result.accessToken !== current.authToken) saveDriveAccessToken(result.accessToken);
+        const blob = result.blob;
+        if (cancelled) return;
         void writeCachedStoryMedia(cacheKey, blob, current.mimeType || blob.type);
         objectUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(objectUrl);
+          objectUrl = '';
+          return;
+        }
         setDriveObjectSrc(objectUrl);
         setMediaSrc(objectUrl);
         setMediaFailed(false);
@@ -645,6 +650,7 @@ const MemoryLightbox: React.FC<Props> = ({
     void loadDriveMedia();
 
     return () => {
+      cancelled = true;
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
@@ -1838,7 +1844,11 @@ const MemoryLightbox: React.FC<Props> = ({
                         setMuted(true);
                         setStoryMusicPlaying(true);
                       }}
-                      onPause={() => setStoryMusicPlaying(false)}
+                    onPause={() => setStoryMusicPlaying(false)}
+                    onError={() => {
+                      setStoryMusicPlaying(false);
+                      emitToast('This song could not play in this browser. Try another result or a local file.');
+                    }}
                     onEnded={event => {
                       event.currentTarget.currentTime = 0;
                       playNextStoryTrack();

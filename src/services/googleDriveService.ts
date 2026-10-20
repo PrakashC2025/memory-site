@@ -51,6 +51,9 @@ export interface DriveAudioFile {
   modifiedTime?: string;
 }
 
+export const isDriveAuthorizationError = (error: unknown) =>
+  error instanceof Error && /authorization expired|access was denied|unauthorized|invalid credentials/i.test(error.message);
+
 // Read existing memories and allow the in-site camera to create new photos.
 // drive.file keeps write access limited to files created by Memoriya.
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
@@ -68,7 +71,7 @@ type GoogleTokenError = {
 };
 
 type GoogleTokenClient = {
-  requestAccessToken: (options?: { prompt?: string }) => void;
+  requestAccessToken: (options?: { prompt?: string; hint?: string }) => void;
 };
 
 declare global {
@@ -136,7 +139,14 @@ const fetchDriveJson = async <T,>(url: string, accessToken: string): Promise<T> 
 };
 
 export class GoogleDriveService {
-  async connect(): Promise<DriveConnectionState> {
+  private refreshPromise?: Promise<string>;
+  private loginHint = '';
+
+  setLoginHint(loginHint?: string) {
+    if (loginHint) this.loginHint = loginHint;
+  }
+
+  async connect(loginHint?: string): Promise<DriveConnectionState> {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
     if (!clientId) {
@@ -144,6 +154,7 @@ export class GoogleDriveService {
     }
 
     await loadScript(GOOGLE_SCRIPT_URL);
+    if (loginHint) this.loginHint = loginHint;
 
     return new Promise<DriveConnectionState>((resolve, reject) => {
       const oauth = window.google?.accounts?.oauth2;
@@ -196,7 +207,7 @@ export class GoogleDriveService {
       try {
         // Empty prompt skips the consent screen when the user has already granted
         // access, so reconnecting is instant. First-time connects still show consent.
-        tokenClient.requestAccessToken({ prompt: '' });
+        tokenClient.requestAccessToken({ prompt: '', hint: this.loginHint || undefined });
       } catch (err) {
         finish(() => reject(err instanceof Error ? err : new Error('Google Drive authorization failed.')));
       }
@@ -219,6 +230,8 @@ export class GoogleDriveService {
         pageSize: '40',
         orderBy: 'createdTime desc',
         fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
+        includeItemsFromAllDrives: 'true',
+        supportsAllDrives: 'true',
       });
       if (pageToken) params.set('pageToken', pageToken);
 
@@ -249,6 +262,8 @@ export class GoogleDriveService {
       pageSize: '40',
       orderBy: 'createdTime desc',
       fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
+      includeItemsFromAllDrives: 'true',
+      supportsAllDrives: 'true',
     });
     if (pageToken) params.set('pageToken', pageToken);
 
@@ -273,6 +288,8 @@ export class GoogleDriveService {
       pageSize: '100',
       orderBy: 'name',
       fields: 'files(id,name)',
+      includeItemsFromAllDrives: 'true',
+      supportsAllDrives: 'true',
     });
     const payload = await fetchDriveJson<{ files?: Array<{ id: string; name: string }> }>(
       `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
@@ -286,29 +303,54 @@ export class GoogleDriveService {
     let pageToken = '';
     do {
       const params = new URLSearchParams({
-        q: "(mimeType contains 'audio/' or name contains '.mp3' or name contains '.m4a' or name contains '.aac' or name contains '.ogg' or name contains '.oga' or name contains '.wav' or name contains '.flac') and trashed=false",
+        // Drive uploads are sometimes labelled application/octet-stream or have
+        // uppercase extensions, so fetch non-folder metadata and filter locally.
+        q: "trashed=false and mimeType != 'application/vnd.google-apps.folder'",
         pageSize: '100',
         orderBy: 'modifiedTime desc',
         fields: 'nextPageToken,files(id,name,mimeType,createdTime,modifiedTime)',
         spaces: 'drive',
         includeItemsFromAllDrives: 'true',
+        supportsAllDrives: 'true',
       });
       if (pageToken) params.set('pageToken', pageToken);
       const payload = await fetchDriveJson<{ nextPageToken?: string; files?: DriveAudioFile[] }>(
         `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
         accessToken,
       );
-      files.push(...(payload.files || []));
+      files.push(...(payload.files || []).filter(file =>
+        file.mimeType.toLowerCase().startsWith('audio/') ||
+        /\.(mp3|m4a|aac|ogg|oga|wav|flac|opus|webm|aiff|aif|mka)$/i.test(file.name)
+      ));
       pageToken = payload.nextPageToken || '';
     } while (pageToken);
     return files;
   }
 
-  async downloadMediaFile(accessToken: string, fileId: string): Promise<Blob> {
+  async refreshAccessToken(loginHint?: string): Promise<string> {
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.connect(loginHint || this.loginHint)
+        .then(state => {
+          if (!state.accessToken) throw new Error('Google Drive authorization returned no access token.');
+          return state.accessToken;
+        })
+        .finally(() => {
+          this.refreshPromise = undefined;
+        });
+    }
+    return this.refreshPromise;
+  }
+
+  async downloadMediaFile(accessToken: string, fileId: string, parentSignal?: AbortSignal): Promise<Blob> {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
+    const abortFromParent = () => controller.abort();
+    if (parentSignal) {
+      if (parentSignal.aborted) controller.abort();
+      else parentSignal.addEventListener('abort', abortFromParent, { once: true });
+    }
     try {
-      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {
+      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         signal: controller.signal,
       });
@@ -316,10 +358,10 @@ export class GoogleDriveService {
         if (response.status === 401 || response.status === 403) {
           throw new Error('Google Drive authorization expired. Reconnect Google Drive and try again.');
         }
-        throw new Error(`Drive audio could not be downloaded (${response.status}).`);
+        throw new Error(`Drive media could not be downloaded (${response.status}).`);
       }
       const blob = await response.blob();
-      if (!blob.size) throw new Error('Drive returned an empty audio file.');
+      if (!blob.size) throw new Error('Drive returned an empty media file.');
       return blob;
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
@@ -328,6 +370,17 @@ export class GoogleDriveService {
       throw error;
     } finally {
       window.clearTimeout(timeoutId);
+      parentSignal?.removeEventListener('abort', abortFromParent);
+    }
+  }
+
+  async downloadMediaFileWithReconnect(accessToken: string, fileId: string, parentSignal?: AbortSignal) {
+    try {
+      return { blob: await this.downloadMediaFile(accessToken, fileId, parentSignal), accessToken };
+    } catch (error) {
+      if (!isDriveAuthorizationError(error)) throw error;
+      const refreshedToken = await this.refreshAccessToken();
+      return { blob: await this.downloadMediaFile(refreshedToken, fileId, parentSignal), accessToken: refreshedToken };
     }
   }
 
@@ -347,33 +400,69 @@ export class GoogleDriveService {
       `\r\n--${boundary}--`,
     ], { type: `multipart/related; boundary=${boundary}` });
 
-    const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,createdTime,modifiedTime,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': `multipart/related; boundary=${boundary}`,
-      },
-      signal,
-      body,
-    });
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(detail || `Drive upload failed (${response.status}). Reconnect Drive with upload permission.`);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
+    const abortFromParent = () => controller.abort();
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener('abort', abortFromParent, { once: true });
     }
-    const uploaded = await response.json() as DriveMediaFile & { thumbnailLink?: string };
-    return {
-      ...uploaded,
-      thumbnailUrl: uploaded.thumbnailUrl || uploaded.thumbnailLink || uploaded.webContentLink || '',
-    };
+    try {
+      const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,createdTime,modifiedTime,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        signal: controller.signal,
+        body,
+      });
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error('Google Drive authorization expired. Reconnect Google Drive and try again.');
+        }
+        const detail = await response.text().catch(() => '');
+        throw new Error(detail || `Drive upload failed (${response.status}). Reconnect Drive with upload permission.`);
+      }
+      const uploaded = await response.json() as DriveMediaFile & { thumbnailLink?: string };
+      return {
+        ...uploaded,
+        thumbnailUrl: uploaded.thumbnailUrl || uploaded.thumbnailLink || uploaded.webContentLink || '',
+      };
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        if (signal?.aborted) throw error;
+        throw new Error('Drive upload took too long. Check your connection and try again.');
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', abortFromParent);
+    }
   }
 
   async deleteMedia(accessToken: string, fileId: string): Promise<void> {
-    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!response.ok && response.status !== 404) {
-      throw new Error(`Drive delete failed (${response.status}).`);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: controller.signal,
+      });
+      if (!response.ok && response.status !== 404) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error('Google Drive authorization expired. Reconnect Google Drive and try again.');
+        }
+        throw new Error(`Drive delete failed (${response.status}).`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Drive delete took too long. Check your connection and try again.');
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }
 

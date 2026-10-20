@@ -1,9 +1,9 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Check, Cloud, FolderOpen, Upload } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
-import { googleDriveService, type DriveConnectionState } from '../services/googleDriveService';
-import { readDriveAccessToken, readDriveMemories, saveDriveMemories } from '../services/driveLibrary';
+import { googleDriveService, isDriveAuthorizationError, type DriveConnectionState } from '../services/googleDriveService';
+import { DRIVE_ACCESS_TOKEN_UPDATED_EVENT, readDriveAccessToken, readDriveMemories, saveDriveMemories } from '../services/driveLibrary';
 
 const emptyState: DriveConnectionState = {
   connected: false,
@@ -29,10 +29,32 @@ const DriveConnectPanel: React.FC = () => {
     };
   });
 
+  useEffect(() => {
+    const onTokenUpdated = (event: Event) => {
+      const accessToken = (event as CustomEvent<string>).detail;
+      if (!accessToken) return;
+      setState(current => ({
+        ...current,
+        connected: true,
+        loading: false,
+        accessToken,
+        error: undefined,
+        message: 'Google Drive is ready from your Google sign-in.',
+      }));
+    };
+    window.addEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
+    return () => window.removeEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
+  }, []);
+
   const handleConnect = async () => {
     setState(current => ({ ...current, loading: true }));
     try {
       const next = await googleDriveService.connect();
+      if (next.accessToken) {
+        saveDriveMemories(readDriveMemories().map(memory => memory.driveFileId
+          ? { ...memory, authToken: next.accessToken }
+          : memory), next.accessToken);
+      }
       setState(next);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Google Drive connection failed.';
@@ -49,7 +71,7 @@ const DriveConnectPanel: React.FC = () => {
     const nextFiles = Array.from(files || []).filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
     if (!nextFiles.length) return;
 
-    const accessToken = state.accessToken || readDriveAccessToken();
+    let accessToken = state.accessToken || readDriveAccessToken();
     if (!accessToken) {
       setState(current => ({ ...current, error: 'Connect Google Drive before uploading media.' }));
       return;
@@ -60,7 +82,16 @@ const DriveConnectPanel: React.FC = () => {
     try {
       const uploaded = [];
       for (const file of nextFiles) {
-        uploaded.push(await googleDriveService.uploadMedia(accessToken, file));
+        try {
+          uploaded.push(await googleDriveService.uploadMedia(accessToken, file));
+        } catch (uploadError) {
+          if (!isDriveAuthorizationError(uploadError)) throw uploadError;
+          accessToken = await googleDriveService.refreshAccessToken();
+          saveDriveMemories(readDriveMemories().map(memory => memory.driveFileId
+            ? { ...memory, authToken: accessToken }
+            : memory), accessToken);
+          uploaded.push(await googleDriveService.uploadMedia(accessToken, file));
+        }
       }
       const currentMemories = readDriveMemories();
       const importedMemories = uploaded.map(file => googleDriveService.toMemory(file, accessToken));

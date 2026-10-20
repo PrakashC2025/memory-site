@@ -63,8 +63,16 @@ export const authService = {
     const provider = new GoogleAuthProvider();
     provider.addScope('email');
     provider.addScope('profile');
+    // Ask for Drive access as part of the same Google sign-in. The returned
+    // OAuth access token can be used by Memoriya without a second Drive button.
+    provider.addScope('https://www.googleapis.com/auth/drive.readonly');
+    provider.addScope('https://www.googleapis.com/auth/drive.file');
     const credential = await signInWithPopup(getFirebaseAuth(), provider);
-    return credential.user;
+    const googleCredential = GoogleAuthProvider.credentialFromResult(credential);
+    return {
+      user: credential.user,
+      driveAccessToken: googleCredential?.accessToken,
+    };
   },
 
   async logout() {

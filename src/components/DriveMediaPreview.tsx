@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Play } from 'lucide-react';
 import type { Memory } from '../data/memories';
 import { readCachedDriveMedia } from '../services/driveCache';
+import { googleDriveService } from '../services/googleDriveService';
+import { saveDriveAccessToken } from '../services/driveLibrary';
 import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 import { withMediaFetch } from '../utils/mediaQueue';
 
@@ -38,7 +40,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   }, [memory.id, memory.thumbnail, memory.url]);
 
   useEffect(() => {
-    const canUseDriveMedia = memory.type === 'photo' && Boolean(memory.authToken && memory.driveFileId);
+    const canUseDriveMedia = Boolean(memory.authToken && memory.driveFileId);
     if (!canUseDriveMedia || fallbackLoading || blobSrc || authAttemptedRef.current || (!eager && !failed)) return undefined;
     const controller = new AbortController();
     let cancelled = false;
@@ -49,15 +51,11 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
         const cacheKey = getStoryMediaCacheKey(memory);
         const driveCached = await readCachedDriveMedia(memory.driveFileId!);
         const cached = driveCached?.blob || await readCachedStoryMedia(cacheKey);
-        const blob = cached || await withMediaFetch(async () => {
-          const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(memory.driveFileId!)}?alt=media`, {
-            headers: { Authorization: `Bearer ${memory.authToken}` },
-            signal: controller.signal,
-            cache: 'force-cache',
-          });
-          if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
-          return response.blob();
-        });
+        const result = cached
+          ? { blob: cached, accessToken: memory.authToken! }
+          : await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(memory.authToken!, memory.driveFileId!, controller.signal), controller.signal);
+        if (result.accessToken !== memory.authToken) saveDriveAccessToken(result.accessToken);
+        const blob = result.blob;
         if (cancelled) return;
         if (!cached) void writeCachedStoryMedia(cacheKey, blob, memory.mimeType || blob.type);
         const objectUrl = URL.createObjectURL(blob);
@@ -91,7 +89,20 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
 
   return (
     <span className="drive-media-preview-wrap">
-      {!failed && src ? (
+      {memory.type === 'video' && !failed && src ? (
+        <video
+          src={src}
+          className={`${className} drive-media-preview`}
+          muted
+          playsInline
+          autoPlay
+          loop
+          preload="metadata"
+          onLoadedData={() => setLoaded(true)}
+          onError={tryNextImage}
+          style={loaded ? undefined : { opacity: 0.48 }}
+        />
+      ) : memory.type !== 'video' && !failed && src ? (
         <img
           src={src}
           alt={alt ?? memory.title}

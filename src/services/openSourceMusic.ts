@@ -20,6 +20,24 @@ interface ArchiveDoc {
 // browsers. Archive items often include a lossless FLAC first, even when an
 // MP3 or OGG version is available beside it.
 const AUDIO_EXTENSION_PATTERN = /\.(mp3|m4a|aac|ogg|oga|wav)$/i;
+const SEARCH_TIMEOUT_MS = 15000;
+
+const fetchJsonWithTimeout = async <T,>(url: string): Promise<T> => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error('Music search request failed.');
+    return await response.json() as T;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Music search took too long. Please try again.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
 
 const parseCreator = (creator?: string | string[]) =>
   Array.isArray(creator) ? creator.filter(Boolean).join(', ') : creator || 'Internet Archive';
@@ -37,23 +55,18 @@ export const searchOpenSourceMusic = async (query: string, limit = 8): Promise<O
     'sort[]': 'downloads desc',
   });
 
-  const response = await fetch(`https://archive.org/advancedsearch.php?${params.toString()}`);
-  if (!response.ok) throw new Error('Open-source music search failed.');
-
-  const payload = await response.json() as {
+  const payload = await fetchJsonWithTimeout<{
     response?: { docs?: ArchiveDoc[] };
-  };
+  }>(`https://archive.org/advancedsearch.php?${params.toString()}`);
   const docs = (payload.response?.docs || []).filter(doc => doc.identifier);
 
   // Resolve the first playable audio file for each item. Metadata calls run in
   // parallel and failures for individual items are ignored.
   const resolved = await Promise.all(docs.map(async doc => {
     try {
-      const metaResponse = await fetch(`https://archive.org/metadata/${encodeURIComponent(doc.identifier)}`);
-      if (!metaResponse.ok) return null;
-      const meta = await metaResponse.json() as {
+      const meta = await fetchJsonWithTimeout<{
         files?: Array<{ name: string }>;
-      };
+      }>(`https://archive.org/metadata/${encodeURIComponent(doc.identifier)}`);
       const audioFile = (meta.files || []).find(file =>
         AUDIO_EXTENSION_PATTERN.test(file.name) && !/files\.xml$/i.test(file.name)
       );

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Camera,
   Check,
+  Crop,
   Edit3,
   FlipHorizontal,
   Grid3X3,
@@ -14,7 +15,8 @@ import {
   X,
 } from 'lucide-react';
 import type { DriveMediaFile } from '../services/googleDriveService';
-import { googleDriveService } from '../services/googleDriveService';
+import { googleDriveService, isDriveAuthorizationError } from '../services/googleDriveService';
+import { saveDriveAccessToken } from '../services/driveLibrary';
 
 interface ImageCaptureLike {
   takePhoto: () => Promise<Blob>;
@@ -38,6 +40,8 @@ interface CapturedPhoto {
   url: string;
 }
 
+type CameraCrop = 'original' | 'square' | 'portrait' | 'landscape';
+
 const CAMERA_FILTERS = {
   natural: { label: 'Natural', css: 'none' },
   vivid: { label: 'Vivid', css: 'saturate(1.3) contrast(1.08) brightness(1.03)' },
@@ -59,6 +63,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
   const streamRef = useRef<MediaStream | null>(null);
   const trackRef = useRef<MediaStreamTrack | null>(null);
   const imageCaptureRef = useRef<ImageCaptureLike | null>(null);
+  const hardwareZoomRef = useRef(false);
+  const pinchStartDistanceRef = useRef(0);
+  const pinchStartZoomRef = useRef(1);
   const previewUrlRef = useRef('');
   const uploadAbortRef = useRef<AbortController | null>(null);
   const uploadInFlightRef = useRef(false);
@@ -71,6 +78,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
   const [editMode, setEditMode] = useState(false);
   const [editFilter, setEditFilter] = useState<CameraFilter>('natural');
   const [editRotation, setEditRotation] = useState(0);
+  const [editCrop, setEditCrop] = useState<CameraCrop>('original');
   const [showLastShot, setShowLastShot] = useState(false);
   const [gridEnabled, setGridEnabled] = useState(false);
   const [torchEnabled, setTorchEnabled] = useState(false);
@@ -136,17 +144,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
           zoom?: { min?: number; max?: number; step?: number };
           torch?: boolean;
         };
-        if (capabilities.zoom) {
-          const range = {
+        const range = capabilities.zoom
+          ? {
             min: capabilities.zoom.min ?? 1,
-            max: capabilities.zoom.max ?? 1,
+            max: Math.max(capabilities.zoom.max ?? 1, 1),
             step: capabilities.zoom.step ?? 0.1,
-          };
-          setZoomRange(range);
-          setZoom(range.min);
-        } else {
-          setZoomRange(null);
-        }
+          }
+          : { min: 1, max: 4, step: 0.1 };
+        hardwareZoomRef.current = Boolean(capabilities.zoom && range.max > range.min);
+        setZoomRange(range.max > range.min ? range : { min: 1, max: 4, step: 0.1 });
+        setZoom(1);
         setTorchAvailable(Boolean(capabilities.torch));
         const ImageCaptureConstructor = (window as unknown as { ImageCapture?: new (track: MediaStreamTrack) => ImageCaptureLike }).ImageCapture;
         imageCaptureRef.current = ImageCaptureConstructor ? new ImageCaptureConstructor(track) : null;
@@ -172,8 +179,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
   }, []);
 
-  const renderPhotoBlob = async (blob: Blob, nextFilter: CameraFilter, rotation = 0) => {
-    if (nextFilter === 'natural' && rotation % 360 === 0) return blob;
+  const renderPhotoBlob = async (blob: Blob, nextFilter: CameraFilter, rotation = 0, crop: CameraCrop = 'original') => {
+    if (nextFilter === 'natural' && rotation % 360 === 0 && crop === 'original') return blob;
     const bitmap = await createImageBitmap(blob);
     const canvas = canvasRef.current;
     if (!canvas) return blob;
@@ -190,8 +197,34 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
     context.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2, bitmap.width, bitmap.height);
     context.restore();
     bitmap.close();
+    if (crop === 'original') {
+      return await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(nextBlob => nextBlob ? resolve(nextBlob) : reject(new Error('Could not prepare the photo.')), 'image/jpeg', 0.96);
+      });
+    }
+    const aspect = crop === 'square' ? 1 : crop === 'portrait' ? 4 / 5 : 16 / 9;
+    let cropWidth = canvas.width;
+    let cropHeight = Math.round(cropWidth / aspect);
+    if (cropHeight > canvas.height) {
+      cropHeight = canvas.height;
+      cropWidth = Math.round(cropHeight * aspect);
+    }
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = cropWidth;
+    cropCanvas.height = cropHeight;
+    cropCanvas.getContext('2d')?.drawImage(
+      canvas,
+      Math.round((canvas.width - cropWidth) / 2),
+      Math.round((canvas.height - cropHeight) / 2),
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      cropWidth,
+      cropHeight,
+    );
     return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(nextBlob => nextBlob ? resolve(nextBlob) : reject(new Error('Could not prepare the photo.')), 'image/jpeg', 0.96);
+      cropCanvas.toBlob(nextBlob => nextBlob ? resolve(nextBlob) : reject(new Error('Could not prepare the cropped photo.')), 'image/jpeg', 0.96);
     });
   };
 
@@ -208,7 +241,11 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
       context.translate(canvas.width, 0);
       context.scale(-1, 1);
     }
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const sourceWidth = video.videoWidth / (hardwareZoomRef.current ? 1 : zoom);
+    const sourceHeight = video.videoHeight / (hardwareZoomRef.current ? 1 : zoom);
+    const sourceX = (video.videoWidth - sourceWidth) / 2;
+    const sourceY = (video.videoHeight - sourceHeight) / 2;
+    context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
     return await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not create the photo.')), 'image/jpeg', 0.96);
     });
@@ -223,7 +260,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
     setError('');
     setStatus('Uploading securely to Drive…');
     try {
-      const uploaded = await googleDriveService.uploadMedia(accessToken, file, folderId, controller.signal);
+      let token = accessToken;
+      let uploaded: DriveMediaFile;
+      try {
+        uploaded = await googleDriveService.uploadMedia(token, file, folderId, controller.signal);
+      } catch (uploadError) {
+        if (!isDriveAuthorizationError(uploadError)) throw uploadError;
+        token = await googleDriveService.refreshAccessToken();
+        saveDriveAccessToken(token);
+        uploaded = await googleDriveService.uploadMedia(token, file, folderId, controller.signal);
+      }
       if (controller.signal.aborted) return;
       setUploadedFile(uploaded);
       onUploaded(uploaded);
@@ -275,7 +321,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
     setError('');
     setStatus('Capturing high-quality photo…');
     try {
-      const rawBlob = imageCaptureRef.current
+      const rawBlob = imageCaptureRef.current && hardwareZoomRef.current
         ? await imageCaptureRef.current.takePhoto().catch(() => captureFromVideo())
         : await captureFromVideo();
       const blob = await renderPhotoBlob(rawBlob, filter);
@@ -288,6 +334,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
       setPreviewUrl(localPreviewUrl);
       setEditFilter(filter);
       setEditRotation(0);
+      setEditCrop('original');
       setShowLastShot(true);
       setReviewOpen(false);
       void startUpload(photo.file);
@@ -304,7 +351,15 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
     pauseUpload();
     try {
       if (uploadedFile) {
-        await googleDriveService.deleteMedia(accessToken, uploadedFile.id);
+        let token = accessToken;
+        try {
+          await googleDriveService.deleteMedia(token, uploadedFile.id);
+        } catch (deleteError) {
+          if (!isDriveAuthorizationError(deleteError)) throw deleteError;
+          token = await googleDriveService.refreshAccessToken();
+          saveDriveAccessToken(token);
+          await googleDriveService.deleteMedia(token, uploadedFile.id);
+        }
         onDeleted?.(uploadedFile.id);
       }
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
@@ -328,10 +383,18 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
     pauseUpload();
     try {
       if (uploadedFile) {
-        await googleDriveService.deleteMedia(accessToken, uploadedFile.id);
+        let token = accessToken;
+        try {
+          await googleDriveService.deleteMedia(token, uploadedFile.id);
+        } catch (deleteError) {
+          if (!isDriveAuthorizationError(deleteError)) throw deleteError;
+          token = await googleDriveService.refreshAccessToken();
+          saveDriveAccessToken(token);
+          await googleDriveService.deleteMedia(token, uploadedFile.id);
+        }
         onDeleted?.(uploadedFile.id);
       }
-      const blob = await renderPhotoBlob(capturedPhoto.sourceBlob, editFilter, editRotation);
+      const blob = await renderPhotoBlob(capturedPhoto.sourceBlob, editFilter, editRotation, editCrop);
       const localPreviewUrl = URL.createObjectURL(blob);
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
       previewUrlRef.current = localPreviewUrl;
@@ -370,9 +433,33 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
   };
 
   const changeZoom = (value: number) => {
-    setZoom(value);
+    const range = zoomRange || { min: 1, max: 4, step: 0.1 };
+    const next = Math.min(range.max, Math.max(range.min, value));
+    setZoom(next);
     const track = trackRef.current;
-    if (track) void track.applyConstraints({ advanced: [{ zoom: value } as MediaTrackConstraintSet] });
+    if (track && hardwareZoomRef.current) void track.applyConstraints({ advanced: [{ zoom: next } as MediaTrackConstraintSet] }).catch(() => undefined);
+  };
+
+  const pinchDistance = (touches: React.TouchList) => {
+    const [first, second] = [touches[0], touches[1]];
+    return Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+  };
+
+  const handlePinchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length < 2) return;
+    pinchStartDistanceRef.current = pinchDistance(event.touches);
+    pinchStartZoomRef.current = zoom;
+  };
+
+  const handlePinchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length < 2 || !pinchStartDistanceRef.current) return;
+    event.preventDefault();
+    const next = pinchStartZoomRef.current * (pinchDistance(event.touches) / pinchStartDistanceRef.current);
+    changeZoom(next);
+  };
+
+  const handlePinchEnd = () => {
+    pinchStartDistanceRef.current = 0;
   };
 
   const toggleTorch = () => {
@@ -389,8 +476,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
           <div><span className="memoriya-kicker"><Camera size={15} /> Mobile camera</span><h2>Capture a new memory</h2></div>
           <button type="button" onClick={onClose} aria-label="Close camera"><X size={20} /></button>
         </header>
-        <div className="memoriya-camera-viewfinder">
-          <video ref={videoRef} muted playsInline autoPlay style={{ filter: CAMERA_FILTERS[filter].css, transform: facingMode === 'user' ? 'scaleX(-1)' : undefined }} />
+        <div className="memoriya-camera-viewfinder" onTouchStart={handlePinchStart} onTouchMove={handlePinchMove} onTouchEnd={handlePinchEnd} onWheel={event => { if (zoomRange) changeZoom(zoom + (event.deltaY > 0 ? -0.1 : 0.1)); }}>
+          <video ref={videoRef} muted playsInline autoPlay style={{ filter: CAMERA_FILTERS[filter].css, transform: `${facingMode === 'user' ? 'scaleX(-1)' : ''}${!hardwareZoomRef.current ? ` scale(${zoom})` : ''}`.trim() || undefined }} />
           {!cameraReady && <div className="memoriya-camera-status"><Loader2 className="memoriya-spin-icon" size={28} /><span>{error || status}</span></div>}
           {previewUrl && showLastShot && (
             <button type="button" className="memoriya-camera-last-shot-button" onClick={openReview} aria-label="Review last captured photo">
@@ -434,7 +521,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
               <div><span className="memoriya-kicker">Memory review</span><strong>Keep this moment?</strong></div>
               <button type="button" onClick={closeReview} aria-label="Close photo review"><X size={19} /></button>
             </div>
-            <div className="memoriya-camera-review-preview">
+            <div className={`memoriya-camera-review-preview is-crop-${editMode ? editCrop : 'original'}`}>
               <img src={capturedPhoto.url} alt="Captured memory preview" style={{ filter: CAMERA_FILTERS[editMode ? editFilter : 'natural'].css, transform: `rotate(${editRotation}deg)` }} />
             </div>
             <div className="memoriya-camera-review-actions">
@@ -447,6 +534,14 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
                 <label>Look
                   <select value={editFilter} onChange={event => setEditFilter(event.target.value as CameraFilter)}>
                     {Object.entries(CAMERA_FILTERS).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
+                  </select>
+                </label>
+                <label><Crop size={16} /> Crop
+                  <select value={editCrop} onChange={event => setEditCrop(event.target.value as CameraCrop)}>
+                    <option value="original">Original</option>
+                    <option value="square">Square 1:1</option>
+                    <option value="portrait">Portrait 4:5</option>
+                    <option value="landscape">Landscape 16:9</option>
                   </select>
                 </label>
                 <button type="button" onClick={() => setEditRotation(value => (value + 90) % 360)}><RotateCcw size={16} /> Rotate</button>
