@@ -127,6 +127,7 @@ export class MemoryReelController {
   private paused = true;
   private total = 0;
   private audio?: HTMLAudioElement;
+  private audioElement?: HTMLAudioElement;
   private audioQueue: string[] = [];
   private audioIndex = 0;
   private audioContext?: AudioContext;
@@ -472,6 +473,26 @@ export class MemoryReelController {
     }
   }
 
+  setAudioElement(element: HTMLAudioElement | null) {
+    const wasPlaying = Boolean(this.audio && !this.audio.paused && !this.paused);
+    if (this.audio) {
+      this.audio.pause();
+      this.audio.onended = null;
+    }
+    this.disconnectAudioAnalysis();
+    this.audioElement = element || undefined;
+    this.audio = element || (this.audioQueue.length ? new Audio() : undefined);
+    if (this.audio) {
+      this.audio.preload = 'auto';
+      this.audio.loop = false;
+      this.audio.src = this.audioQueue[this.audioIndex] || '';
+      this.audio.onended = () => this.advanceAudio();
+      if (this.audio.src) this.audio.load();
+      if (this.audioContext && this.audio.src) this.connectAudioAnalysis();
+    }
+    if (wasPlaying) void this.playAudio();
+  }
+
   pauseAudio() {
     this.audio?.pause();
     this.options.onAudioStateChange?.(false);
@@ -516,10 +537,13 @@ export class MemoryReelController {
       this.audio.src = '';
     }
     this.disconnectAudioAnalysis();
-    this.audio = this.audioQueue.length ? new Audio(this.audioQueue[this.audioIndex]) : undefined;
+    this.audio = this.audioElement || (this.audioQueue.length ? new Audio() : undefined);
     if (this.audio) {
+      this.audio.preload = 'auto';
       this.audio.loop = false;
+      this.audio.src = this.audioQueue[this.audioIndex] || '';
       this.audio.onended = () => this.advanceAudio();
+      if (this.audio.src) this.audio.load();
       if (this.audioContext) this.connectAudioAnalysis();
     }
     if (shouldResume) void this.playAudio();
@@ -545,9 +569,12 @@ export class MemoryReelController {
       this.audio.onended = null;
     }
     this.disconnectAudioAnalysis();
-    this.audio = new Audio(this.audioQueue[this.audioIndex]);
+    this.audio = this.audioElement || new Audio();
+    this.audio.preload = 'auto';
+    this.audio.src = this.audioQueue[this.audioIndex];
     this.audio.loop = false;
     this.audio.onended = () => this.advanceAudio();
+    this.audio.load();
     if (this.audioContext) this.connectAudioAnalysis();
     if (shouldResume) void this.playAudio();
     else this.options.onAudioStateChange?.(false);
@@ -608,6 +635,7 @@ export class MemoryReelController {
     this.el.style.setProperty('--reel-active', String(shot));
     this.cards.forEach((card, index) => {
       card.card.classList.toggle('is-active', index === shot);
+      card.card.style.setProperty('--reel-index', String(index));
       card.card.style.setProperty('--reel-offset', `${(index - shot) * 34}vw`);
       card.card.style.setProperty('--reel-angle', `${((index % 5) - 2) * 3}deg`);
       card.card.style.setProperty('--reel-depth', `${Math.min(Math.abs(index - shot) * 18, 120)}px`);
@@ -729,6 +757,7 @@ const FULLSCREEN_CONTROLS_HIDE_DELAY = 3600;
 const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, template: initialTemplate = 'orbit', autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onClose }) => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<MemoryReelController | null>(null);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const audioObjectUrlsRef = useRef<string[]>([]);
   const [resolvedSources, setResolvedSources] = useState<ReelSource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -749,6 +778,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [driveSongsLoading, setDriveSongsLoading] = useState(false);
   const [driveUploadLoading, setDriveUploadLoading] = useState(false);
   const [musicError, setMusicError] = useState('');
+  const [audioLoading, setAudioLoading] = useState(false);
   const [musicName, setMusicName] = useState('');
   const [musicQueue, setMusicQueue] = useState<MusicQueueItem[]>(() => audio ? [{ id: 'initial-audio', src: audio, label: 'Background music' }] : []);
   const [loopEnabled, setLoopEnabled] = useState(loop);
@@ -811,6 +841,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       onAudioStateChange: setAudioPlaying,
     });
     controllerRef.current = controller;
+    controller.setAudioElement(audioPlayerRef.current);
     return () => {
       controller.destroy();
       controllerRef.current = null;
@@ -1047,7 +1078,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     if (!controller) return;
     const started = await controller.toggleAudio();
     if (!started && !audioPlaying && musicQueue.length) {
-      setMusicError('Tap Play music again to allow audio on this device.');
+      setMusicError(audioPlayerRef.current?.error
+        ? 'Drive could not play this file. Check the audio format and reconnect Drive if needed.'
+        : 'Tap Play music again to allow audio on this device.');
     } else if (started) {
       setMusicError('');
     }
@@ -1072,6 +1105,23 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           <button type="button" onClick={() => setLoopEnabled(value => !value)} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
           {onClose && <button type="button" className="memory-reel-close" onClick={onClose}><X size={17} /> Close</button>}
         </div>
+        <audio
+          ref={audioPlayerRef}
+          className={`memory-reel-audio-player${musicOpen && musicQueue.length ? ' is-visible' : ''}`}
+          controls
+          preload="metadata"
+          aria-label="Story music player"
+          onLoadStart={() => setAudioLoading(true)}
+          onWaiting={() => setAudioLoading(true)}
+          onCanPlay={() => setAudioLoading(false)}
+          onPlaying={() => { setAudioLoading(false); setAudioPlaying(true); }}
+          onPause={() => setAudioPlaying(false)}
+          onError={() => {
+            setAudioLoading(false);
+            setAudioPlaying(false);
+            setMusicError('Drive could not play this audio file. Check that it is a supported audio format and that Drive access is still connected.');
+          }}
+        />
         <div
           className={`memory-reel-fullscreen-controls${fullscreenControlsVisible ? '' : ' is-hidden'}`}
           aria-label="Fullscreen story controls"
@@ -1095,7 +1145,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           <div className="memory-reel-music-panel">
             {musicQueue.length > 0 && (
               <button type="button" className="memory-reel-music-primary" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}>
-                <Volume2 size={16} /> {audioPlaying ? 'Stop music' : 'Play selected music'}
+                <Volume2 size={16} /> {audioLoading ? 'Loading music…' : audioPlaying ? 'Stop music' : 'Play selected music'}
               </button>
             )}
             <div className="memory-reel-music-search">

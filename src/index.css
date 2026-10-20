@@ -2781,6 +2781,18 @@ input[type="number"]::-webkit-inner-spin-button {
   background: rgba(154, 42, 74, 0.42);
 }
 
+.memory-reel-audio-player {
+  position: relative;
+  z-index: 30;
+  display: none;
+  width: min(100%, 28rem);
+  height: 2.5rem;
+  margin: 0.25rem 0 0;
+  accent-color: #ffd08a;
+}
+
+.memory-reel-audio-player.is-visible { display: block; }
+
 .memory-reel-editor input,
 .memory-reel-music-search input {
   min-width: 150px;
@@ -8750,7 +8762,8 @@ textarea:focus-visible {
 .memory-reel-shell:fullscreen .memory-reel-toolbar,
 .memory-reel-shell:fullscreen .memory-reel-progress-text,
 .memory-reel-shell:fullscreen .memory-reel-editor,
-.memory-reel-shell:fullscreen .memory-reel-music-panel {
+.memory-reel-shell:fullscreen .memory-reel-music-panel,
+.memory-reel-shell:fullscreen .memory-reel-audio-player {
   display: none;
 }
 
@@ -8918,198 +8931,117 @@ textarea:focus-visible {
 
 .memory-reel-shell:fullscreen .memory-reel-template-panel { display: none; }
 
-/* The ten looks share the same media loader and story timing, but each gets
-   its own composition so users can direct the same memories in a new mood. */
-.memory-reel-stage[class*="memory-reel-template-"] .world {
-  transition: transform 700ms cubic-bezier(.22, .61, .36, 1);
-}
+/* Every look has a different camera language. The current memory is always
+   the sharp, elevated hero; nearby cards add context without covering it. */
+.memory-reel-stage[class*="memory-reel-template-"] .world { transition: transform 700ms cubic-bezier(.22, .61, .36, 1); }
+.memory-reel-stage[class*="memory-reel-template-"] .card { will-change: transform, opacity, filter; }
+.memory-reel-stage[class*="memory-reel-template-"] .card.is-active { z-index: 50 !important; opacity: 1 !important; filter: none !important; }
+.memory-reel-stage[class*="memory-reel-template-"] .card.is-active > .m { object-fit: contain; }
 
+/* 01 — Wide Cinema: a clean hero with a long editorial camera drift. */
 .memory-reel-stage.memory-reel-template-cinema .world,
 .memory-reel-stage.memory-reel-template-dreamscape .world,
 .memory-reel-stage.memory-reel-template-super8 .world,
 .memory-reel-stage.memory-reel-template-spotlight .world {
-  inset: 0 !important;
-  left: 0 !important;
-  top: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  transform: none !important;
+  inset: 0 !important; left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; transform: none !important;
 }
-
 .memory-reel-stage.memory-reel-template-cinema .card,
 .memory-reel-stage.memory-reel-template-dreamscape .card,
 .memory-reel-stage.memory-reel-template-super8 .card,
 .memory-reel-stage.memory-reel-template-spotlight .card {
-  left: 5% !important;
-  top: 5% !important;
-  width: 90% !important;
-  height: 90% !important;
-  padding: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  transform: none !important;
-  opacity: 0 !important;
-  transition: opacity 900ms ease, filter 900ms ease, transform 900ms ease !important;
+  left: 4% !important; top: 4% !important; width: 92% !important; height: 92% !important; padding: 0 !important; border-radius: 0 !important; background: transparent !important; box-shadow: none !important; transform: none !important; opacity: 0 !important; transition: opacity 700ms ease, filter 700ms ease !important;
 }
-
 .memory-reel-stage.memory-reel-template-cinema .card.is-active,
 .memory-reel-stage.memory-reel-template-dreamscape .card.is-active,
 .memory-reel-stage.memory-reel-template-super8 .card.is-active,
 .memory-reel-stage.memory-reel-template-spotlight .card.is-active { opacity: 1 !important; }
+.memory-reel-stage.memory-reel-template-cinema .card.is-active > .m { animation: memory-reel-cinema-drift 9s cubic-bezier(.35, .05, .25, 1) infinite alternate; }
+.memory-reel-stage.memory-reel-template-cinema .ambient { opacity: .3 !important; filter: blur(32px) saturate(1.28) brightness(.7); }
 
-.memory-reel-stage.memory-reel-template-cinema .card.is-active > .m {
-  animation: memory-reel-ken-burns 10s ease-in-out infinite alternate;
-}
-
-.memory-reel-stage.memory-reel-template-cinema .ambient { opacity: 0.3 !important; filter: blur(32px) saturate(1.28) brightness(.7); }
-
-.memory-reel-stage.memory-reel-template-filmstrip .world {
-  inset: 0 !important;
-  left: 0 !important;
-  top: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  transform: none !important;
-}
-
-.memory-reel-stage.memory-reel-template-filmstrip .card {
-  left: 50% !important;
-  top: 50% !important;
-  width: min(29vw, 430px) !important;
-  height: 70% !important;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 14px !important;
-  transform: translate3d(calc(var(--reel-offset) - 50%), -50%, 0) rotateZ(var(--reel-angle)) !important;
-  opacity: 0.26 !important;
-}
-
-.memory-reel-stage.memory-reel-template-filmstrip .card.is-active {
-  z-index: 12;
-  border-color: rgba(255, 208, 138, 0.8);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), 0 0 36px rgba(255, 208, 138, 0.18);
-  transform: translate3d(-50%, -50%, 0) scale(1.08) !important;
-  opacity: 1 !important;
-}
-
+/* 02 — Filmstrip: a moving horizontal contact sheet with a centered hero. */
+.memory-reel-stage.memory-reel-template-filmstrip .world,
 .memory-reel-stage.memory-reel-template-polaroid .world {
-  inset: 0 !important;
-  left: 0 !important;
-  top: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  transform: none !important;
+  inset: 0 !important; left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; transform: none !important;
 }
-
-.memory-reel-stage.memory-reel-template-polaroid .card {
-  left: 50% !important;
-  top: 50% !important;
-  width: min(54vw, 590px) !important;
-  height: 76% !important;
-  padding: 14px 14px 48px !important;
-  border-radius: 5px !important;
-  background: #f8f2e8 !important;
-  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.52);
-  transform: translate3d(-50%, -50%, 0) rotate(var(--reel-angle)) translateY(var(--reel-depth)) scale(.74) !important;
-  opacity: 0.18 !important;
+.memory-reel-stage.memory-reel-template-filmstrip .card {
+  left: 50% !important; top: 50% !important; width: min(29vw, 430px) !important; height: 70% !important; border: 1px solid rgba(255, 255, 255, .18); border-radius: 14px !important; transform: translate3d(calc(var(--reel-offset) - 50%), -50%, 0) rotateZ(var(--reel-angle)) !important; opacity: .24 !important; transition: transform 900ms cubic-bezier(.2, .8, .2, 1), opacity 700ms ease, filter 700ms ease !important;
 }
+.memory-reel-stage.memory-reel-template-filmstrip .card.is-active { border-color: rgba(255, 208, 138, .8); box-shadow: 0 24px 70px rgba(0, 0, 0, .55), 0 0 36px rgba(255, 208, 138, .18); transform: translate3d(-50%, -50%, 0) scale(1.1) !important; opacity: 1 !important; animation: memory-reel-filmstrip-hero 7s ease-in-out infinite; }
+.memory-reel-stage.memory-reel-template-filmstrip .card:not(.is-active) > .m { opacity: .72; }
 
-.memory-reel-stage.memory-reel-template-polaroid .card.is-active {
-  z-index: 12;
-  transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(1.04) !important;
-  opacity: 1 !important;
-}
-
+/* 03 — Polaroid Afterglow: physical prints rise from a loose stack. */
+.memory-reel-stage.memory-reel-template-polaroid .card { left: 50% !important; top: 50% !important; width: min(54vw, 590px) !important; height: 76% !important; padding: 14px 14px 48px !important; border-radius: 5px !important; background: #f8f2e8 !important; box-shadow: 0 25px 60px rgba(0, 0, 0, .52); transform: translate3d(-50%, -50%, 0) rotate(var(--reel-angle)) translateY(var(--reel-depth)) scale(.72) !important; opacity: .2 !important; transition: transform 900ms cubic-bezier(.22, .8, .2, 1), opacity 700ms ease, filter 700ms ease !important; }
+.memory-reel-stage.memory-reel-template-polaroid .card.is-active { transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(1.06) !important; opacity: 1 !important; box-shadow: 0 28px 70px rgba(0, 0, 0, .55), 0 0 0 2px rgba(255, 208, 138, .56); animation: memory-reel-polaroid-bob 6s ease-in-out infinite; }
 .memory-reel-stage.memory-reel-template-polaroid .card .m { border-radius: 2px; background: #e9dfd1; }
-.memory-reel-stage.memory-reel-template-polaroid .ambient { opacity: 0.32 !important; filter: blur(30px) sepia(.2) saturate(.8) brightness(.74); }
+.memory-reel-stage.memory-reel-template-polaroid .ambient { opacity: .32 !important; filter: blur(30px) sepia(.2) saturate(.8) brightness(.74); }
 
+/* 04 — Memory Mosaic: the active image expands into a living feature tile. */
 .memory-reel-stage.memory-reel-template-mosaic .world,
 .memory-reel-stage.memory-reel-template-neon-grid .world,
 .memory-reel-stage.memory-reel-template-scrapbook .world {
-  inset: 4% !important;
-  left: 4% !important;
-  top: 4% !important;
-  width: 92% !important;
-  height: 92% !important;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-auto-rows: minmax(0, 1fr);
-  gap: clamp(0.35rem, 1vw, 0.8rem);
-  align-content: center;
-  transform: none !important;
+  inset: 4% !important; left: 4% !important; top: 4% !important; width: 92% !important; height: 92% !important; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); gap: clamp(.35rem, 1vw, .8rem); align-content: center; transform: none !important;
 }
-
 .memory-reel-stage.memory-reel-template-mosaic .card,
 .memory-reel-stage.memory-reel-template-neon-grid .card,
 .memory-reel-stage.memory-reel-template-scrapbook .card {
-  position: relative !important;
-  left: auto !important;
-  top: auto !important;
-  width: auto !important;
-  height: auto !important;
-  min-height: 0;
-  aspect-ratio: 4 / 3;
-  transform: none !important;
-  opacity: 0.76 !important;
+  position: relative !important; left: auto !important; top: auto !important; width: auto !important; height: auto !important; min-height: 0; aspect-ratio: 4 / 3; transform: none !important; opacity: .62 !important; transition: transform 700ms cubic-bezier(.22, .8, .2, 1), opacity 500ms ease, filter 500ms ease, box-shadow 700ms ease !important;
 }
-
 .memory-reel-stage.memory-reel-template-mosaic .card.is-active,
 .memory-reel-stage.memory-reel-template-neon-grid .card.is-active,
-.memory-reel-stage.memory-reel-template-scrapbook .card.is-active {
-  z-index: 8;
-  transform: scale(1.06) !important;
-  opacity: 1 !important;
-}
+.memory-reel-stage.memory-reel-template-scrapbook .card.is-active { grid-column: span 2; grid-row: span 2; transform: scale(1.025) !important; opacity: 1 !important; }
+.memory-reel-stage.memory-reel-template-mosaic .card:not(.is-active) { animation: memory-reel-mosaic-float 8s ease-in-out infinite alternate; animation-delay: calc(var(--reel-index, 0) * -0.35s); }
+.memory-reel-stage.memory-reel-template-mosaic .card.is-active { box-shadow: 0 0 0 2px rgba(255, 255, 255, .86), 0 20px 48px rgba(0, 0, 0, .5); animation: memory-reel-mosaic-hero 7s ease-in-out infinite; }
 
-.memory-reel-stage.memory-reel-template-mosaic .card.is-active { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.82), 0 18px 42px rgba(0, 0, 0, 0.46); }
+/* 05 — Neon Memory Gallery: a pulsing electric grid with an expanding hero. */
+.memory-reel-stage.memory-reel-template-neon-grid { background: radial-gradient(circle at 50% 35%, #24134d, #070914 62%, #020307); }
+.memory-reel-stage.memory-reel-template-neon-grid .card { border: 1px solid rgba(99, 248, 255, .32); box-shadow: 0 0 18px rgba(54, 241, 205, .08); animation: memory-reel-neon-pulse 4.8s ease-in-out infinite alternate; animation-delay: calc(var(--reel-index, 0) * -0.2s); }
+.memory-reel-stage.memory-reel-template-neon-grid .card.is-active { border-color: #63f8ff; box-shadow: 0 0 0 2px rgba(99, 248, 255, .48), 0 0 44px rgba(222, 91, 255, .38); animation: memory-reel-neon-hero 5.5s ease-in-out infinite; }
+.memory-reel-stage.memory-reel-template-neon-grid .ambient { opacity: .22 !important; filter: blur(28px) saturate(1.7) brightness(.6); }
 
-.memory-reel-stage.memory-reel-template-neon-grid { background: radial-gradient(circle at 50% 35%, #1c1036, #070914 62%, #020307); }
-.memory-reel-stage.memory-reel-template-neon-grid .card { border: 1px solid rgba(99, 248, 255, 0.32); box-shadow: 0 0 18px rgba(54, 241, 205, 0.08); }
-.memory-reel-stage.memory-reel-template-neon-grid .card.is-active { border-color: #63f8ff; box-shadow: 0 0 0 2px rgba(99, 248, 255, 0.48), 0 0 40px rgba(222, 91, 255, 0.38); }
-.memory-reel-stage.memory-reel-template-neon-grid .ambient { opacity: 0.22 !important; filter: blur(28px) saturate(1.7) brightness(.6); }
-
+/* 06 — Editorial Scrapbook: a paper spread where the hero lifts toward the viewer. */
 .memory-reel-stage.memory-reel-template-scrapbook .world { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
-.memory-reel-stage.memory-reel-template-scrapbook .card { border: 8px solid #f5eee1; border-bottom-width: 28px; border-radius: 3px; background: #f5eee1; box-shadow: 0 16px 28px rgba(0, 0, 0, 0.38); }
+.memory-reel-stage.memory-reel-template-scrapbook .card { border: 8px solid #f5eee1; border-bottom-width: 28px; border-radius: 3px; background: #f5eee1; box-shadow: 0 16px 28px rgba(0, 0, 0, .38); animation: memory-reel-paper-sway 7s ease-in-out infinite alternate; animation-delay: calc(var(--reel-index, 0) * -.3s); }
 .memory-reel-stage.memory-reel-template-scrapbook .card:nth-child(3n + 1) { transform: rotate(-2deg) !important; }
 .memory-reel-stage.memory-reel-template-scrapbook .card:nth-child(3n + 2) { transform: rotate(1.5deg) !important; }
 .memory-reel-stage.memory-reel-template-scrapbook .card:nth-child(3n) { transform: rotate(3deg) !important; }
-.memory-reel-stage.memory-reel-template-scrapbook .card.is-active { transform: scale(1.08) rotate(0deg) !important; box-shadow: 0 0 0 2px #ffd08a, 0 22px 45px rgba(0, 0, 0, 0.5); }
+.memory-reel-stage.memory-reel-template-scrapbook .card.is-active { transform: scale(1.025) rotate(0deg) !important; box-shadow: 0 0 0 2px #ffd08a, 0 26px 52px rgba(0, 0, 0, .52); animation: memory-reel-scrapbook-hero 6s ease-in-out infinite; }
 
-.memory-reel-stage.memory-reel-template-spotlight .card { left: 14% !important; top: 10% !important; width: 72% !important; height: 80% !important; filter: blur(7px) brightness(.45) !important; }
-.memory-reel-stage.memory-reel-template-spotlight .card.is-active { filter: none !important; transform: scale(1.02) !important; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55), 0 0 80px rgba(255, 208, 138, 0.28) !important; }
-.memory-reel-stage.memory-reel-template-spotlight .ambient { opacity: 0.52 !important; filter: blur(42px) saturate(.7) brightness(.5); }
+/* 07 — Spotlight Premiere: a theater reveal with a breathing light halo. */
+.memory-reel-stage.memory-reel-template-spotlight .card { left: 10% !important; top: 7% !important; width: 80% !important; height: 86% !important; filter: blur(8px) brightness(.4) !important; }
+.memory-reel-stage.memory-reel-template-spotlight .card.is-active { filter: none !important; transform: scale(1.035) !important; box-shadow: 0 0 0 1px rgba(255, 255, 255, .55), 0 0 90px rgba(255, 208, 138, .34) !important; animation: memory-reel-spotlight-hero 7s ease-in-out infinite; }
+.memory-reel-stage.memory-reel-template-spotlight .ambient { opacity: .52 !important; filter: blur(42px) saturate(.7) brightness(.5); }
+.memory-reel-stage.memory-reel-template-spotlight::after { position: absolute; inset: -20%; z-index: 1; pointer-events: none; content: ''; background: radial-gradient(ellipse at 50% 42%, transparent 20%, rgba(255, 216, 153, .13) 44%, transparent 68%); animation: memory-reel-light-sweep 9s ease-in-out infinite; }
 
-.memory-reel-stage.memory-reel-template-super8::after {
-  position: absolute;
-  inset: 0;
-  z-index: 8;
-  pointer-events: none;
-  content: '';
-  opacity: 0.26;
-  background: repeating-linear-gradient(0deg, rgba(255, 240, 194, 0.04) 0 1px, transparent 1px 4px), radial-gradient(circle at 30% 20%, rgba(255, 223, 153, 0.18), transparent 28%);
-  mix-blend-mode: screen;
-}
+/* 08 — Super 8 Dream: a warm, gate-weaving film frame. */
+.memory-reel-stage.memory-reel-template-super8::after { position: absolute; inset: 0; z-index: 8; pointer-events: none; content: ''; opacity: .28; background: repeating-linear-gradient(0deg, rgba(255, 240, 194, .04) 0 1px, transparent 1px 4px), radial-gradient(circle at 30% 20%, rgba(255, 223, 153, .18), transparent 28%); mix-blend-mode: screen; animation: memory-reel-film-gate 4s steps(2, end) infinite; }
+.memory-reel-stage.memory-reel-template-super8 .card.is-active > .m { filter: sepia(.22) saturate(.85) contrast(1.12) brightness(.94); animation: memory-reel-super8-jitter 4.2s steps(2, end) infinite; }
+.memory-reel-stage.memory-reel-template-super8 .ambient { opacity: .35 !important; filter: blur(35px) sepia(.42) saturate(.85) brightness(.58); }
 
-.memory-reel-stage.memory-reel-template-super8 .card.is-active > .m { filter: sepia(.22) saturate(.85) contrast(1.12) brightness(.94); animation: memory-reel-film-jitter 5s steps(2, end) infinite; }
-.memory-reel-stage.memory-reel-template-super8 .ambient { opacity: 0.35 !important; filter: blur(35px) sepia(.42) saturate(.85) brightness(.58); }
+/* 09 — Dreamscape Dissolve: soft floating focus with a gentle parallax drift. */
+.memory-reel-stage.memory-reel-template-dreamscape .card.is-active { filter: saturate(.88) brightness(1.06) !important; transform: scale(1.04) !important; animation: memory-reel-dream-card 8s ease-in-out infinite alternate; }
+.memory-reel-stage.memory-reel-template-dreamscape .card.is-active > .m { animation: memory-reel-dream-image 9s ease-in-out infinite alternate; }
+.memory-reel-stage.memory-reel-template-dreamscape .ambient { opacity: .4 !important; filter: blur(38px) saturate(1.35) brightness(.72); animation: memory-reel-dream-ambient 12s ease-in-out infinite alternate; }
 
-.memory-reel-stage.memory-reel-template-dreamscape .card.is-active { filter: saturate(.88) brightness(1.06) !important; transform: scale(1.03) !important; }
-.memory-reel-stage.memory-reel-template-dreamscape .card.is-active > .m { animation: memory-reel-dream-breathe 8s ease-in-out infinite alternate; }
-.memory-reel-stage.memory-reel-template-dreamscape .ambient { opacity: 0.4 !important; filter: blur(38px) saturate(1.35) brightness(.72); }
+@keyframes memory-reel-cinema-drift { from { transform: scale(1.02) translate3d(-1.2%, -.6%, 0); } to { transform: scale(1.1) translate3d(1.4%, .9%, 0); } }
+@keyframes memory-reel-filmstrip-hero { 0%, 100% { transform: translate3d(-50%, -50%, 0) scale(1.08) rotate(-.5deg); } 50% { transform: translate3d(-50%, -50%, 0) scale(1.12) rotate(.5deg); } }
+@keyframes memory-reel-polaroid-bob { 0%, 100% { margin-top: 0; } 50% { margin-top: -7px; } }
+@keyframes memory-reel-mosaic-float { from { transform: translate3d(0, 0, 0) rotate(-.6deg) !important; } to { transform: translate3d(0, -6px, 0) rotate(.6deg) !important; } }
+@keyframes memory-reel-mosaic-hero { 0%, 100% { transform: scale(1.02) translate3d(0, 0, 0); } 50% { transform: scale(1.045) translate3d(0, -4px, 0); } }
+@keyframes memory-reel-neon-pulse { from { filter: brightness(.92); } to { filter: brightness(1.12); } }
+@keyframes memory-reel-neon-hero { 0%, 100% { transform: scale(1.02); filter: brightness(1); } 50% { transform: scale(1.05); filter: brightness(1.24); } }
+@keyframes memory-reel-paper-sway { from { margin-top: 0; } to { margin-top: -5px; } }
+@keyframes memory-reel-scrapbook-hero { 0%, 100% { transform: scale(1.02) rotate(0deg); } 50% { transform: scale(1.05) rotate(-.7deg); } }
+@keyframes memory-reel-spotlight-hero { 0%, 100% { transform: scale(1.02); } 50% { transform: scale(1.055); } }
+@keyframes memory-reel-light-sweep { 0%, 100% { transform: translate3d(-3%, -2%, 0) scale(.96); opacity: .65; } 50% { transform: translate3d(3%, 2%, 0) scale(1.04); opacity: 1; } }
+@keyframes memory-reel-film-gate { 0%, 100% { transform: translate3d(0, 0, 0); opacity: .22; } 50% { transform: translate3d(0, 2px, 0); opacity: .34; } }
+@keyframes memory-reel-super8-jitter { 0%, 100% { transform: translate3d(0, 0, 0) scale(1.02); } 50% { transform: translate3d(.45%, -.28%, 0) scale(1.045); } }
+@keyframes memory-reel-dream-card { from { transform: scale(1.02) translate3d(-.6%, .3%, 0); } to { transform: scale(1.06) translate3d(.8%, -.7%, 0); } }
+@keyframes memory-reel-dream-image { from { transform: scale(1.02) translate3d(-1%, 0, 0); filter: blur(0); } to { transform: scale(1.1) translate3d(1%, -.4%, 0); filter: blur(.35px); } }
+@keyframes memory-reel-dream-ambient { from { transform: scale(1.06) translate3d(-2%, 0, 0); } to { transform: scale(1.16) translate3d(2%, -1%, 0); } }
 
-@keyframes memory-reel-ken-burns {
-  from { transform: scale(1.02) translate3d(-1%, -0.5%, 0); }
-  to { transform: scale(1.1) translate3d(1%, 0.7%, 0); }
-}
-
-@keyframes memory-reel-film-jitter {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1.02); }
-  50% { transform: translate3d(0.4%, -0.2%, 0) scale(1.035); }
-}
-
-@keyframes memory-reel-dream-breathe {
-  from { transform: scale(1.02); filter: blur(0); }
-  to { transform: scale(1.08); filter: blur(.4px); }
+@media (prefers-reduced-motion: reduce) {
+  .memory-reel-stage[class*="memory-reel-template-"] *,
+  .memory-reel-stage[class*="memory-reel-template-"]::after { animation: none !important; }
 }
 
 @media (max-width: 900px) {
