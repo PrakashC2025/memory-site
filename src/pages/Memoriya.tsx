@@ -119,8 +119,7 @@ const Memoriya: React.FC = () => {
   const folderRequestRef = useRef(0);
   const driveSyncBusyRef = useRef(false);
   const driveChangePageTokenRef = useRef(driveChangePageToken);
-  const driveRefreshBusyRef = useRef(false);
-  const driveRefreshAttemptAtRef = useRef(0);
+  const driveAuthRequiredRef = useRef(false);
   const loaderRef = useRef<HTMLDivElement | null>(null);
   const localObjectUrlsRef = useRef<string[]>([]);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -207,6 +206,7 @@ const Memoriya: React.FC = () => {
     const onTokenUpdated = (event: Event) => {
       const token = (event as CustomEvent<string>).detail;
       if (!token) return;
+      driveAuthRequiredRef.current = false;
       setAccessToken(token);
       setMemories(current => current.map(memory => memory.driveFileId
         ? upgradeDriveImageUrls({ ...memory, authToken: token })
@@ -232,7 +232,7 @@ const Memoriya: React.FC = () => {
     if (!accessToken) return;
     let active = true;
     const syncLatestDriveMedia = async () => {
-      if (!active || driveSyncBusyRef.current || !acquireDriveSyncLock()) return;
+      if (!active || driveAuthRequiredRef.current || driveSyncBusyRef.current || !acquireDriveSyncLock()) return;
       driveSyncBusyRef.current = true;
       try {
         const isMedia = (file: DriveMediaFile) => isVisualDriveFile(file);
@@ -319,22 +319,11 @@ const Memoriya: React.FC = () => {
           setDriveChangePageToken('');
           clearDriveChangePageToken();
         }
-        // Keep the current cache playing, then silently renew the short-lived
-        // browser token so the next poll sees newly uploaded media again.
-        if (isDriveAuthorizationError(syncError)
-          && !driveRefreshBusyRef.current
-          && Date.now() - driveRefreshAttemptAtRef.current > 60000) {
-          driveRefreshAttemptAtRef.current = Date.now();
-          driveRefreshBusyRef.current = true;
-          try {
-            const refreshedToken = await googleDriveService.refreshAccessToken(undefined, true);
-            saveDriveAccessToken(refreshedToken);
-            if (active) setAccessToken(refreshedToken);
-          } catch {
-            if (active) setError('Drive needs to reconnect. Tap Sync Drive once to restore live photos, videos, and uploads.');
-          } finally {
-            driveRefreshBusyRef.current = false;
-          }
+        // An expired token must not trigger a background OAuth popup. Stop this
+        // poller until the user explicitly reconnects from the Drive button.
+        if (isDriveAuthorizationError(syncError)) {
+          driveAuthRequiredRef.current = true;
+          if (active) setError('Drive needs to reconnect. Tap Sync Drive once to restore live photos, videos, and uploads.');
         }
       } finally {
         driveSyncBusyRef.current = false;
@@ -417,6 +406,7 @@ const Memoriya: React.FC = () => {
       const token = state.accessToken || '';
       if (!token) throw new Error('Google Drive authorization was cancelled.');
       connectedToken = token;
+      driveAuthRequiredRef.current = false;
       setAccessToken(token);
       // Refresh the token stored on existing Drive memories so they keep working,
       // instead of clearing and re-downloading everything on every reconnect.

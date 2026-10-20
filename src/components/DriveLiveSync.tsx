@@ -3,13 +3,13 @@ import { isVisualMemory, type Memory } from '../data/memories';
 import {
   clearDriveChangePageToken,
   acquireDriveSyncLock,
+  DRIVE_ACCESS_TOKEN_UPDATED_EVENT,
   readDriveAccessToken,
   readDriveChangePageToken,
   readDriveFolderId,
   readDriveMemories,
   removeDriveMemories,
   releaseDriveSyncLock,
-  saveDriveAccessToken,
   saveDriveChangePageToken,
   saveDriveMemories,
 } from '../services/driveLibrary';
@@ -23,9 +23,14 @@ const isVisualMedia = (file: DriveMediaFile) =>
 const DriveLiveSync: React.FC = () => {
   useEffect(() => {
     let active = true;
+    const driveAuthRequiredRef = { current: false };
+    const onTokenUpdated = (event: Event) => {
+      if ((event as CustomEvent<string>).detail) driveAuthRequiredRef.current = false;
+    };
+    window.addEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
 
     const sync = async () => {
-      if (!active || !acquireDriveSyncLock()) return;
+      if (!active || driveAuthRequiredRef.current || !acquireDriveSyncLock()) return;
       const accessToken = readDriveAccessToken();
       if (!accessToken) {
         releaseDriveSyncLock();
@@ -83,12 +88,7 @@ const DriveLiveSync: React.FC = () => {
           clearDriveChangePageToken();
         }
         if (isDriveAuthorizationError(error)) {
-          try {
-            const refreshedToken = await googleDriveService.refreshAccessToken(undefined, true);
-            saveDriveAccessToken(refreshedToken);
-          } catch {
-            // Cached memories remain available until the user reconnects.
-          }
+          driveAuthRequiredRef.current = true;
         }
       } finally {
         releaseDriveSyncLock();
@@ -100,6 +100,7 @@ const DriveLiveSync: React.FC = () => {
     return () => {
       active = false;
       window.clearInterval(interval);
+      window.removeEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
     };
   }, []);
 

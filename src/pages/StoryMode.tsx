@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
 import { isVisualMemory, type Memory } from '../data/memories';
-import { acquireDriveSyncLock, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, clearDriveChangePageToken, readDriveAccessToken, readDriveChangePageToken, readDriveFolderId, readDriveFolders, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
+import { acquireDriveSyncLock, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, clearDriveChangePageToken, readDriveAccessToken, readDriveChangePageToken, readDriveFolderId, readDriveFolders, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
 import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile, type DriveMediaFile } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, cacheDriveMemories, deleteCachedDriveMedia, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
 import { deleteCachedStoryMedia } from '../services/storyMediaCache';
@@ -25,7 +25,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const folderChangedRef = useRef(false);
   const objectUrlsRef = useRef<string[]>([]);
   const driveObjectUrlsRef = useRef<string[]>([]);
-  const driveTokenRefreshAtRef = useRef(0);
+  const driveAuthRequiredRef = useRef(false);
   const storyMemories = localMemories.length ? localMemories : driveMemories;
 
   useEffect(() => {
@@ -40,6 +40,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     const onTokenUpdated = (event: Event) => {
       const token = (event as CustomEvent<string>).detail;
       if (!token) return;
+      driveAuthRequiredRef.current = false;
       setDriveAccessToken(token);
       setDriveMemories(current => current.map(memory => memory.driveFileId
         ? upgradeDriveImageUrls({ ...memory, authToken: token })
@@ -99,9 +100,12 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     if (token) void cacheDriveMemories(known, token).then(() => applyCached(known));
 
     const syncDrive = async () => {
-      if (syncBusy || !acquireDriveSyncLock()) return;
+      if (driveAuthRequiredRef.current || syncBusy || !acquireDriveSyncLock()) return;
       token = readDriveAccessToken() || token;
-      if (!token) return;
+      if (!token) {
+        releaseDriveSyncLock();
+        return;
+      }
       syncBusy = true;
       setDriveError('');
       try {
@@ -210,18 +214,12 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         if (syncError instanceof Error && /Drive scan failed \(4\d\d\)/i.test(syncError.message)) {
           clearDriveChangePageToken();
         }
-        if (isDriveAuthorizationError(syncError) && Date.now() - driveTokenRefreshAtRef.current > 60000) {
-          driveTokenRefreshAtRef.current = Date.now();
-          try {
-            token = await googleDriveService.refreshAccessToken(undefined, true);
-            saveDriveAccessToken(token);
-            setDriveError('Drive session refreshed. New media will appear shortly.');
-            return;
-          } catch {
-            // Show the cached story and let the user reconnect from Memoriya.
-          }
+        if (isDriveAuthorizationError(syncError)) {
+          driveAuthRequiredRef.current = true;
+          setDriveError('Drive needs to reconnect. Return to Memoriya and tap Sync Drive once. Cached memories will keep playing.');
+        } else {
+          setDriveError('Drive is temporarily unavailable. Cached memories will keep playing.');
         }
-        setDriveError('Drive is temporarily unavailable. Cached memories will keep playing.');
       } finally {
         syncBusy = false;
         releaseDriveSyncLock();
