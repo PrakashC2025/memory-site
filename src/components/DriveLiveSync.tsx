@@ -84,7 +84,7 @@ const DriveLiveSync: React.FC = () => {
         }
         if (isDriveAuthorizationError(error)) {
           try {
-            const refreshedToken = await googleDriveService.refreshAccessToken();
+            const refreshedToken = await googleDriveService.refreshAccessToken(undefined, true);
             saveDriveAccessToken(refreshedToken);
           } catch {
             // Cached memories remain available until the user reconnects.

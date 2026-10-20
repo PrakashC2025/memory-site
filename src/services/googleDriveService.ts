@@ -76,6 +76,7 @@ const DRIVE_REQUEST_TIMEOUT_MS = 20000;
 
 type GoogleTokenResponse = {
   access_token?: string;
+  expires_in?: number;
   error?: string;
 };
 
@@ -160,7 +161,7 @@ export class GoogleDriveService {
     if (loginHint) this.loginHint = loginHint;
   }
 
-  async connect(loginHint?: string): Promise<DriveConnectionState> {
+  async connect(loginHint?: string, prompt = ''): Promise<DriveConnectionState> {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
     if (!clientId) {
@@ -221,7 +222,7 @@ export class GoogleDriveService {
       try {
         // Empty prompt skips the consent screen when the user has already granted
         // access, so reconnecting is instant. First-time connects still show consent.
-        tokenClient.requestAccessToken({ prompt: '', hint: this.loginHint || undefined });
+        tokenClient.requestAccessToken({ prompt, hint: this.loginHint || undefined });
       } catch (err) {
         finish(() => reject(err instanceof Error ? err : new Error('Google Drive authorization failed.')));
       }
@@ -394,9 +395,12 @@ export class GoogleDriveService {
     return files;
   }
 
-  async refreshAccessToken(loginHint?: string): Promise<string> {
+  async refreshAccessToken(loginHint?: string, silent = false): Promise<string> {
     if (!this.refreshPromise) {
-      this.refreshPromise = this.connect(loginHint || this.loginHint)
+      // Background polling must never try to open an OAuth popup. Browsers
+      // block that popup because the original user gesture has ended. A user
+      // initiated reconnect keeps the default interactive flow.
+      this.refreshPromise = this.connect(loginHint || this.loginHint, silent ? 'none' : '')
         .then(state => {
           if (!state.accessToken) throw new Error('Google Drive authorization returned no access token.');
           return state.accessToken;
@@ -446,7 +450,7 @@ export class GoogleDriveService {
       return { blob: await this.downloadMediaFile(accessToken, fileId, parentSignal), accessToken };
     } catch (error) {
       if (!isDriveAuthorizationError(error)) throw error;
-      const refreshedToken = await this.refreshAccessToken();
+      const refreshedToken = await this.refreshAccessToken(undefined, true);
       return { blob: await this.downloadMediaFile(refreshedToken, fileId, parentSignal), accessToken: refreshedToken };
     }
   }

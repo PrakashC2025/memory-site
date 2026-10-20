@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import type { Memory } from '../data/memories';
-import { googleDriveService, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
+import { googleDriveService, type DriveAudioFile } from '../services/googleDriveService';
 import { saveDriveAccessToken } from '../services/driveLibrary';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
 import { readCachedDriveMedia } from '../services/driveCache';
@@ -316,7 +316,7 @@ export class MemoryReelController {
 
       if (isVideo) {
         const video = document.createElement('video');
-        Object.assign(video, { src: item.src, muted: true, loop: true, playsInline: true, preload: 'metadata', poster: item.poster || '' });
+        Object.assign(video, { src: item.src, muted: true, loop: true, playsInline: true, playbackRate: 1, defaultPlaybackRate: 1, preload: 'metadata', poster: item.poster || '' });
         video.defaultMuted = true;
         video.volume = 0;
         video.className = 'm';
@@ -431,6 +431,8 @@ export class MemoryReelController {
     video.muted = true;
     video.defaultMuted = true;
     video.volume = 0;
+    video.playbackRate = 1;
+    video.defaultPlaybackRate = 1;
     void video.play().catch(() => undefined);
   }
 
@@ -489,7 +491,10 @@ export class MemoryReelController {
     void this.playAudio();
     const tick = (now: number) => {
       if (this.paused || this.destroyed) return;
-      this.elapsed += (now - this.last) / 1000;
+      // A delayed frame must not make the story jump several slides at once.
+      // This is especially important while Drive thumbnails are downloading
+      // or when a TV browser briefly deprioritizes the tab.
+      this.elapsed += Math.min(0.12, Math.max(0, (now - this.last) / 1000));
       this.last = now;
       if (this.elapsed >= this.total) {
         if (this.options.loop) this.elapsed = 0;
@@ -497,6 +502,7 @@ export class MemoryReelController {
           this.elapsed = this.total;
           this.render(this.elapsed);
           this.paused = true;
+          this.raf = 0;
           this.options.onStateChange?.(false);
           this.cards.forEach(card => card.video?.pause());
           this.pauseAudio();
@@ -625,7 +631,10 @@ export class MemoryReelController {
     if (!this.audioQueue.length) return;
     if (this.audioIndex < this.audioQueue.length - 1) this.audioIndex += 1;
     else if (this.options.loop) this.audioIndex = 0;
-    else return;
+    else {
+      this.options.onAudioStateChange?.(false);
+      return;
+    }
     const shouldResume = !this.paused;
     if (this.audio) {
       this.audio.pause();
@@ -848,10 +857,21 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const reducedMotion = usePrefersReducedMotion();
   const moreRequestedRef = useRef(false);
   const hasLoadedSourcesRef = useRef(false);
+  const sourceSignatureRef = useRef('');
   const moreConfigRef = useRef({ hasMore, loadingMore, onNeedMore });
   const fullscreenControlsTimerRef = useRef<number | null>(null);
   const driveSongsRequestRef = useRef(false);
   moreConfigRef.current = { hasMore, loadingMore, onNeedMore };
+
+  // Drive access tokens and object URLs can change while the same media set
+  // is playing. They must not rebuild the reel or restart its clock.
+  const sourceSignature = memories.map(memory => [
+    memory.driveFileId || memory.id,
+    memory.type,
+    memory.mimeType || '',
+    memory.date,
+    memory.driveFileId ? '' : memory.url,
+  ].join(':')).join('|');
 
   useEffect(() => {
     setTitleDraft({ line: title?.line || '', big: title?.big || '' });
@@ -859,6 +879,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   }, [title?.line, title?.big]);
 
   useEffect(() => {
+    if (sourceSignatureRef.current === sourceSignature) return;
+    sourceSignatureRef.current = sourceSignature;
     const controller = new AbortController();
     const photos = memories.filter(memory => !isVideoMemory(memory));
     const videos = memories.filter(memory => isVideoMemory(memory));
@@ -883,7 +905,14 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     return () => {
       controller.abort();
     };
-  }, [memories]);
+  }, [memories, sourceSignature]);
+
+  useEffect(() => {
+    if (!driveAccessToken) return;
+    setResolvedSources(current => current.map(source => source.driveFileId
+      ? { ...source, authToken: driveAccessToken }
+      : source));
+  }, [driveAccessToken]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -1105,7 +1134,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     });
   };
 
-  const loadDriveSongs = async (allowReconnect = false) => {
+  const loadDriveSongs = async () => {
     if (!driveAccessToken) {
       setMusicError('Connect Google Drive to load songs stored there.');
       return;
@@ -1120,13 +1149,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         setDriveSongs(await googleDriveService.listAudioFiles(token));
         setDriveSongsLoaded(true);
       } catch (error) {
-        if (!allowReconnect || !onDriveReconnect || !isDriveAuthorizationError(error)) throw error;
-        const refreshedToken = await onDriveReconnect();
-        if (!refreshedToken) throw error;
-        token = refreshedToken;
-        setDriveSongs(await googleDriveService.listAudioFiles(token));
-        setDriveSongsLoaded(true);
-        saveDriveAccessToken(token);
+        // Do not open an OAuth popup from an async failure callback. Browsers
+        // block it because the Load button gesture has already ended. The
+        // panel below exposes an explicit Reconnect button for this case.
+        throw error;
       }
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'Drive songs could not be loaded.');
@@ -1168,10 +1194,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         try {
           result = await googleDriveService.downloadMediaFileWithReconnect(driveAccessToken, song.id);
         } catch (error) {
-          if (!onDriveReconnect || !isDriveAuthorizationError(error)) throw error;
-          const refreshedToken = await onDriveReconnect();
-          if (!refreshedToken) throw error;
-          result = { blob: await googleDriveService.downloadMediaFile(refreshedToken, song.id), accessToken: refreshedToken };
+          throw error;
         }
         if (result.accessToken !== driveAccessToken) saveDriveAccessToken(result.accessToken);
         playableBlob = normalizeDriveAudioBlob(result.blob, song);
@@ -1207,11 +1230,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         try {
           uploaded = await googleDriveService.uploadMedia(token, file);
         } catch (error) {
-          if (!onDriveReconnect || !isDriveAuthorizationError(error)) throw error;
-          const refreshedToken = await onDriveReconnect();
-          if (!refreshedToken) throw error;
-          token = refreshedToken;
-          uploaded = await googleDriveService.uploadMedia(token, file);
+          throw error;
         }
         const localSrc = URL.createObjectURL(file);
         audioObjectUrlsRef.current.push(localSrc);
@@ -1226,7 +1245,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       }
       setMusicName(uploadedTracks[0]?.label || '');
       setMusicQueue(current => [...current, ...uploadedTracks.filter(track => !current.some(item => item.driveFileId === track.driveFileId))]);
-      await loadDriveSongs(true);
+      await loadDriveSongs();
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'Song upload failed.');
     } finally {
@@ -1367,7 +1386,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               <button type="button" onClick={() => void searchMusic()} disabled={musicLoading}><Search size={15} /> {musicLoading ? 'Searching…' : 'Search'}</button>
               <label className="memory-reel-upload"><Upload size={15} /> Add local songs<input type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.opus,.wav,.flac,.aiff,.aif,.mka,.webm,.amr,.wma" multiple onChange={event => { chooseMusicFiles(event.target.files || []); event.currentTarget.value = ''; }} /></label>
               <label className="memory-reel-upload memory-reel-drive-upload"><Upload size={15} /> {driveUploadLoading ? 'Uploading...' : 'Upload songs to Drive'}<input type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.opus,.wav,.flac,.aiff,.aif,.mka,.webm,.amr,.wma" multiple disabled={driveUploadLoading || !driveAccessToken} onChange={event => { void uploadSongsToDrive(event.target.files || []); event.currentTarget.value = ''; }} /></label>
-              {driveAccessToken && <button type="button" onClick={() => void loadDriveSongs(true)} disabled={driveSongsLoading}><Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : 'Load Drive songs'}</button>}
+              {driveAccessToken && <button type="button" onClick={() => void loadDriveSongs()} disabled={driveSongsLoading}><Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : 'Load Drive songs'}</button>}
             </div>
             <p className="memory-reel-music-note">Only photos and videos appear in the story. Songs are used as the audio queue. Drive is checked only when you press “Load Drive songs”.</p>
             {musicError && <div className="memory-reel-music-error" role="alert">

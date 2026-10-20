@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
 import type { Memory } from '../data/memories';
-import { acquireDriveSyncLock, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, clearDriveChangePageToken, readDriveAccessToken, readDriveChangePageToken, readDriveFolderId, readDriveFolders, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveChangePageToken, saveDriveMemories } from '../services/driveLibrary';
+import { acquireDriveSyncLock, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, clearDriveChangePageToken, readDriveAccessToken, readDriveChangePageToken, readDriveFolderId, readDriveFolders, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
 import { googleDriveService, isDriveAuthorizationError, type DriveMediaFile } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, cacheDriveMemories, deleteCachedDriveMedia, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
 import { deleteCachedStoryMedia } from '../services/storyMediaCache';
@@ -42,7 +42,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       if (!token) return;
       setDriveAccessToken(token);
       setDriveMemories(current => current.map(memory => memory.driveFileId
-        ? { ...memory, authToken: token }
+        ? upgradeDriveImageUrls({ ...memory, authToken: token })
         : memory));
     };
     window.addEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
@@ -213,7 +213,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         if (isDriveAuthorizationError(syncError) && Date.now() - driveTokenRefreshAtRef.current > 60000) {
           driveTokenRefreshAtRef.current = Date.now();
           try {
-            token = await googleDriveService.refreshAccessToken();
+            token = await googleDriveService.refreshAccessToken(undefined, true);
             saveDriveAccessToken(token);
             setDriveError('Drive session refreshed. New media will appear shortly.');
             return;

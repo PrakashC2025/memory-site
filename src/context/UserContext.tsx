@@ -99,7 +99,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // only stored in memory/session storage, silently restore the same
         // Google account's Drive grant without asking the user to reconnect.
         if (nextUser?.authProvider === 'google' && !readDriveAccessToken()) {
-          void googleDriveService.refreshAccessToken(nextUser.email)
+          void googleDriveService.refreshAccessToken(nextUser.email, true)
             .then(saveDriveAccessToken)
             .catch(() => undefined);
         }

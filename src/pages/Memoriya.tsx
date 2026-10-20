@@ -209,7 +209,7 @@ const Memoriya: React.FC = () => {
       if (!token) return;
       setAccessToken(token);
       setMemories(current => current.map(memory => memory.driveFileId
-        ? { ...memory, authToken: token }
+        ? upgradeDriveImageUrls({ ...memory, authToken: token })
         : memory));
     };
     window.addEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
@@ -327,7 +327,7 @@ const Memoriya: React.FC = () => {
           driveRefreshAttemptAtRef.current = Date.now();
           driveRefreshBusyRef.current = true;
           try {
-            const refreshedToken = await googleDriveService.refreshAccessToken();
+            const refreshedToken = await googleDriveService.refreshAccessToken(undefined, true);
             saveDriveAccessToken(refreshedToken);
             if (active) setAccessToken(refreshedToken);
           } catch {
