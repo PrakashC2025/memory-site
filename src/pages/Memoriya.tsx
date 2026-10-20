@@ -288,14 +288,16 @@ const Memoriya: React.FC = () => {
     }
   };
 
-  const connectDrive = async () => {
+  const connectDrive = async (): Promise<string | undefined> => {
     setLoading(true);
     setError('');
     setMessage('Opening secure Google Drive connection...');
+    let connectedToken = '';
     try {
       const state: DriveConnectionState = await googleDriveService.connect();
       const token = state.accessToken || '';
       if (!token) throw new Error('Google Drive authorization was cancelled.');
+      connectedToken = token;
       setAccessToken(token);
       // Refresh the token stored on existing Drive memories so they keep working,
       // instead of clearing and re-downloading everything on every reconnect.
@@ -320,6 +322,7 @@ const Memoriya: React.FC = () => {
       setMessage(added
         ? `Drive ready — ${memories.length + added} memories in view. Scroll to load more.`
         : 'Drive connected, but no photos or videos were found.');
+      return token;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Google Drive connection failed.';
       const wasCancelled = /cancel|closed/i.test(message);
@@ -330,6 +333,7 @@ const Memoriya: React.FC = () => {
     } finally {
       setLoading(false);
     }
+    return connectedToken || undefined;
   };
 
   const changeDriveFolder = async (folderId: string) => {
@@ -726,7 +730,7 @@ const Memoriya: React.FC = () => {
           hasMore={reelConfig.live && Boolean(accessToken)}
           loadingMore={loading}
           onNeedMore={() => void loadDrivePage()}
-          onDriveReconnect={() => void connectDrive()}
+          onDriveReconnect={connectDrive}
           onClose={() => setReelConfig(null)}
         />
       )}

@@ -62,7 +62,7 @@ interface MemoryReelProps {
   driveFolderId?: string;
   driveFolders?: Array<{ id: string; name: string }>;
   onDriveFolderChange?: (folderId: string) => void;
-  onDriveReconnect?: () => void;
+  onDriveReconnect?: () => Promise<string | undefined> | void;
   onClose?: () => void;
 }
 
@@ -994,7 +994,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setMusicQueue(current => current.filter((_, itemIndex) => itemIndex !== index));
   };
 
-  const loadDriveSongs = async () => {
+  const loadDriveSongs = async (allowReconnect = false) => {
     if (!driveAccessToken) {
       setMusicError('Connect Google Drive to load songs stored there.');
       return;
@@ -1004,7 +1004,16 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setDriveSongsLoading(true);
     setMusicError('');
     try {
-      setDriveSongs(await googleDriveService.listAudioFiles(driveAccessToken));
+      let token = driveAccessToken;
+      try {
+        setDriveSongs(await googleDriveService.listAudioFiles(token));
+      } catch (error) {
+        if (!allowReconnect || !onDriveReconnect || !(error instanceof Error) || !/authorization expired|access was denied/i.test(error.message)) throw error;
+        const refreshedToken = await onDriveReconnect();
+        if (!refreshedToken) throw error;
+        token = refreshedToken;
+        setDriveSongs(await googleDriveService.listAudioFiles(token));
+      }
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'Drive songs could not be loaded.');
     } finally {
@@ -1031,7 +1040,17 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setTrackLoadingId(trackId);
     setMusicError('');
     try {
-      const blob = await googleDriveService.downloadMediaFile(driveAccessToken, song.id);
+      let token = driveAccessToken;
+      let blob: Blob;
+      try {
+        blob = await googleDriveService.downloadMediaFile(token, song.id);
+      } catch (error) {
+        if (!onDriveReconnect || !(error instanceof Error) || !/authorization expired|access was denied/i.test(error.message)) throw error;
+        const refreshedToken = await onDriveReconnect();
+        if (!refreshedToken) throw error;
+        token = refreshedToken;
+        blob = await googleDriveService.downloadMediaFile(token, song.id);
+      }
       const src = URL.createObjectURL(blob);
       audioObjectUrlsRef.current.push(src);
       setMusicName(song.name);
@@ -1188,7 +1207,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               <button type="button" onClick={() => void searchMusic()} disabled={musicLoading}><Search size={15} /> {musicLoading ? 'Searching…' : 'Search'}</button>
               <label className="memory-reel-upload"><Upload size={15} /> Add local songs<input type="file" accept="audio/*" multiple onChange={event => { chooseMusicFiles(event.target.files || []); event.currentTarget.value = ''; }} /></label>
               <label className="memory-reel-upload memory-reel-drive-upload"><Upload size={15} /> {driveUploadLoading ? 'Uploading...' : 'Upload songs to Drive'}<input type="file" accept="audio/*" multiple disabled={driveUploadLoading || !driveAccessToken} onChange={event => { void uploadSongsToDrive(event.target.files || []); event.currentTarget.value = ''; }} /></label>
-              {driveAccessToken && <button type="button" onClick={() => void loadDriveSongs()} disabled={driveSongsLoading}><Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : 'Load Drive songs'}</button>}
+              {driveAccessToken && <button type="button" onClick={() => void loadDriveSongs(true)} disabled={driveSongsLoading}><Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : 'Load Drive songs'}</button>}
             </div>
             <p className="memory-reel-music-note">Only photos and videos appear in the story. Songs are used as the audio queue.</p>
             {musicError && <div className="memory-reel-music-error" role="alert">
