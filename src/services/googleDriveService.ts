@@ -401,10 +401,14 @@ export class GoogleDriveService {
   }
 
   async refreshAccessToken(loginHint?: string, silent = false): Promise<string> {
+    // Google Identity Services can still create a popup for prompt="none".
+    // Background refreshes do not have a user gesture, so browsers block that
+    // popup and log "Failed to open popup window". Reconnect only from an
+    // explicit Sync/Reconnect Drive action instead.
+    if (silent) {
+      throw new Error('Google Drive authorization expired. Click Sync Drive to reconnect.');
+    }
     if (!this.refreshPromise) {
-      // Background polling must never try to open an OAuth popup. Browsers
-      // block that popup because the original user gesture has ended. A user
-      // initiated reconnect keeps the default interactive flow.
       this.refreshPromise = this.connect(loginHint || this.loginHint, silent ? 'none' : '')
         .then(state => {
           if (!state.accessToken) throw new Error('Google Drive authorization returned no access token.');

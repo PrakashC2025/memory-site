@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { User } from '../data/memories';
 import { authService, isFirebaseConfigured } from '../services/firebaseService';
-import { clearDriveSession, readDriveAccessToken, saveDriveAccessToken } from '../services/driveLibrary';
+import { clearDriveSession, saveDriveAccessToken } from '../services/driveLibrary';
 import { googleDriveService } from '../services/googleDriveService';
 
 const IDLE_TIMEOUT_MS = 60 * 60 * 1000;
@@ -94,14 +94,6 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!nextUser) {
           clearDriveSession();
           return;
-        }
-        // Firebase restores the Google session locally. If the Drive token was
-        // only stored in memory/session storage, silently restore the same
-        // Google account's Drive grant without asking the user to reconnect.
-        if (nextUser?.authProvider === 'google' && !readDriveAccessToken()) {
-          void googleDriveService.refreshAccessToken(nextUser.email, true)
-            .then(saveDriveAccessToken)
-            .catch(() => undefined);
         }
       });
     } catch (error) {
