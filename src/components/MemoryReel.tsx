@@ -3,6 +3,9 @@ import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, X
 import type { Memory } from '../data/memories';
 import { googleDriveService, type DriveAudioFile } from '../services/googleDriveService';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
+import { readCachedDriveMedia } from '../services/driveCache';
+import { readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
+import { withMediaFetch } from '../utils/mediaQueue';
 
 export interface MemoryReelTitle {
   line?: string;
@@ -13,6 +16,8 @@ interface ReelSource {
   id: string;
   src: string;
   fallbackSrc?: string;
+  driveFileId?: string;
+  authToken?: string;
   type: 'image' | 'video';
   label: string;
 }
@@ -95,6 +100,7 @@ export class MemoryReelController {
   private audio?: HTMLAudioElement;
   private audioQueue: string[] = [];
   private audioIndex = 0;
+  private objectUrls = new Set<string>();
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
@@ -226,6 +232,7 @@ export class MemoryReelController {
       const isVideo = item.type === 'video' || /\.(mp4|mov|webm|m4v|avi|mkv)(\?|$)/i.test(item.src);
       let finished = false;
       let attemptedFallback = false;
+      let attemptedAuthenticated = false;
       const timer = window.setTimeout(() => finish(null), 12000);
       const finish = (value: LoadedMedia | null) => {
         if (finished) return;
@@ -238,14 +245,12 @@ export class MemoryReelController {
         const video = document.createElement('video');
         Object.assign(video, { src: item.src, muted: true, loop: true, playsInline: true, preload: 'auto' });
         video.className = 'm';
-        video.crossOrigin = 'anonymous';
         video.onloadedmetadata = () => finish({ node: video, video, aspect: video.videoWidth / video.videoHeight || 1.6 });
         video.onerror = () => finish(null);
       } else {
         const image = new Image();
         image.className = 'm';
         image.decoding = 'async';
-        image.crossOrigin = 'anonymous';
         image.onload = () => finish({ node: image, aspect: image.naturalWidth / image.naturalHeight || 1.5 });
         image.onerror = () => {
           if (item.fallbackSrc && !attemptedFallback) {
@@ -253,11 +258,43 @@ export class MemoryReelController {
             image.src = item.fallbackSrc;
             return;
           }
+          if (item.driveFileId && item.authToken && !attemptedAuthenticated) {
+            attemptedAuthenticated = true;
+            void this.loadAuthenticatedDriveImage(item)
+              .then(objectUrl => {
+                if (!objectUrl) {
+                  finish(null);
+                  return;
+                }
+                image.src = objectUrl;
+              })
+              .catch(() => finish(null));
+            return;
+          }
           finish(null);
         };
         image.src = item.src;
       }
     });
+  }
+
+  private async loadAuthenticatedDriveImage(item: ReelSource) {
+    if (!item.driveFileId || !item.authToken) return '';
+    const cacheKey = item.driveFileId;
+    const driveCached = await readCachedDriveMedia(item.driveFileId);
+    const cached = driveCached?.blob || await readCachedStoryMedia(cacheKey);
+    const blob = cached || await withMediaFetch(async () => {
+      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(item.driveFileId!)}?alt=media`, {
+        headers: { Authorization: `Bearer ${item.authToken}` },
+        cache: 'force-cache',
+      });
+      if (!response.ok) throw new Error(`Drive media failed ${response.status}`);
+      return response.blob();
+    });
+    if (!cached) void writeCachedStoryMedia(cacheKey, blob, item.type === 'video' ? 'video/mp4' : blob.type);
+    const objectUrl = URL.createObjectURL(blob);
+    this.objectUrls.add(objectUrl);
+    return objectUrl;
   }
 
   private resize() {
@@ -381,6 +418,8 @@ export class MemoryReelController {
     this.audio = undefined;
     this.world.innerHTML = '';
     this.cards = [];
+    this.objectUrls.forEach(url => URL.revokeObjectURL(url));
+    this.objectUrls.clear();
   }
 
   private target(index: number) {
@@ -479,7 +518,7 @@ export class MemoryReelController {
 
 const isVideoMemory = (memory: Memory) => memory.type === 'video' || Boolean(memory.mimeType?.startsWith('video/'));
 
-const resolveReelSources = async (memories: Memory[], signal: AbortSignal) => {
+const resolveReelSources = async (memories: Memory[], signal: AbortSignal, driveAccessToken?: string) => {
   const sources = memories.flatMap(memory => {
     const video = isVideoMemory(memory);
     const preview = video ? memory.url || memory.thumbnail : memory.thumbnail || memory.url;
@@ -491,6 +530,8 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal) => {
       id: memory.id,
       src: preview,
       fallbackSrc: authenticatedFallback,
+      driveFileId: memory.driveFileId,
+      authToken: memory.authToken || driveAccessToken,
       type: video ? 'video' : 'image',
       label: memory.title,
     } satisfies ReelSource];
@@ -550,14 +591,14 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, autoPla
     setLoading(true);
     setResolvedSources([]);
     void (async () => {
-      const photoSources = await resolveReelSources(photos, controller.signal);
+      const photoSources = await resolveReelSources(photos, controller.signal, driveAccessToken);
       if (controller.signal.aborted) return;
       setResolvedSources(photoSources);
       if (photoSources.length) setLoading(false);
 
       // Videos are intentionally appended after the photo wall is ready so a
       // large video cannot delay the first visual sequence.
-      const videoSources = await resolveReelSources(videos, controller.signal);
+      const videoSources = await resolveReelSources(videos, controller.signal, driveAccessToken);
       if (controller.signal.aborted) return;
       setResolvedSources(current => [...current, ...videoSources]);
       if (!photoSources.length) setLoading(false);

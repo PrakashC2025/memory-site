@@ -50,7 +50,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
       initial={{ y: -80, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.55, ease: 'easeOut' }}
-      className="fixed left-0 right-0 top-0 z-40 flex items-center justify-between px-4 py-3 md:px-8"
+      className="memoriya-navbar fixed left-0 right-0 top-0 z-40 flex items-center justify-between px-4 py-3 md:px-8"
       style={{
         background: 'linear-gradient(180deg, rgba(3,4,7,0.9), rgba(3,4,7,0.72))',
         backdropFilter: 'blur(14px) saturate(130%)',

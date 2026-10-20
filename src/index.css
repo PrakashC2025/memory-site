@@ -2690,6 +2690,29 @@ input[type="number"]::-webkit-inner-spin-button {
   font-size: 26px;
 }
 
+/* Android TV and other living-room browsers are usually wide 16:9 screens,
+   but do not reliably expose the newer viewport units used by phones. */
+@media (min-width: 1200px) and (min-aspect-ratio: 4 / 3) {
+  .memory-reel-overlay {
+    min-height: 100vh;
+    padding: clamp(1rem, 2.5vw, 3rem);
+  }
+
+  .memory-reel-shell {
+    width: min(1680px, calc(100vw - 4rem));
+  }
+
+  .memory-reel-stage {
+    min-height: 0;
+  }
+
+  .memory-reel-toolbar button,
+  .memory-reel-folder-picker {
+    min-height: 44px;
+    padding: 0.7rem 1rem;
+  }
+}
+
 .memory-reel-toolbar,
 .memory-reel-editor,
 .memory-reel-music-search {
@@ -7805,5 +7828,685 @@ textarea:focus-visible {
     flex-basis: 88vw;
     width: 88vw;
     height: 62vh;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Memoriya visual system
+   A warm archive, tuned for touch screens, laptops and living-room displays.
+   -------------------------------------------------------------------------- */
+:root {
+  --memory-ink: #f8f4ee;
+  --memory-muted: rgba(248, 244, 238, 0.62);
+  --memory-dim: rgba(248, 244, 238, 0.42);
+  --memory-line: rgba(248, 244, 238, 0.13);
+  --memory-panel: rgba(16, 18, 27, 0.76);
+  --memory-panel-strong: rgba(20, 21, 31, 0.92);
+  --memory-champagne: #f4c98a;
+  --memory-rose: #e98787;
+  --memory-sage: #9fd6c3;
+  --memory-blue: #9ed8e7;
+}
+
+.memoriya-navbar {
+  top: 0.8rem;
+  left: max(0.8rem, env(safe-area-inset-left));
+  right: max(0.8rem, env(safe-area-inset-right));
+  width: auto;
+  min-height: 4rem;
+  padding: 0.55rem 0.7rem !important;
+  border: 1px solid rgba(248, 244, 238, 0.12);
+  border-radius: 20px;
+  background: rgba(8, 10, 16, 0.72) !important;
+  box-shadow: 0 16px 55px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+  backdrop-filter: blur(22px) saturate(125%);
+}
+
+.memoriya-navbar::after {
+  content: "";
+  position: absolute;
+  inset: 0.35rem;
+  z-index: -1;
+  border-radius: 14px;
+  pointer-events: none;
+  background: linear-gradient(100deg, rgba(244, 201, 138, 0.08), transparent 35%, rgba(158, 216, 231, 0.06));
+}
+
+.memoriya-navbar .navbar-brand {
+  min-height: 2.8rem;
+  gap: 0.7rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 14px;
+}
+
+.memoriya-navbar .navbar-brand > span:first-child {
+  width: 2.55rem !important;
+  height: 2.55rem !important;
+  border-radius: 13px !important;
+  background: linear-gradient(145deg, var(--memory-champagne), var(--memory-rose)) !important;
+  box-shadow: 0 8px 24px rgba(233, 135, 135, 0.25) !important;
+}
+
+.memoriya-navbar .navbar-brand .text-lg {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.05rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.24em !important;
+}
+
+.memoriya-navbar .navbar-brand .text-\[10px\] {
+  color: var(--memory-champagne) !important;
+  font-size: 0.58rem !important;
+  letter-spacing: 0.24em !important;
+}
+
+.memoriya-navbar .navbar-links {
+  gap: 0.2rem !important;
+  padding: 0.2rem;
+  border: 1px solid rgba(248, 244, 238, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.memoriya-navbar .navbar-link {
+  min-height: 2.55rem;
+  border-radius: 10px;
+  color: rgba(248, 244, 238, 0.58) !important;
+  font-size: 0.72rem !important;
+  letter-spacing: 0.02em;
+}
+
+.memoriya-navbar .navbar-link:hover {
+  color: var(--memory-ink) !important;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.memoriya-navbar .navbar-user,
+.memoriya-navbar .navbar-actions .neon-button {
+  border-color: rgba(248, 244, 238, 0.14) !important;
+  border-radius: 12px !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+}
+
+.memoriya-experience {
+  --memory-content: min(1520px, 100%);
+  container-type: inline-size;
+  container-name: memory-page;
+  min-height: 100svh;
+  padding: clamp(6.2rem, 10vw, 8rem) clamp(0.9rem, 4vw, 3.5rem) 7.5rem;
+  background:
+    radial-gradient(ellipse at 8% 5%, rgba(244, 201, 138, 0.14), transparent 30%),
+    radial-gradient(ellipse at 91% 9%, rgba(158, 216, 231, 0.13), transparent 29%),
+    radial-gradient(ellipse at 48% 55%, rgba(233, 135, 135, 0.08), transparent 35%),
+    linear-gradient(180deg, #090b12 0%, #0b0d14 48%, #07090f 100%);
+}
+
+.memoriya-experience::before {
+  opacity: 0.3;
+  background-size: 96px 96px;
+  mask-image: radial-gradient(ellipse at 50% 18%, black, transparent 72%);
+}
+
+.memoriya-experience::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.16;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.26) 0.6px, transparent 0.8px);
+  background-size: 5px 5px;
+  mix-blend-mode: soft-light;
+}
+
+.memoriya-experience .memoriya-cinema-hero,
+.memoriya-experience .memoriya-dashboard,
+.memoriya-experience .memoriya-stage-tabs,
+.memoriya-experience .memoriya-stage {
+  width: var(--memory-content);
+}
+
+.memoriya-experience .memoriya-cinema-hero {
+  grid-template-columns: minmax(0, 1.28fr) minmax(300px, 0.62fr);
+  grid-template-rows: auto auto;
+  align-items: start;
+  gap: clamp(1.2rem, 3vw, 3rem);
+  min-height: auto;
+  padding-top: clamp(0.4rem, 1vw, 1rem);
+}
+
+.memoriya-experience .memoriya-hero-copy {
+  max-width: 760px;
+  padding-top: clamp(0.5rem, 2vw, 2.4rem);
+}
+
+.memoriya-experience .memoriya-kicker {
+  color: var(--memory-champagne);
+  font-size: 0.68rem;
+  letter-spacing: 0.25em;
+}
+
+.memoriya-experience .memoriya-hero-copy h1 {
+  max-width: 10ch;
+  margin-top: 0.8rem;
+  color: var(--memory-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(3.4rem, 7.2vw, 7.8rem);
+  font-weight: 700;
+  line-height: 0.88;
+  letter-spacing: -0.055em;
+  text-shadow: 0 12px 60px rgba(244, 201, 138, 0.13);
+  background: linear-gradient(118deg, #fff9ec 8%, var(--memory-champagne) 55%, #eaa0a1 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.memoriya-experience .memoriya-hero-copy p {
+  max-width: 560px;
+  margin-top: 1.3rem;
+  color: var(--memory-muted);
+  font-size: clamp(0.96rem, 1.25vw, 1.12rem);
+  line-height: 1.75;
+}
+
+.memoriya-experience .memoriya-hero-actions {
+  gap: 0.55rem;
+  margin-top: 1.45rem;
+}
+
+.memoriya-experience .memoriya-primary,
+.memoriya-experience .memoriya-glass-button,
+.memoriya-experience .memoriya-stage-tabs button,
+.memoriya-experience .memoriya-style-switch button {
+  min-height: 2.9rem;
+  border-radius: 12px;
+  padding: 0.76rem 0.95rem;
+  font-size: 0.74rem;
+  letter-spacing: 0.01em;
+}
+
+.memoriya-experience .memoriya-primary {
+  background: linear-gradient(135deg, #f6d59d, #e99b95 64%, #abd9dd);
+  color: #1b1514;
+  box-shadow: 0 12px 34px rgba(233, 135, 135, 0.2);
+}
+
+.memoriya-experience .memoriya-primary:hover {
+  box-shadow: 0 16px 42px rgba(233, 135, 135, 0.3);
+}
+
+.memoriya-experience .memoriya-glass-button,
+.memoriya-experience .memoriya-stage-tabs button,
+.memoriya-experience .memoriya-style-switch button {
+  border-color: var(--memory-line);
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(248, 244, 238, 0.72);
+}
+
+.memoriya-experience .memoriya-glass-button:hover,
+.memoriya-experience .memoriya-stage-tabs button:hover,
+.memoriya-experience .memoriya-style-switch button:hover {
+  border-color: rgba(244, 201, 138, 0.4);
+  background: rgba(244, 201, 138, 0.09);
+  color: var(--memory-ink);
+}
+
+.memoriya-experience .memoriya-drive-message {
+  max-width: 620px;
+  margin-top: 0.8rem;
+  border-left: 2px solid var(--memory-sage);
+  padding: 0.45rem 0.7rem;
+  color: var(--memory-dim);
+  font-size: 0.76rem;
+}
+
+.memoriya-experience .memoriya-drive-message.is-error {
+  border-left-color: var(--memory-rose);
+}
+
+.memoriya-experience .memoriya-hero-film {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  position: relative;
+  inset: auto;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  height: clamp(190px, 22vw, 300px);
+  min-height: 0;
+  gap: 0.7rem;
+  padding: 0.65rem;
+  border: 1px solid var(--memory-line);
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.018)), rgba(9, 12, 19, 0.58);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.memoriya-experience .memoriya-hero-film .memoriya-image-wrap,
+.memoriya-experience .memoriya-hero-film img {
+  border-radius: 15px;
+}
+
+.memoriya-experience .memoriya-hero-film .memoriya-image-wrap::after {
+  background: linear-gradient(180deg, transparent 45%, rgba(5, 6, 10, 0.6));
+}
+
+.memoriya-experience .memoriya-now-card,
+.memoriya-experience .memoriya-stat,
+.memoriya-experience .memoriya-reel-phone,
+.memoriya-experience .memoriya-reel-list,
+.memoriya-experience .memoriya-map,
+.memoriya-experience .memoriya-place-list,
+.memoriya-experience .memoriya-capsules article,
+.memoriya-experience .memoriya-album-wall article,
+.memoriya-experience .memoriya-storyline article {
+  border-color: var(--memory-line);
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.085), rgba(255, 255, 255, 0.018)), var(--memory-panel);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.27), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(20px) saturate(125%);
+}
+
+.memoriya-experience .memoriya-now-card {
+  width: 100%;
+  max-width: 420px;
+  justify-self: end;
+  padding: 1rem;
+}
+
+.memoriya-experience .memoriya-now-card > span {
+  color: var(--memory-champagne);
+  font-size: 0.66rem;
+  letter-spacing: 0.2em;
+}
+
+.memoriya-experience .memoriya-now-card .memoriya-image-wrap,
+.memoriya-experience .memoriya-now-card img {
+  margin-top: 0.85rem;
+  border-radius: 15px;
+}
+
+.memoriya-experience .memoriya-now-card h2 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.memoriya-experience .memoriya-now-card p {
+  color: var(--memory-muted);
+}
+
+.memoriya-experience .memoriya-dashboard {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+
+.memoriya-experience .memoriya-stat {
+  position: relative;
+  min-height: 7.5rem;
+  padding: 1rem 1.05rem;
+  overflow: hidden;
+}
+
+.memoriya-experience .memoriya-stat::after {
+  content: "";
+  position: absolute;
+  right: -1.4rem;
+  bottom: -1.8rem;
+  width: 5rem;
+  height: 5rem;
+  border-radius: 50%;
+  background: rgba(244, 201, 138, 0.08);
+  filter: blur(4px);
+}
+
+.memoriya-experience .memoriya-stat svg {
+  color: var(--memory-champagne);
+}
+
+.memoriya-experience .memoriya-stat strong {
+  margin-top: 0.8rem;
+  color: var(--memory-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.35rem, 3vw, 2.25rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.memoriya-experience .memoriya-stat span {
+  color: var(--memory-dim);
+  font-size: 0.63rem;
+  letter-spacing: 0.12em;
+}
+
+.memoriya-experience .memoriya-simple-toolbar {
+  width: var(--memory-content);
+  margin: 1.5rem auto 0;
+}
+
+.memoriya-experience .memoriya-simple-toolbar label {
+  max-width: 540px;
+  min-height: 3rem;
+  border-color: var(--memory-line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.memoriya-experience .memoriya-simple-toolbar label:focus-within {
+  border-color: rgba(244, 201, 138, 0.48);
+  box-shadow: 0 0 0 4px rgba(244, 201, 138, 0.08);
+}
+
+.memoriya-experience .memoriya-stage-tabs {
+  top: 5.6rem;
+  gap: 0.35rem;
+  margin-top: 1.1rem;
+  border-color: var(--memory-line);
+  border-radius: 16px;
+  background: rgba(10, 12, 19, 0.78);
+  box-shadow: 0 14px 45px rgba(0, 0, 0, 0.2);
+}
+
+.memoriya-experience .memoriya-stage-tabs button {
+  min-width: 8.6rem;
+  border-color: transparent;
+  border-radius: 11px;
+}
+
+.memoriya-experience .memoriya-stage-tabs button.is-active,
+.memoriya-experience .memoriya-style-switch button.is-active {
+  border-color: rgba(244, 201, 138, 0.42);
+  background: linear-gradient(135deg, rgba(244, 201, 138, 0.16), rgba(233, 135, 135, 0.1));
+  color: var(--memory-ink);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.memoriya-experience .memoriya-stage {
+  margin-top: 1.2rem;
+}
+
+.memoriya-experience .memoriya-reel-stage,
+.memoriya-experience .memoriya-map-stage {
+  grid-template-columns: minmax(360px, 0.85fr) minmax(0, 1.15fr);
+  gap: 1.1rem;
+}
+
+.memoriya-experience .memoriya-reel-phone {
+  min-height: clamp(560px, 57vw, 760px);
+  border-radius: 24px;
+}
+
+.memoriya-experience .memoriya-reel-phone img {
+  filter: saturate(0.98) contrast(1.03);
+}
+
+.memoriya-experience .memoriya-reel-overlay {
+  padding: 9rem 1.35rem 1.35rem;
+  background: linear-gradient(180deg, transparent 8%, rgba(7, 8, 13, 0.9));
+}
+
+.memoriya-experience .memoriya-reel-overlay > span {
+  color: var(--memory-champagne);
+}
+
+.memoriya-experience .memoriya-reel-overlay h2 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.65rem, 3vw, 2.35rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.memoriya-experience .memoriya-reactions button {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-color: rgba(248, 244, 238, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.memoriya-experience .memoriya-reactions button.is-active {
+  background: var(--memory-champagne);
+  color: #1b1514;
+}
+
+.memoriya-experience .memoriya-story-launch {
+  border-radius: 12px;
+  background: rgba(244, 201, 138, 0.1);
+  color: var(--memory-champagne);
+}
+
+.memoriya-experience .memoriya-reel-list {
+  gap: 0.45rem;
+  padding: 0.75rem;
+}
+
+.memoriya-experience .memoriya-reel-list button {
+  min-height: 5.25rem;
+  border-color: transparent;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.038);
+}
+
+.memoriya-experience .memoriya-reel-list button:hover,
+.memoriya-experience .memoriya-reel-list button.is-active {
+  border-color: rgba(244, 201, 138, 0.34);
+  background: rgba(244, 201, 138, 0.09);
+}
+
+.memoriya-experience .memoriya-reel-list img {
+  border-radius: 11px;
+}
+
+.memoriya-experience .memoriya-album-wall article {
+  border-radius: 20px;
+  padding: 0.7rem;
+}
+
+.memoriya-experience .memoriya-album-wall article > button {
+  padding: 0;
+  border-radius: 14px;
+  background: transparent;
+}
+
+.memoriya-experience .memoriya-album-wall article > button img {
+  border-radius: 14px;
+}
+
+.memoriya-experience .memoriya-album-wall strong {
+  margin-top: 0.75rem;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.memoriya-experience .memoriya-empty-drive,
+.memoriya-experience .memoriya-onboarding-card {
+  border-color: var(--memory-line);
+  border-radius: 24px;
+  background: linear-gradient(145deg, rgba(244, 201, 138, 0.08), rgba(255, 255, 255, 0.025)), var(--memory-panel);
+}
+
+.memoriya-experience .memoriya-empty-drive {
+  min-height: min(520px, 58vh);
+  padding: clamp(1.5rem, 5vw, 4rem);
+}
+
+.memoriya-experience .memoriya-empty-drive > svg {
+  color: var(--memory-champagne);
+  filter: drop-shadow(0 0 20px rgba(244, 201, 138, 0.25));
+}
+
+.memoriya-experience .memoriya-empty-drive h2 {
+  max-width: 14ch;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(2rem, 5vw, 4rem);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .memoriya-experience .memoriya-stat,
+  .memoriya-experience .memoriya-now-card,
+  .memoriya-experience .memoriya-album-wall article {
+    transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), border-color 220ms ease, box-shadow 220ms ease;
+  }
+
+  .memoriya-experience .memoriya-stat:hover,
+  .memoriya-experience .memoriya-now-card:hover {
+    transform: translateY(-3px);
+    border-color: rgba(244, 201, 138, 0.28);
+    box-shadow: 0 28px 90px rgba(0, 0, 0, 0.32), 0 0 30px rgba(244, 201, 138, 0.07);
+  }
+}
+
+@media (min-width: 1500px) and (min-height: 800px) {
+  .memoriya-experience .memoriya-cinema-hero {
+    gap: 3.5rem;
+  }
+
+  .memoriya-experience .memoriya-hero-copy h1 {
+    font-size: clamp(5.2rem, 7vw, 8.6rem);
+  }
+
+  .memoriya-experience .memoriya-hero-film {
+    height: 300px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .memoriya-experience .memoriya-cinema-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memoriya-experience .memoriya-now-card {
+    width: min(100%, 560px);
+    justify-self: start;
+  }
+
+  .memoriya-experience .memoriya-hero-copy h1 {
+    max-width: 11ch;
+  }
+
+  .memoriya-experience .memoriya-reel-stage,
+  .memoriya-experience .memoriya-map-stage {
+    grid-template-columns: minmax(280px, 0.75fr) minmax(0, 1.25fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .memoriya-navbar {
+    top: max(0.55rem, env(safe-area-inset-top));
+    left: max(0.55rem, env(safe-area-inset-left));
+    right: max(0.55rem, env(safe-area-inset-right));
+    border-radius: 16px;
+  }
+
+  .memoriya-experience {
+    padding: 5.8rem 0.75rem calc(6.8rem + env(safe-area-inset-bottom));
+  }
+
+  .memoriya-experience .memoriya-cinema-hero {
+    gap: 1rem;
+  }
+
+  .memoriya-experience .memoriya-hero-copy {
+    padding-top: 0.8rem;
+  }
+
+  .memoriya-experience .memoriya-hero-copy h1 {
+    max-width: 11ch;
+    font-size: clamp(3.15rem, 16vw, 5.3rem);
+  }
+
+  .memoriya-experience .memoriya-hero-copy p {
+    font-size: 0.92rem;
+    line-height: 1.65;
+  }
+
+  .memoriya-experience .memoriya-hero-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .memoriya-experience .memoriya-hero-actions > :first-child,
+  .memoriya-experience .memoriya-hero-actions > :last-child {
+    grid-column: 1 / -1;
+  }
+
+  .memoriya-experience .memoriya-hero-film {
+    height: 220px;
+    grid-template-columns: repeat(5, minmax(130px, 1fr));
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+  }
+
+  .memoriya-experience .memoriya-hero-film > div {
+    min-width: 130px;
+    scroll-snap-align: start;
+  }
+
+  .memoriya-experience .memoriya-dashboard {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .memoriya-experience .memoriya-stage-tabs {
+    top: 5.3rem;
+    margin-inline: -0.1rem;
+  }
+
+  .memoriya-experience .memoriya-stage-tabs button {
+    min-width: 7.2rem;
+  }
+
+  .memoriya-experience .memoriya-reel-stage,
+  .memoriya-experience .memoriya-map-stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memoriya-experience .memoriya-reel-phone {
+    min-height: min(72svh, 620px);
+    border-radius: 20px;
+  }
+
+  .memoriya-experience .memoriya-reel-list {
+    max-height: 430px;
+    overflow: auto;
+  }
+
+  .memoriya-experience .memoriya-map {
+    min-height: 420px;
+  }
+}
+
+@media (max-width: 400px) {
+  .memoriya-experience .memoriya-hero-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memoriya-experience .memoriya-hero-actions > * {
+    grid-column: auto !important;
+  }
+
+  .memoriya-experience .memoriya-stat {
+    min-height: 6.8rem;
+    padding: 0.8rem;
+  }
+}
+
+@container memory-page (max-width: 860px) {
+  .memoriya-experience .memoriya-dashboard {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container memory-page (max-width: 600px) {
+  .memoriya-experience .memoriya-cinema-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memoriya-experience .memoriya-reel-stage,
+  .memoriya-experience .memoriya-map-stage {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

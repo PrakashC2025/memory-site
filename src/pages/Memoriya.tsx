@@ -93,6 +93,7 @@ const readDriveSession = (): DriveSessionSnapshot | null => {
 const Memoriya: React.FC = () => {
   const reducedMotion = useReducedMotion();
   const lightweight = useLightweightMode();
+  const deviceProfile = useDeviceProfile();
   const restored = useMemo(readDriveSession, []);
   const [stage, setStage] = useState<Stage>('reels');
   const [query, setQuery] = useState('');
@@ -515,7 +516,7 @@ const Memoriya: React.FC = () => {
   };
 
   return (
-    <div className="memoriya-experience">
+    <div className={`memoriya-experience memoriya-device-${deviceProfile}`}>
       {localPicker}
       {folderPicker}
       {!lightweight && !reducedMotion && hasMemories && <CinematicIntro />}
@@ -535,11 +536,12 @@ const Memoriya: React.FC = () => {
           animate={lightweight ? undefined : { opacity: 1, y: 0 }}
           transition={{ duration: 0.28 }}
         >
-          <span className="memoriya-kicker"><Sparkles size={15} /> Memoriya</span>
-          <h1>{hasMemories ? 'Your Drive memories, beautifully organized.' : 'Bring your memories home.'}</h1>
+          <span className="memoriya-kicker"><Sparkles size={15} /> Your private memory library</span>
+          <h1>{hasMemories ? 'The moments that made you.' : 'Bring your memories home.'}</h1>
           <p>
-            Connect Google Drive once. Memoriya automatically arranges your real photos and videos by date,
-            time, type, album, and place so anyone can use it without technical steps.
+            {hasMemories
+              ? 'A calm, cinematic home for the people, places, and little moments you never want to lose.'
+              : 'Connect Google Drive once, or add media from this device. Memoriya turns your real photos into a private, beautiful archive.'}
           </p>
           <div className="memoriya-hero-actions">
             <button className="memoriya-primary" onClick={connectDrive} disabled={loading}>
@@ -592,10 +594,10 @@ const Memoriya: React.FC = () => {
 
       <section className="memoriya-dashboard">
         {[
-          { label: 'Drive memories', value: memories.length, Icon: Images },
+          { label: 'Memories held', value: memories.length, Icon: Images },
           { label: 'Photos / videos', value: `${countType(memories, 'photo')} / ${countType(memories, 'video')}`, Icon: Camera },
-          { label: 'Albums created', value: albums.length, Icon: Lock },
-          { label: 'Cloud status', value: accessToken ? 'Connected' : 'Ready', Icon: Cloud },
+          { label: 'Chapters found', value: albums.length, Icon: Lock },
+          { label: 'Library status', value: accessToken ? 'Synced' : 'Ready', Icon: Cloud },
         ].map(item => (
           <motion.article key={item.label} whileHover={lightweight ? undefined : { y: -3 }} className="memoriya-stat">
             <item.Icon size={18} />
@@ -765,8 +767,8 @@ HeroImage.displayName = 'HeroImage';
 
 const OnboardingCard: React.FC<{ loading: boolean; onConnect: () => void; onImportLocal: () => void }> = ({ loading, onConnect, onImportLocal }) => (
   <aside className="memoriya-now-card memoriya-onboarding-card">
-    <span><ShieldCheck size={16} /> Private setup</span>
-    <h2>No default photos here</h2>
+    <span><ShieldCheck size={16} /> Your private archive</span>
+    <h2>Start with something real</h2>
     <p>Connect Google Drive, or add photos and videos straight from this device. Memoriya shows only your own media across every screen.</p>
     <div className="flex flex-col gap-2">
       <button className="memoriya-primary" onClick={onConnect} disabled={loading}>
@@ -783,7 +785,7 @@ const OnboardingCard: React.FC<{ loading: boolean; onConnect: () => void; onImpo
 const EmptyDriveState: React.FC<{ loading: boolean; onConnect: () => void; onImportLocal: () => void }> = ({ loading, onConnect, onImportLocal }) => (
   <section className="memoriya-empty-drive">
     <Cloud size={34} />
-    <h2>Start with your real memories</h2>
+    <h2>Give your memories a beautiful home</h2>
     <p>
       There are no demo images in your workspace. Connect Google Drive, or pick photos and videos from this
       device. Memoriya sorts them automatically by date, time, type, albums, and available location metadata.
@@ -1028,16 +1030,36 @@ const useLightweightMode = () => {
   const [lightweight, setLightweight] = useState(false);
   useEffect(() => {
     const check = () => {
+      const livingRoom = window.innerWidth >= 1200 && window.innerHeight >= 650 && window.innerWidth / window.innerHeight >= 1.3;
       const narrow = window.innerWidth < 760;
       const coarse = window.matchMedia('(pointer: coarse)').matches;
       const lowMemory = 'deviceMemory' in navigator && Number(navigator.deviceMemory) <= 4;
-      setLightweight(narrow || coarse || lowMemory);
+      setLightweight(!livingRoom && (narrow || coarse || lowMemory));
     };
     check();
     window.addEventListener('resize', check, { passive: true });
     return () => window.removeEventListener('resize', check);
   }, []);
   return lightweight;
+};
+
+type DeviceProfile = 'mobile' | 'tablet' | 'desktop' | 'tv';
+
+const useDeviceProfile = () => {
+  const [profile, setProfile] = useState<DeviceProfile>('desktop');
+
+  useEffect(() => {
+    const check = () => {
+      const { innerWidth: width, innerHeight: height } = window;
+      const isLivingRoom = width >= 1200 && height >= 650 && width / height >= 1.3;
+      setProfile(isLivingRoom ? 'tv' : width <= 640 ? 'mobile' : width <= 1024 ? 'tablet' : 'desktop');
+    };
+    check();
+    window.addEventListener('resize', check, { passive: true });
+    return () => window.removeEventListener('resize', check);
+  }, []);
+
+  return profile;
 };
 
 const CinematicIntro: React.FC = () => (
