@@ -255,11 +255,11 @@ export class GoogleDriveService {
     return allFiles;
   }
 
-  async listMediaPage(accessToken: string, pageToken = '', folderId = ''): Promise<DriveMediaPage> {
+  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40): Promise<DriveMediaPage> {
     const locationQuery = folderId ? `'${folderId}' in parents and ` : '';
     const params = new URLSearchParams({
       q: `${locationQuery}(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false`,
-      pageSize: '40',
+      pageSize: String(pageSize),
       orderBy: 'createdTime desc',
       fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
       includeItemsFromAllDrives: 'true',
@@ -280,6 +280,17 @@ export class GoogleDriveService {
         webContentLink: file.webContentLink || file.webViewLink,
       })),
     };
+  }
+
+  async listAllMedia(accessToken: string, folderId = ''): Promise<DriveMediaFile[]> {
+    const files: DriveMediaFile[] = [];
+    let pageToken = '';
+    do {
+      const page = await this.listMediaPage(accessToken, pageToken, folderId, 100);
+      files.push(...page.files);
+      pageToken = page.nextPageToken || '';
+    } while (pageToken);
+    return files;
   }
 
   async listFolders(accessToken: string): Promise<Array<{ id: string; name: string }>> {

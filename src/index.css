@@ -2986,6 +2986,7 @@ input[type="number"]::-webkit-inner-spin-button {
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 16px;
   background: #02040a;
+  touch-action: none;
 }
 
 .memoriya-camera-viewfinder video {
@@ -3462,8 +3463,6 @@ input[type="number"]::-webkit-inner-spin-button {
   .memoriya-camera-settings label,
   .memoriya-camera-settings button { min-height: 2.35rem; padding: 0.45rem 0.7rem; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 999px; background: rgba(3, 5, 12, 0.66); backdrop-filter: blur(12px); pointer-events: auto; }
   .memoriya-camera-settings label { min-width: 0; max-width: 100%; }
-  .memoriya-camera-settings input[type='range'] { width: min(42vw, 170px); }
-
   .memoriya-camera-destination {
     position: absolute;
     right: 0.9rem;
@@ -7282,6 +7281,29 @@ nav.fixed.left-0.right-0.top-0 {
   color: rgba(255, 255, 255, 0.5);
   font-size: 0.68rem;
   font-weight: 800;
+}
+
+.drive-preview-video-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.drive-preview-video-poster > span {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+  background: rgba(5, 7, 14, 0.72);
+  color: #fff;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 .drive-preview-spinner {

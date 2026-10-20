@@ -8,7 +8,6 @@ import {
   Grid3X3,
   Lightbulb,
   Loader2,
-  Maximize2,
   RotateCcw,
   Share2,
   Trash2,
@@ -17,6 +16,7 @@ import {
 import type { DriveMediaFile } from '../services/googleDriveService';
 import { googleDriveService, isDriveAuthorizationError } from '../services/googleDriveService';
 import { saveDriveAccessToken } from '../services/driveLibrary';
+import { writeCachedStoryMedia } from '../services/storyMediaCache';
 
 interface ImageCaptureLike {
   takePhoto: () => Promise<Blob>;
@@ -64,6 +64,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
   const trackRef = useRef<MediaStreamTrack | null>(null);
   const imageCaptureRef = useRef<ImageCaptureLike | null>(null);
   const hardwareZoomRef = useRef(false);
+  const zoomRef = useRef(1);
+  const zoomRangeRef = useRef({ min: 1, max: 4, step: 0.1 });
+  const zoomApplyFrameRef = useRef<number | null>(null);
   const pinchStartDistanceRef = useRef(0);
   const pinchStartZoomRef = useRef(1);
   const previewUrlRef = useRef('');
@@ -83,7 +86,6 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
   const [gridEnabled, setGridEnabled] = useState(false);
   const [torchEnabled, setTorchEnabled] = useState(false);
   const [zoom, setZoom] = useState(1);
-  const [zoomRange, setZoomRange] = useState<{ min: number; max: number; step: number } | null>(null);
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
@@ -152,8 +154,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
           }
           : { min: 1, max: 4, step: 0.1 };
         hardwareZoomRef.current = Boolean(capabilities.zoom && range.max > range.min);
-        setZoomRange(range.max > range.min ? range : { min: 1, max: 4, step: 0.1 });
-        setZoom(1);
+        zoomRangeRef.current = range.max > range.min ? range : { min: 1, max: 4, step: 0.1 };
+        zoomRef.current = range.min;
+        setZoom(range.min);
         setTorchAvailable(Boolean(capabilities.torch));
         const ImageCaptureConstructor = (window as unknown as { ImageCapture?: new (track: MediaStreamTrack) => ImageCaptureLike }).ImageCapture;
         imageCaptureRef.current = ImageCaptureConstructor ? new ImageCaptureConstructor(track) : null;
@@ -170,7 +173,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
       streamRef.current = null;
       trackRef.current = null;
       setTorchEnabled(false);
-      setZoomRange(null);
+      if (zoomApplyFrameRef.current !== null) cancelAnimationFrame(zoomApplyFrameRef.current);
+      zoomApplyFrameRef.current = null;
     };
   }, [facingMode]);
 
@@ -241,8 +245,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
       context.translate(canvas.width, 0);
       context.scale(-1, 1);
     }
-    const sourceWidth = video.videoWidth / (hardwareZoomRef.current ? 1 : zoom);
-    const sourceHeight = video.videoHeight / (hardwareZoomRef.current ? 1 : zoom);
+    const captureZoom = zoomRef.current;
+    const sourceWidth = video.videoWidth / (hardwareZoomRef.current ? 1 : captureZoom);
+    const sourceHeight = video.videoHeight / (hardwareZoomRef.current ? 1 : captureZoom);
     const sourceX = (video.videoWidth - sourceWidth) / 2;
     const sourceY = (video.videoHeight - sourceHeight) / 2;
     context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
@@ -272,6 +277,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
       }
       if (controller.signal.aborted) return;
       setUploadedFile(uploaded);
+      await writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
       onUploaded(uploaded);
       setStatus('Photo saved to Drive and added to your live story.');
     } catch (uploadError) {
@@ -433,11 +439,18 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
   };
 
   const changeZoom = (value: number) => {
-    const range = zoomRange || { min: 1, max: 4, step: 0.1 };
+    const range = zoomRangeRef.current;
     const next = Math.min(range.max, Math.max(range.min, value));
+    zoomRef.current = next;
     setZoom(next);
     const track = trackRef.current;
-    if (track && hardwareZoomRef.current) void track.applyConstraints({ advanced: [{ zoom: next } as MediaTrackConstraintSet] }).catch(() => undefined);
+    if (track && hardwareZoomRef.current) {
+      if (zoomApplyFrameRef.current !== null) cancelAnimationFrame(zoomApplyFrameRef.current);
+      zoomApplyFrameRef.current = requestAnimationFrame(() => {
+        zoomApplyFrameRef.current = null;
+        void track.applyConstraints({ advanced: [{ zoom: next } as MediaTrackConstraintSet] }).catch(() => undefined);
+      });
+    }
   };
 
   const pinchDistance = (touches: React.TouchList) => {
@@ -447,8 +460,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
 
   const handlePinchStart = (event: React.TouchEvent<HTMLDivElement>) => {
     if (event.touches.length < 2) return;
+    event.preventDefault();
     pinchStartDistanceRef.current = pinchDistance(event.touches);
-    pinchStartZoomRef.current = zoom;
+    pinchStartZoomRef.current = zoomRef.current;
   };
 
   const handlePinchMove = (event: React.TouchEvent<HTMLDivElement>) => {
@@ -476,7 +490,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
           <div><span className="memoriya-kicker"><Camera size={15} /> Mobile camera</span><h2>Capture a new memory</h2></div>
           <button type="button" onClick={onClose} aria-label="Close camera"><X size={20} /></button>
         </header>
-        <div className="memoriya-camera-viewfinder" onTouchStart={handlePinchStart} onTouchMove={handlePinchMove} onTouchEnd={handlePinchEnd} onWheel={event => { if (zoomRange) changeZoom(zoom + (event.deltaY > 0 ? -0.1 : 0.1)); }}>
+        <div className="memoriya-camera-viewfinder" onTouchStart={handlePinchStart} onTouchMove={handlePinchMove} onTouchEnd={handlePinchEnd} onTouchCancel={handlePinchEnd}>
           <video ref={videoRef} muted playsInline autoPlay style={{ filter: CAMERA_FILTERS[filter].css, transform: `${facingMode === 'user' ? 'scaleX(-1)' : ''}${!hardwareZoomRef.current ? ` scale(${zoom})` : ''}`.trim() || undefined }} />
           {!cameraReady && <div className="memoriya-camera-status"><Loader2 className="memoriya-spin-icon" size={28} /><span>{error || status}</span></div>}
           {previewUrl && showLastShot && (
@@ -502,10 +516,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, onUploaded, onDelete
             </select>
           </label>
         </div>
-        <div className="memoriya-camera-settings">
-          {zoomRange && <label><Maximize2 size={15} /> Zoom <input type="range" min={zoomRange.min} max={zoomRange.max} step={zoomRange.step} value={zoom} onChange={event => changeZoom(Number(event.target.value))} /><output>{zoom.toFixed(1)}x</output></label>}
-          {torchAvailable && <button type="button" onClick={toggleTorch} className={torchEnabled ? 'is-active' : ''}><Lightbulb size={15} /> {torchEnabled ? 'Flash on' : 'Flash off'}</button>}
-        </div>
+        {torchAvailable && <div className="memoriya-camera-settings">
+          <button type="button" onClick={toggleTorch} className={torchEnabled ? 'is-active' : ''}><Lightbulb size={15} /> {torchEnabled ? 'Flash on' : 'Flash off'}</button>
+        </div>}
         <label className="memoriya-camera-destination">Save to Drive folder
           <select value={folderId} onChange={event => setFolderId(event.target.value)}>
             <option value="drive-root">My Drive root</option>

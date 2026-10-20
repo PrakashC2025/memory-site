@@ -42,6 +42,7 @@ interface ReelSource {
   id: string;
   src: string;
   fallbackSrc?: string;
+  poster?: string;
   driveFileId?: string;
   authToken?: string;
   rotation?: number;
@@ -102,6 +103,36 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const ease = (value: number) => value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2;
 const escapeHtml = (value: string) => String(value).replace(/[&<>\"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[character] || character));
+
+const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
+  aac: 'audio/aac',
+  aif: 'audio/aiff',
+  aiff: 'audio/aiff',
+  amr: 'audio/amr',
+  flac: 'audio/flac',
+  m4a: 'audio/mp4',
+  mka: 'audio/x-matroska',
+  mp3: 'audio/mpeg',
+  oga: 'audio/ogg',
+  ogg: 'audio/ogg',
+  opus: 'audio/opus',
+  wav: 'audio/wav',
+  webm: 'audio/webm',
+  wma: 'audio/x-ms-wma',
+};
+
+const audioMimeType = (name: string, fallback = '') => {
+  if (fallback.startsWith('audio/')) return fallback;
+  const extension = name.split(/[?#]/)[0].split('.').pop()?.toLowerCase() || '';
+  return AUDIO_MIME_BY_EXTENSION[extension] || fallback || 'audio/mpeg';
+};
+
+const isAudioFile = (file: File) => file.type.startsWith('audio/')
+  || Boolean(AUDIO_MIME_BY_EXTENSION[file.name.split('.').pop()?.toLowerCase() || '']);
+
+const normalizeAudioFile = (file: File) => file.type.startsWith('audio/')
+  ? file
+  : new File([file], file.name, { type: audioMimeType(file.name), lastModified: file.lastModified });
 
 /**
  * The camera-wall controller ported from the supplied memoriya-reel.html.
@@ -285,11 +316,24 @@ export class MemoryReelController {
 
       if (isVideo) {
         const video = document.createElement('video');
-        Object.assign(video, { src: item.src, muted: true, loop: true, playsInline: true, preload: 'auto' });
+        Object.assign(video, { src: item.src, muted: true, loop: true, playsInline: true, preload: 'auto', poster: item.poster || '' });
         video.defaultMuted = true;
         video.volume = 0;
         video.className = 'm';
-        video.onloadedmetadata = () => finish({ node: video, video, aspect: video.videoWidth / video.videoHeight || 1.6 });
+        const finishVideo = () => finish({ node: video, video, aspect: video.videoWidth / video.videoHeight || 1.6 });
+        const finishVideoPoster = () => {
+          if (!item.poster) {
+            finish(null);
+            return;
+          }
+          const poster = new Image();
+          poster.decoding = 'async';
+          poster.onload = () => finish({ node: poster, aspect: poster.naturalWidth / poster.naturalHeight || 1.6 });
+          poster.onerror = () => finish(null);
+          poster.src = item.poster;
+        };
+        video.onloadedmetadata = finishVideo;
+        video.onloadeddata = finishVideo;
         video.onerror = () => {
           if (item.driveFileId && item.authToken && !attemptedAuthenticated) {
             attemptedAuthenticated = true;
@@ -306,10 +350,10 @@ export class MemoryReelController {
                 video.src = objectUrl;
                 video.load();
               })
-              .catch(() => finish(null));
+            .catch(() => finishVideoPoster());
             return;
           }
-          finish(null);
+          finishVideoPoster();
         };
       } else {
         const image = new Image();
@@ -753,6 +797,7 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal, drive
       authToken: memory.authToken || driveAccessToken,
       rotation: memory.orientation,
       type: video ? 'video' : 'image',
+      poster: video ? memory.thumbnail : undefined,
       label: memory.title,
     } satisfies ReelSource];
   });
@@ -875,11 +920,11 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
   useEffect(() => {
     const controller = controllerRef.current;
-    if (!controller || !resolvedSources.length) return;
+    if (!controller) return;
     const preserveProgress = hasLoadedSourcesRef.current;
-    hasLoadedSourcesRef.current = true;
+    if (resolvedSources.length) hasLoadedSourcesRef.current = true;
     void controller.setItems(resolvedSources, preserveProgress).then(() => {
-      if (autoPlay && !preserveProgress) controller.play();
+      if (resolvedSources.length && autoPlay && !preserveProgress) controller.play();
     });
   }, [autoPlay, resolvedSources]);
 
@@ -963,7 +1008,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   };
 
   const chooseMusicFiles = (files: FileList | File[]) => {
-    const nextFiles = Array.from(files || []).filter(file => file.type.startsWith('audio/'));
+    const nextFiles = Array.from(files || []).filter(isAudioFile).map(normalizeAudioFile);
     if (!nextFiles.length) return;
     const nextTracks = nextFiles.map((file, index) => {
       const src = URL.createObjectURL(file);
@@ -982,7 +1027,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       if (!response.ok) throw new Error(`Audio source returned ${response.status}.`);
       const blob = await response.blob();
       if (!blob.size) throw new Error('The audio source returned an empty file.');
-      const objectUrl = URL.createObjectURL(blob);
+      const playableBlob = blob.type.startsWith('audio/')
+        ? blob
+        : new Blob([blob], { type: audioMimeType(source, blob.type) });
+      const objectUrl = URL.createObjectURL(playableBlob);
       audioObjectUrlsRef.current.push(objectUrl);
       return objectUrl;
     } catch (error) {
@@ -991,6 +1039,12 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     } finally {
       window.clearTimeout(timeoutId);
     }
+  };
+
+  const normalizeDriveAudioBlob = (blob: Blob, song: DriveAudioFile) => {
+    return blob.type.startsWith('audio/') && song.mimeType.startsWith('audio/')
+      ? blob
+      : new Blob([blob], { type: audioMimeType(song.name, song.mimeType || blob.type) });
   };
 
   const chooseMusicTrack = async (track: OpenSourceMusicTrack) => {
@@ -1080,12 +1134,11 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         result = { blob: await googleDriveService.downloadMediaFile(refreshedToken, song.id), accessToken: refreshedToken };
       }
       if (result.accessToken !== driveAccessToken) saveDriveAccessToken(result.accessToken);
-      const src = URL.createObjectURL(result.blob);
+      const src = URL.createObjectURL(normalizeDriveAudioBlob(result.blob, song));
       audioObjectUrlsRef.current.push(src);
       setMusicName(song.name);
-      setMusicQueue(current => current.some(item => item.driveFileId === song.id)
-        ? current
-        : [...current, { id: trackId, src, label: song.name, source: 'drive', driveFileId: song.id }]);
+      const selectedTrack = { id: trackId, src, label: song.name, source: 'drive', driveFileId: song.id } satisfies MusicQueueItem;
+      setMusicQueue(current => [selectedTrack, ...current.filter(item => item.driveFileId !== song.id && item.id !== trackId)]);
     } catch (error) {
       setMusicError(error instanceof Error ? `Drive audio could not be loaded: ${error.message}` : 'Drive audio could not be loaded.');
     } finally {
@@ -1098,7 +1151,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       setMusicError('Connect Google Drive before uploading songs.');
       return;
     }
-    const nextFiles = Array.from(files || []).filter(file => file.type.startsWith('audio/'));
+    const nextFiles = Array.from(files || []).filter(isAudioFile).map(normalizeAudioFile);
     if (!nextFiles.length) return;
     setDriveUploadLoading(true);
     setMusicError('');
@@ -1168,10 +1221,26 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const toggleMusic = async () => {
     const controller = controllerRef.current;
     if (!controller) return;
-    const started = await controller.toggleAudio();
+    const audioElement = audioPlayerRef.current;
+    let started = false;
+    try {
+      if (audioElement && audioElement.src) {
+        if (!audioElement.paused) {
+          audioElement.pause();
+        } else {
+          if (audioElement.readyState === HTMLMediaElement.HAVE_NOTHING) audioElement.load();
+          await audioElement.play();
+          started = true;
+        }
+      } else {
+        started = await controller.toggleAudio();
+      }
+    } catch {
+      started = false;
+    }
     if (!started && !audioPlaying && musicQueue.length) {
-      setMusicError(audioPlayerRef.current?.error
-        ? 'Drive could not play this file. Check the audio format and reconnect Drive if needed.'
+      setMusicError(audioElement?.error
+        ? 'This Drive song could not be decoded by the device. Try MP3, M4A, WAV, OGG, or AAC.'
         : 'Tap Play music again to allow audio on this device.');
     } else if (started) {
       setMusicError('');
@@ -1243,8 +1312,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             <div className="memory-reel-music-search">
               <input value={musicQuery} onChange={event => setMusicQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void searchMusic(); }} placeholder="Search free music…" />
               <button type="button" onClick={() => void searchMusic()} disabled={musicLoading}><Search size={15} /> {musicLoading ? 'Searching…' : 'Search'}</button>
-              <label className="memory-reel-upload"><Upload size={15} /> Add local songs<input type="file" accept="audio/*" multiple onChange={event => { chooseMusicFiles(event.target.files || []); event.currentTarget.value = ''; }} /></label>
-              <label className="memory-reel-upload memory-reel-drive-upload"><Upload size={15} /> {driveUploadLoading ? 'Uploading...' : 'Upload songs to Drive'}<input type="file" accept="audio/*" multiple disabled={driveUploadLoading || !driveAccessToken} onChange={event => { void uploadSongsToDrive(event.target.files || []); event.currentTarget.value = ''; }} /></label>
+              <label className="memory-reel-upload"><Upload size={15} /> Add local songs<input type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.opus,.wav,.flac,.aiff,.aif,.mka,.webm,.amr,.wma" multiple onChange={event => { chooseMusicFiles(event.target.files || []); event.currentTarget.value = ''; }} /></label>
+              <label className="memory-reel-upload memory-reel-drive-upload"><Upload size={15} /> {driveUploadLoading ? 'Uploading...' : 'Upload songs to Drive'}<input type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.opus,.wav,.flac,.aiff,.aif,.mka,.webm,.amr,.wma" multiple disabled={driveUploadLoading || !driveAccessToken} onChange={event => { void uploadSongsToDrive(event.target.files || []); event.currentTarget.value = ''; }} /></label>
               {driveAccessToken && <button type="button" onClick={() => void loadDriveSongs(true)} disabled={driveSongsLoading}><Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : 'Load Drive songs'}</button>}
             </div>
             <p className="memory-reel-music-note">Only photos and videos appear in the story. Songs are used as the audio queue. Drive is checked only when you press “Load Drive songs”.</p>

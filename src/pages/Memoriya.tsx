@@ -227,14 +227,17 @@ const Memoriya: React.FC = () => {
       if (!active || driveSyncBusyRef.current) return;
       driveSyncBusyRef.current = true;
       try {
-        const page = await googleDriveService.listMediaPage(accessToken, '', driveFolderId);
+        const files = await googleDriveService.listAllMedia(accessToken, driveFolderId);
         if (!active) return;
-        const imported = page.files
+        const imported = files
           .filter(file => file.mimeType.startsWith('image/') || file.mimeType.startsWith('video/') || file.thumbnailUrl || file.webContentLink)
           .map(file => enrichDriveMemory(googleDriveService.toMemory(file, accessToken), file));
+        const currentDriveIds = new Set(imported.map(memory => memory.driveFileId).filter(Boolean));
         setMemories(current => {
-          const ids = new Set(current.map(memory => memory.id));
+          const presentMemories = current.filter(memory => !memory.driveFileId || currentDriveIds.has(memory.driveFileId));
+          const ids = new Set(presentMemories.map(memory => memory.id));
           const fresh = imported.filter(memory => !ids.has(memory.id));
+          const removedCount = current.length - presentMemories.length;
           if (fresh.length) void cacheDriveMediaFiles(fresh.map(memory => ({
             id: memory.driveFileId || memory.id,
             name: memory.title,
@@ -242,8 +245,15 @@ const Memoriya: React.FC = () => {
             thumbnailUrl: memory.thumbnail,
             createdTime: memory.date,
           } satisfies DriveMediaFile)), accessToken);
-          return fresh.length
-            ? [...current, ...fresh].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+          if (removedCount) {
+            setSelected(selectedMemory => selectedMemory?.driveFileId && !currentDriveIds.has(selectedMemory.driveFileId) ? null : selectedMemory);
+            setViewerMemory(viewer => viewer?.driveFileId && !currentDriveIds.has(viewer.driveFileId) ? null : viewer);
+            setMessage(`${removedCount} deleted Drive ${removedCount === 1 ? 'memory was' : 'memories were'} removed from your story.`);
+          } else if (fresh.length) {
+            setMessage(`${fresh.length} new Drive ${fresh.length === 1 ? 'memory is' : 'memories are'} now in your story.`);
+          }
+          return fresh.length || removedCount
+            ? [...presentMemories, ...fresh].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
             : current;
         });
       } catch (syncError) {

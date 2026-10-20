@@ -91,9 +91,11 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       setDriveError('');
       try {
         let pageToken = '';
+        const seenIds = new Set<string>();
         do {
           const page = await googleDriveService.listMediaPage(token, pageToken, folderId);
           if (!active) return;
+          page.files.forEach(file => seenIds.add(`drive-${file.id}`));
           const knownIds = new Set(known.map(memory => memory.id));
           const newFiles = page.files.filter(file => !knownIds.has(`drive-${file.id}`));
           if (newFiles.length) {
@@ -119,6 +121,13 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
           }
           pageToken = page.nextPageToken || '';
         } while (pageToken && active);
+        if (!active) return;
+        const removedIds = new Set(known.filter(memory => memory.driveFileId && !seenIds.has(memory.id)).map(memory => memory.id));
+        if (removedIds.size) {
+          known = known.filter(memory => !removedIds.has(memory.id));
+          saveDriveMemories(known, token, folderId);
+          setDriveMemories(current => current.filter(memory => !removedIds.has(memory.id)));
+        }
       } catch (syncError) {
         if (isDriveAuthorizationError(syncError) && Date.now() - driveTokenRefreshAtRef.current > 60000) {
           driveTokenRefreshAtRef.current = Date.now();

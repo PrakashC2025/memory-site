@@ -423,19 +423,21 @@ const buildStoryMusicResults = (value: string): StoryMusicTrack[] => {
   ];
 };
 
-const makeDownloadFile = (memory: Memory) => {
-  const payload = [
-    memory.title,
-    '',
-    memory.caption,
-    '',
-    `Date: ${MONTH_NAMES[memory.month]} ${memory.year}`,
-    memory.location ? `Location: ${memory.location}` : '',
-    memory.event ? `Event: ${memory.event}` : '',
-    `Media: ${memory.url}`,
-  ].filter(Boolean).join('\n');
-  const blob = new Blob([payload], { type: 'text/plain;charset=utf-8' });
-  return URL.createObjectURL(blob);
+const mediaExtension = (memory: Memory, mimeType = '') => {
+  const normalized = mimeType.toLowerCase();
+  const known: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/avif': 'avif',
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+    'video/quicktime': 'mov',
+    'video/x-matroska': 'mkv',
+  };
+  return known[normalized]
+    || (normalized.startsWith('video/') ? 'mp4' : memory.type === 'video' ? 'mp4' : 'jpg');
 };
 
 const MemoryLightbox: React.FC<Props> = ({
@@ -468,6 +470,7 @@ const MemoryLightbox: React.FC<Props> = ({
   const [muted, setMuted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [musicOpen, setMusicOpen] = useState(false);
+  const [downloadLoading, setDownloadLoading] = useState(false);
   const [musicQuery, setMusicQuery] = useState('');
   const [youtubeSrc, setYoutubeSrc] = useState('');
   const [audioSrc, setAudioSrc] = useState('');
@@ -1126,17 +1129,39 @@ const MemoryLightbox: React.FC<Props> = ({
     emitToast(tracks.length === 1 ? 'Local song added.' : `${tracks.length} local songs added.`);
   };
 
-  const downloadCurrent = () => {
+  const downloadCurrent = async () => {
     if (!current) return;
-    const url = makeDownloadFile(current);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${current.title.replace(/[^\w-]+/g, '-').toLowerCase()}-memory.txt`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    emitToast('Download prepared for current memory.');
+    setDownloadLoading(true);
+    try {
+      const cacheKey = getStoryMediaCacheKey(current);
+      let blob = await readCachedStoryMedia(cacheKey);
+      if (!blob && current.driveFileId && current.authToken) {
+        const result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(current.authToken!, current.driveFileId!));
+        if (result.accessToken !== current.authToken) saveDriveAccessToken(result.accessToken);
+        blob = result.blob;
+        void writeCachedStoryMedia(cacheKey, blob, current.mimeType || blob.type);
+      }
+      if (!blob) {
+        const source = driveObjectSrc || mediaSrc || current.url;
+        if (!source) throw new Error('The original media is not ready yet.');
+        const response = await fetch(source);
+        if (!response.ok) throw new Error(`Media download failed (${response.status}).`);
+        blob = await response.blob();
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${current.title.replace(/[^\w-]+/g, '-').toLowerCase() || 'memoriya-memory'}.${mediaExtension(current, blob.type || current.mimeType)}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      emitToast(`${current.type === 'video' ? 'Video' : 'Photo'} saved to your device.`);
+    } catch (error) {
+      emitToast(error instanceof Error ? error.message : 'Could not download this memory.');
+    } finally {
+      setDownloadLoading(false);
+    }
   };
 
   const shareCurrent = async () => {
@@ -1984,7 +2009,7 @@ const MemoryLightbox: React.FC<Props> = ({
           <button onClick={() => setTreeOverlayOn(value => !value)} aria-label="Toggle tree overlay"><ImageIcon size={17} /></button>
           <button onClick={toggleFavorite} aria-label="Favorite" className={isFavorite ? 'is-active' : ''}><Heart size={17} fill={isFavorite ? 'currentColor' : 'none'} /></button>
           <button onClick={shareCurrent} aria-label="Share"><Share2 size={17} /></button>
-          <button onClick={downloadCurrent} aria-label="Download"><Download size={17} /></button>
+          <button onClick={() => void downloadCurrent()} disabled={downloadLoading} aria-label={downloadLoading ? 'Preparing download' : 'Download'} title={downloadLoading ? 'Preparing download' : 'Save to device'}><Download size={17} /></button>
         </div>
 
         {sequence.length > 1 && (

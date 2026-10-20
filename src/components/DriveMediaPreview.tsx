@@ -75,7 +75,9 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     };
   }, [blobSrc, eager, failed, fallbackLoading, memory.authToken, memory.driveFileId, memory.id, memory.mimeType, memory.type]);
 
-  const src = blobSrc || imageCandidates[imageIndex] || '';
+  const src = memory.type === 'video'
+    ? blobSrc || memory.url || ''
+    : blobSrc || imageCandidates[imageIndex] || '';
 
   const tryNextImage = () => {
     if (imageIndex + 1 < imageCandidates.length) {
@@ -85,7 +87,12 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     setFailed(true);
   };
 
-  const showNativeVideo = memory.type === 'video' && failed && Boolean(memory.url);
+  const handleVideoError = () => {
+    setLoaded(false);
+    setFailed(true);
+  };
+
+  const showVideoPoster = memory.type === 'video' && failed && !fallbackLoading && Boolean(memory.thumbnail);
 
   return (
     <span className="drive-media-preview-wrap">
@@ -98,8 +105,9 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           autoPlay
           loop
           preload="metadata"
+          poster={memory.thumbnail || undefined}
           onLoadedData={() => setLoaded(true)}
-          onError={tryNextImage}
+          onError={handleVideoError}
           style={loaded ? undefined : { opacity: 0.48 }}
         />
       ) : memory.type !== 'video' && !failed && src ? (
@@ -114,22 +122,17 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           onError={tryNextImage}
           style={loaded ? undefined : { opacity: 0.48 }}
         />
-      ) : showNativeVideo ? (
-        <video
-          src={memory.url}
-          className={`${className} drive-media-preview`}
-          muted
-          playsInline
-          autoPlay
-          loop
-          preload="metadata"
-          onLoadedData={() => {
-            setLoaded(true);
-            setFailed(false);
-          }}
-          onError={() => setFailed(true)}
-          style={loaded ? undefined : { opacity: 0.48 }}
-        />
+      ) : showVideoPoster ? (
+        <span className="drive-preview-video-poster">
+          <img
+            src={memory.thumbnail}
+            alt={alt ?? memory.title}
+            className={`${className} drive-media-preview`}
+            loading={eager ? 'eager' : 'lazy'}
+            decoding="async"
+          />
+          <span aria-hidden="true"><Play size={24} /></span>
+        </span>
       ) : fallbackLoading ? (
         <span className={`drive-preview-fallback ${className} drive-media-preview`}>
           <span className="drive-preview-spinner" aria-hidden="true" />
