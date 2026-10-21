@@ -435,6 +435,19 @@ export class MemoryReelController {
         image.className = 'm';
         image.decoding = 'async';
         image.style.imageOrientation = 'from-image';
+        let drivePromotionStarted = false;
+        const promoteDriveImage = () => {
+          if (drivePromotionStarted || !item.driveFileId || !item.authToken || !item.src) return;
+          drivePromotionStarted = true;
+          void this.loadAuthenticatedDriveImage(item)
+            .then(objectUrl => {
+              if (!objectUrl) return;
+              // The thumbnail is already visible. Replace only the image
+              // source so the current card, clock, and music never restart.
+              image.src = objectUrl;
+            })
+            .catch(() => undefined);
+        };
         image.onload = () => {
           const aspect = image.naturalWidth / image.naturalHeight || 1.5;
           const isQuarterTurn = ((item.rotation || 0) / 90) % 2 === 1;
@@ -446,6 +459,7 @@ export class MemoryReelController {
             image.style.transform = `rotate(${item.rotation}deg)`;
           }
           finish({ node: image, aspect: isQuarterTurn ? 1 / aspect : aspect });
+          promoteDriveImage();
         };
         image.onerror = () => {
           if (item.fallbackSrc && !attemptedFallback) {
@@ -472,7 +486,11 @@ export class MemoryReelController {
           }
           finish(null);
         };
-        if (item.driveFileId && item.authToken) {
+        if (item.driveFileId && item.authToken && item.src) {
+          // Render the Drive thumbnail first. The authenticated original is
+          // promoted after the card is already on screen.
+          image.src = item.src;
+        } else if (item.driveFileId && item.authToken) {
           attemptedAuthenticated = true;
           void this.loadAuthenticatedDriveImage(item)
             .then(objectUrl => {
@@ -1013,17 +1031,19 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal, drive
   const sources = memories.flatMap(memory => {
     const video = isVideoMemory(memory);
     const driveBacked = Boolean(memory.driveFileId && (memory.authToken || driveAccessToken));
-    const preview = driveBacked ? '' : (video ? memory.url || memory.thumbnail : memory.thumbnail || memory.url);
+    // Drive thumbnails are safe, fast first paint. Originals are fetched by
+    // the controller after the thumbnail is visible.
+    const preview = video ? memory.url || memory.thumbnail : memory.thumbnail || memory.url;
     if (!preview && !driveBacked) return [];
     return [{
       id: memory.id,
       src: preview,
-      fallbackSrc: undefined,
+      fallbackSrc: driveBacked ? memory.url : undefined,
       driveFileId: memory.driveFileId,
       authToken: memory.authToken || driveAccessToken,
       rotation: memory.orientation,
       type: video ? 'video' : 'image',
-      poster: video && !driveBacked ? memory.thumbnail : undefined,
+      poster: video ? memory.thumbnail : undefined,
       label: memory.title,
     } satisfies ReelSource];
   });
