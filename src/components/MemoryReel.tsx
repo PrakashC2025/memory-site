@@ -436,15 +436,20 @@ export class MemoryReelController {
         image.decoding = 'async';
         image.style.imageOrientation = 'from-image';
         let drivePromotionStarted = false;
+        let previewObjectUrl = '';
+        let previewResolvedFull = false;
         const promoteDriveImage = () => {
-          if (drivePromotionStarted || !item.driveFileId || !item.authToken || !item.src) return;
+          if (drivePromotionStarted || previewResolvedFull || !item.driveFileId || !item.authToken || !item.src) return;
           drivePromotionStarted = true;
           void this.loadAuthenticatedDriveImage(item)
             .then(objectUrl => {
               if (!objectUrl) return;
               // The thumbnail is already visible. Replace only the image
               // source so the current card, clock, and music never restart.
+              const oldObjectUrl = previewObjectUrl;
               image.src = objectUrl;
+              previewObjectUrl = '';
+              if (oldObjectUrl) this.releaseObjectUrl(oldObjectUrl);
             })
             .catch(() => undefined);
         };
@@ -487,9 +492,33 @@ export class MemoryReelController {
           finish(null);
         };
         if (item.driveFileId && item.authToken && item.src) {
-          // Render the Drive thumbnail first. The authenticated original is
-          // promoted after the card is already on screen.
-          image.src = item.src;
+          // Never assign Drive's short-lived lh3 URL directly to an image.
+          // Fetch it with the current token and use a local object URL so a
+          // 401/403 cannot create a retry loop or a blank card.
+          void this.loadAuthenticatedDrivePreview(item)
+            .then(result => {
+              if (!result.objectUrl) {
+                finish(null);
+                return;
+              }
+              previewObjectUrl = result.objectUrl;
+              previewResolvedFull = result.full;
+              if (result.full) drivePromotionStarted = true;
+              image.src = result.objectUrl;
+            })
+            .catch(() => {
+              void this.loadAuthenticatedDriveImage(item)
+                .then(objectUrl => {
+                  if (!objectUrl) {
+                    finish(null);
+                    return;
+                  }
+                  previewResolvedFull = true;
+                  drivePromotionStarted = true;
+                  image.src = objectUrl;
+                })
+                .catch(() => finish(null));
+            });
         } else if (item.driveFileId && item.authToken) {
           attemptedAuthenticated = true;
           void this.loadAuthenticatedDriveImage(item)
@@ -527,6 +556,41 @@ export class MemoryReelController {
     const objectUrl = URL.createObjectURL(blob);
     this.objectUrls.add(objectUrl);
     return objectUrl;
+  }
+
+  private async loadAuthenticatedDrivePreview(item: ReelSource): Promise<{ objectUrl: string; full: boolean }> {
+    if (!item.driveFileId || !item.authToken) return { objectUrl: '', full: false };
+    const driveCached = await readCachedDriveMedia(item.driveFileId);
+    const cached = driveCached?.blob || await readCachedStoryMedia(item.driveFileId);
+    if (cached) {
+      const objectUrl = URL.createObjectURL(cached);
+      this.objectUrls.add(objectUrl);
+      return { objectUrl, full: true };
+    }
+    if (!item.src) return { objectUrl: await this.loadAuthenticatedDriveImage(item), full: true };
+    // Drive's lh3/thumbnail links are short-lived and frequently return 401
+    // or 403 after a refresh. Do not request them again; use the authenticated
+    // Drive media endpoint and cache the resulting object URL instead.
+    if (/lh\d+\.googleusercontent\.com|drive\.google\.com\/thumbnail/i.test(item.src)) {
+      return { objectUrl: await this.loadAuthenticatedDriveImage(item), full: true };
+    }
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(item.src, {
+        headers: { Authorization: `Bearer ${item.authToken}` },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Drive preview returned ${response.status}.`);
+      const blob = await response.blob();
+      if (!blob.size) throw new Error('Drive preview was empty.');
+      const objectUrl = URL.createObjectURL(blob);
+      this.objectUrls.add(objectUrl);
+      const full = /\/drive\/v3\/files\//i.test(item.src);
+      return { objectUrl, full };
+    } finally {
+      window.clearTimeout(timeout);
+    }
   }
 
   private resize() {
@@ -1038,12 +1102,12 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal, drive
     return [{
       id: memory.id,
       src: preview,
-      fallbackSrc: driveBacked ? memory.url : undefined,
+      fallbackSrc: undefined,
       driveFileId: memory.driveFileId,
       authToken: memory.authToken || driveAccessToken,
       rotation: memory.orientation,
       type: video ? 'video' : 'image',
-      poster: video ? memory.thumbnail : undefined,
+      poster: video && !driveBacked ? memory.thumbnail : undefined,
       label: memory.title,
     } satisfies ReelSource];
   });

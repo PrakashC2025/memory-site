@@ -139,7 +139,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setVideoActive(true); }}
           aria-label={`Play preview for ${memory.title}`}
         >
-          {memory.thumbnail ? (
+          {memory.thumbnail && !memory.driveFileId ? (
             <img
               src={memory.thumbnail}
               alt={alt ?? memory.title}
@@ -174,7 +174,10 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
 };
 
 const buildImageCandidates = (memory: Memory) => {
-  if (memory.driveFileId) return memory.thumbnail ? [memory.thumbnail] : [];
+  // Drive thumbnailLink values are short-lived lh3 URLs. They must not be
+  // assigned directly to an image because they later produce 401/403 loops.
+  // The authenticated cache/download effect above supplies the object URL.
+  if (memory.driveFileId) return [];
   const thumbnail = memory.thumbnail;
   const resizedThumbnail = sharpenThumbnail(memory.thumbnail);
   const candidates = [
