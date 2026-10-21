@@ -351,18 +351,29 @@ const Memoriya: React.FC = () => {
     const imported = files
       .filter(isVisualDriveFile)
       .map(file => enrichDriveMemory(googleDriveService.toMemory(file, token), file));
-    setMemories(current => {
-      const importedById = new Map(imported.map(memory => [memory.id, memory]));
-      const replaced = current.map(memory => importedById.get(memory.id) || memory);
-      const ids = new Set(replaced.map(memory => memory.id));
-      const next = [...replaced, ...imported.filter(memory => !ids.has(memory.id))]
+    if (!imported.length) return 0;
+    const mergeImported = (current: Memory[]) => {
+      const importedByDriveId = new Map(imported.map(memory => [memory.driveFileId || memory.id, memory]));
+      const replaced = current.map(memory => importedByDriveId.get(memory.driveFileId || memory.id) || memory);
+      const ids = new Set(replaced.map(memory => memory.driveFileId || memory.id));
+      return [...replaced, ...imported.filter(memory => !ids.has(memory.driveFileId || memory.id))]
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    };
+    setMemories(current => {
+      const next = mergeImported(current);
       // Publish camera/manual imports immediately so an already-open Story
       // Mode receives the new Drive memory without waiting for its next poll.
       saveDriveMemories(next.filter(memory => memory.driveFileId), token, driveFolderId);
       if (!selected && next[0]) setSelected(next[0]);
       return next;
     });
+    // Update the mounted reel in the same upload turn. The normal
+    // filteredMemories effect still keeps this synchronized with the gallery,
+    // but this direct path prevents a freshly uploaded photo from waiting for
+    // another render or Drive scan before it joins the live story.
+    setReelConfig(current => current?.live
+      ? { ...current, memories: mergeImported(current.memories) }
+      : current);
     return imported.length;
   };
 

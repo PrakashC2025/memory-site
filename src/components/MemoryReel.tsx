@@ -162,6 +162,7 @@ export class MemoryReelController {
   private readonly options: Required<Pick<MemoryReelOptions, 'hold' | 'move' | 'loop' | 'reducedMotion' | 'legacyTv'>> & MemoryReelOptions;
   private world: HTMLDivElement;
   private ambient: HTMLDivElement;
+  private ambientEffects: HTMLDivElement;
   private ambientSource = '';
   private titleEl: HTMLDivElement;
   private progressEl: HTMLDivElement;
@@ -203,6 +204,18 @@ export class MemoryReelController {
     };
     this.world = Object.assign(document.createElement('div'), { className: 'world' });
     this.ambient = Object.assign(document.createElement('div'), { className: 'ambient' });
+    this.ambientEffects = Object.assign(document.createElement('div'), {
+      className: 'ambient-effects',
+      ariaHidden: 'true',
+    });
+    for (let index = 0; index < 6; index += 1) {
+      this.ambientEffects.appendChild(Object.assign(document.createElement('span'), {
+        className: `ambient-particle ambient-particle-${index + 1}`,
+      }));
+    }
+    this.ambientEffects.appendChild(Object.assign(document.createElement('span'), {
+      className: 'ambient-butterfly',
+    }));
     const vignette = Object.assign(document.createElement('div'), { className: 'vignette' });
     this.titleEl = Object.assign(document.createElement('div'), { className: 'title' });
     this.progressEl = Object.assign(document.createElement('div'), { className: 'prog' });
@@ -211,7 +224,7 @@ export class MemoryReelController {
     tap.onclick = () => this.paused ? this.play() : this.pause();
     this.poster.onclick = () => this.play();
     this.el.innerHTML = '';
-    this.el.append(this.world, this.ambient, vignette, this.titleEl, this.progressEl, tap, this.poster);
+    this.el.append(this.world, this.ambient, this.ambientEffects, vignette, this.titleEl, this.progressEl, tap, this.poster);
     this.applyTemplateClass();
     if (this.options.audio) this.setAudio(this.options.audio);
 
@@ -797,6 +810,19 @@ export class MemoryReelController {
     const audioLevel = this.readAudioLevel();
     const audioScale = 1 + audioLevel * 0.035;
     if (!this.options.legacyTv) this.ambient.style.opacity = (0.68 + audioLevel * 0.16).toFixed(3);
+    // Keep the empty space alive with a gentle music pulse. Legacy TVs skip
+    // analyser reads, so they use a deterministic fallback tied to story time.
+    const effectLevel = this.options.legacyTv && !this.paused
+      ? 0.12 + Math.abs(Math.sin(time * 3.2)) * 0.16
+      : audioLevel;
+    this.ambientEffects.style.setProperty('--audio-level', effectLevel.toFixed(3));
+    this.ambientEffects.style.setProperty('--effect-opacity', (0.34 + effectLevel * 0.42).toFixed(3));
+    this.ambientEffects.style.setProperty('--glow-scale', (0.92 + effectLevel * 0.48).toFixed(3));
+    this.ambientEffects.style.setProperty('--particle-opacity', (0.28 + effectLevel * 0.72).toFixed(3));
+    this.ambientEffects.style.setProperty('--particle-scale', (0.72 + effectLevel * 1.1).toFixed(3));
+    this.ambientEffects.style.setProperty('--butterfly-opacity', (0.24 + effectLevel * 0.76).toFixed(3));
+    this.ambientEffects.style.setProperty('--butterfly-scale', (0.78 + effectLevel * 0.42).toFixed(3));
+    this.ambientEffects.classList.toggle('is-playing', !this.paused);
 
     let shot = 0;
     let local = Math.max(0, time);

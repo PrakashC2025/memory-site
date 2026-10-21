@@ -2877,6 +2877,142 @@ input[type="number"]::-webkit-inner-spin-button {
   pointer-events: none;
 }
 
+/* A small atmospheric layer gives the negative space a living, memory-like
+   feeling without competing with the focused photo. It uses transforms and
+   opacity only so it stays smooth on TV browsers. */
+.memory-reel-stage .ambient-effects {
+  --audio-level: 0;
+  --effect-opacity: 0.34;
+  --glow-scale: 0.92;
+  --particle-opacity: 0.28;
+  --particle-scale: 0.72;
+  --butterfly-opacity: 0.24;
+  --butterfly-scale: 0.78;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: var(--effect-opacity);
+  transition: opacity 500ms ease;
+}
+
+.memory-reel-stage .ambient-effects::before,
+.memory-reel-stage .ambient-effects::after {
+  position: absolute;
+  content: '';
+  width: clamp(90px, 16vw, 210px);
+  height: clamp(90px, 16vw, 210px);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 208, 138, 0.16), transparent 68%);
+  filter: blur(12px);
+  transform: translate3d(0, 0, 0) scale(var(--glow-scale));
+  will-change: transform, opacity;
+}
+
+.memory-reel-stage .ambient-effects::before {
+  left: 7%;
+  top: 16%;
+  animation: memory-reel-glow-drift 13s ease-in-out infinite alternate;
+}
+
+.memory-reel-stage .ambient-effects::after {
+  right: 5%;
+  bottom: 12%;
+  background: radial-gradient(circle, rgba(93, 237, 216, 0.13), transparent 68%);
+  animation: memory-reel-glow-drift 16s ease-in-out -5s infinite alternate-reverse;
+}
+
+.memory-reel-stage .ambient-particle {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #ffe1ae;
+  box-shadow: 0 0 13px 3px rgba(255, 208, 138, 0.5);
+  opacity: var(--particle-opacity);
+  transform: scale(var(--particle-scale));
+  will-change: transform, opacity;
+}
+
+.memory-reel-stage .ambient-particle-1 { left: 14%; top: 30%; animation: memory-reel-particle-float 8s ease-in-out infinite; }
+.memory-reel-stage .ambient-particle-2 { left: 23%; top: 72%; animation: memory-reel-particle-float 11s ease-in-out -4s infinite; }
+.memory-reel-stage .ambient-particle-3 { right: 18%; top: 22%; animation: memory-reel-particle-float 9s ease-in-out -2s infinite; }
+.memory-reel-stage .ambient-particle-4 { right: 11%; top: 65%; animation: memory-reel-particle-float 12s ease-in-out -7s infinite; }
+.memory-reel-stage .ambient-particle-5 { left: 38%; top: 12%; animation: memory-reel-particle-float 10s ease-in-out -3s infinite; }
+.memory-reel-stage .ambient-particle-6 { right: 34%; bottom: 13%; animation: memory-reel-particle-float 14s ease-in-out -9s infinite; }
+
+.memory-reel-stage .ambient-butterfly {
+  position: absolute;
+  left: 16%;
+  top: 22%;
+  width: 16px;
+  height: 11px;
+  opacity: var(--butterfly-opacity);
+  transform: rotate(-12deg) scale(var(--butterfly-scale));
+  filter: drop-shadow(0 0 8px rgba(255, 208, 138, 0.55));
+  will-change: transform, opacity;
+  animation: memory-reel-butterfly-flight 18s cubic-bezier(.45, .05, .55, .95) infinite;
+}
+
+.memory-reel-stage .ambient-butterfly::before,
+.memory-reel-stage .ambient-butterfly::after {
+  position: absolute;
+  top: 0;
+  width: 10px;
+  height: 12px;
+  content: '';
+  border: 1px solid rgba(255, 231, 189, 0.78);
+  background: radial-gradient(ellipse at 55% 42%, rgba(255, 221, 158, 0.78), rgba(222, 91, 255, 0.28));
+  box-shadow: 0 0 7px rgba(255, 208, 138, 0.34);
+}
+
+.memory-reel-stage .ambient-butterfly::before {
+  left: 0;
+  border-radius: 80% 18% 70% 22%;
+  transform-origin: 100% 70%;
+  animation: memory-reel-wing-beat 900ms ease-in-out infinite alternate;
+}
+
+.memory-reel-stage .ambient-butterfly::after {
+  right: 0;
+  border-radius: 18% 80% 22% 70%;
+  transform-origin: 0 70%;
+  animation: memory-reel-wing-beat 900ms ease-in-out -180ms infinite alternate-reverse;
+}
+
+.memory-reel-stage .ambient-effects.is-playing .ambient-butterfly {
+  animation-play-state: running;
+}
+
+.memory-reel-stage .ambient-effects:not(.is-playing) .ambient-butterfly,
+.memory-reel-stage .ambient-effects:not(.is-playing) .ambient-particle {
+  animation-play-state: paused;
+}
+
+@keyframes memory-reel-particle-float {
+  0%, 100% { transform: translate3d(0, 10px, 0) scale(var(--particle-scale)); }
+  50% { transform: translate3d(18px, -24px, 0) scale(var(--particle-scale)); }
+}
+
+@keyframes memory-reel-glow-drift {
+  0%, 100% { opacity: .55; transform: translate3d(-2%, 3%, 0) scale(var(--glow-scale)); }
+  50% { opacity: .9; transform: translate3d(7%, -5%, 0) scale(var(--glow-scale)); }
+}
+
+@keyframes memory-reel-butterfly-flight {
+  0% { transform: translate3d(0, 12px, 0) rotate(-12deg) scale(var(--butterfly-scale)); }
+  28% { transform: translate3d(58px, -18px, 0) rotate(8deg) scale(var(--butterfly-scale)); }
+  56% { transform: translate3d(128px, 18px, 0) rotate(-4deg) scale(var(--butterfly-scale)); }
+  82% { transform: translate3d(196px, -20px, 0) rotate(12deg) scale(var(--butterfly-scale)); }
+  100% { transform: translate3d(254px, 8px, 0) rotate(-4deg) scale(var(--butterfly-scale)); }
+}
+
+@keyframes memory-reel-wing-beat {
+  from { transform: rotateY(0deg) scaleY(1); }
+  to { transform: rotateY(54deg) scaleY(.76); }
+}
+
 .memory-reel-stage .card {
   position: absolute;
   left: 0;
@@ -9715,7 +9851,7 @@ textarea:focus-visible {
 
 /* 03 — Polaroid Afterglow: physical prints rise from a loose stack. */
 .memory-reel-stage.memory-reel-template-polaroid .card { left: 50% !important; top: 50% !important; width: min(54vw, 590px) !important; height: 76% !important; padding: 14px 14px 48px !important; border-radius: 5px !important; background: #f8f2e8 !important; box-shadow: 0 25px 60px rgba(0, 0, 0, .52); transform: translate3d(-50%, -50%, 0) rotate(var(--reel-angle)) translateY(var(--reel-depth)) scale(.72) !important; opacity: .2 !important; transition: transform 900ms cubic-bezier(.22, .8, .2, 1), opacity 700ms ease, filter 700ms ease !important; }
-.memory-reel-stage.memory-reel-template-polaroid .card.is-active { transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(1.06) !important; opacity: 1 !important; box-shadow: 0 28px 70px rgba(0, 0, 0, .55), 0 0 0 2px rgba(255, 208, 138, .56); animation: memory-reel-polaroid-bob 6s ease-in-out infinite; }
+.memory-reel-stage.memory-reel-template-polaroid .card.is-active { transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(1.06) !important; opacity: 1 !important; box-shadow: 0 28px 70px rgba(0, 0, 0, .55), 0 0 0 2px rgba(255, 208, 138, .56); animation: memory-reel-polaroid-hero 7s ease-in-out infinite; }
 .memory-reel-stage.memory-reel-template-polaroid .card .m { border-radius: 2px; background: #e9dfd1; }
 .memory-reel-stage.memory-reel-template-polaroid .ambient { opacity: .32 !important; filter: blur(30px) sepia(.2) saturate(.8) brightness(.74); }
 
@@ -9767,20 +9903,20 @@ textarea:focus-visible {
 .memory-reel-stage.memory-reel-template-dreamscape .ambient { opacity: .4 !important; filter: blur(38px) saturate(1.35) brightness(.72); animation: memory-reel-dream-ambient 12s ease-in-out infinite alternate; }
 
 @keyframes memory-reel-cinema-drift { from { transform: scale(1.02) translate3d(-1.2%, -.6%, 0); } to { transform: scale(1.1) translate3d(1.4%, .9%, 0); } }
-@keyframes memory-reel-filmstrip-hero { 0%, 100% { transform: translate3d(-50%, -50%, 0) scale(1.08) rotate(-.5deg); } 50% { transform: translate3d(-50%, -50%, 0) scale(1.12) rotate(.5deg); } }
-@keyframes memory-reel-polaroid-bob { 0%, 100% { margin-top: 0; } 50% { margin-top: -7px; } }
+@keyframes memory-reel-filmstrip-hero { 0%, 100% { transform: translate3d(-50%, -50%, 0) scale(1.08) rotate(-.5deg); } 50% { transform: translate3d(-50%, -50%, 0) scale(1.15) rotate(.5deg); } }
+@keyframes memory-reel-polaroid-hero { 0%, 100% { transform: translate3d(-50%, -50%, 0) scale(1.045) rotate(-.25deg); } 50% { transform: translate3d(-50%, calc(-50% - 7px), 0) scale(1.085) rotate(.25deg); } }
 @keyframes memory-reel-mosaic-float { from { transform: translate3d(0, 0, 0) rotate(-.6deg) !important; } to { transform: translate3d(0, -6px, 0) rotate(.6deg) !important; } }
-@keyframes memory-reel-mosaic-hero { 0%, 100% { transform: scale(1.02) translate3d(0, 0, 0); } 50% { transform: scale(1.045) translate3d(0, -4px, 0); } }
+@keyframes memory-reel-mosaic-hero { 0%, 100% { transform: scale(1.02) translate3d(0, 0, 0); } 50% { transform: scale(1.06) translate3d(0, -5px, 0); } }
 @keyframes memory-reel-neon-pulse { from { filter: brightness(.92); } to { filter: brightness(1.12); } }
 @keyframes memory-reel-neon-hero { 0%, 100% { transform: scale(1.02); filter: brightness(1); } 50% { transform: scale(1.05); filter: brightness(1.24); } }
 @keyframes memory-reel-paper-sway { from { margin-top: 0; } to { margin-top: -5px; } }
-@keyframes memory-reel-scrapbook-hero { 0%, 100% { transform: scale(1.02) rotate(0deg); } 50% { transform: scale(1.05) rotate(-.7deg); } }
-@keyframes memory-reel-spotlight-hero { 0%, 100% { transform: scale(1.02); } 50% { transform: scale(1.055); } }
+@keyframes memory-reel-scrapbook-hero { 0%, 100% { transform: scale(1.02) rotate(0deg); } 50% { transform: scale(1.065) rotate(-.7deg); } }
+@keyframes memory-reel-spotlight-hero { 0%, 100% { transform: scale(1.02); } 50% { transform: scale(1.075); } }
 @keyframes memory-reel-light-sweep { 0%, 100% { transform: translate3d(-3%, -2%, 0) scale(.96); opacity: .65; } 50% { transform: translate3d(3%, 2%, 0) scale(1.04); opacity: 1; } }
 @keyframes memory-reel-film-gate { 0%, 100% { transform: translate3d(0, 0, 0); opacity: .22; } 50% { transform: translate3d(0, 2px, 0); opacity: .34; } }
-@keyframes memory-reel-super8-jitter { 0%, 100% { transform: translate3d(0, 0, 0) scale(1.02); } 50% { transform: translate3d(.45%, -.28%, 0) scale(1.045); } }
-@keyframes memory-reel-dream-card { from { transform: scale(1.02) translate3d(-.6%, .3%, 0); } to { transform: scale(1.06) translate3d(.8%, -.7%, 0); } }
-@keyframes memory-reel-dream-image { from { transform: scale(1.02) translate3d(-1%, 0, 0); filter: blur(0); } to { transform: scale(1.1) translate3d(1%, -.4%, 0); filter: blur(.35px); } }
+@keyframes memory-reel-super8-jitter { 0%, 100% { transform: translate3d(0, 0, 0) scale(1.02); } 50% { transform: translate3d(.45%, -.28%, 0) scale(1.055); } }
+@keyframes memory-reel-dream-card { from { transform: scale(1.02) translate3d(-.6%, .3%, 0); } to { transform: scale(1.08) translate3d(.8%, -.7%, 0); } }
+@keyframes memory-reel-dream-image { from { transform: scale(1.02) translate3d(-1%, 0, 0); filter: blur(0); } to { transform: scale(1.12) translate3d(1%, -.4%, 0); filter: blur(.35px); } }
 @keyframes memory-reel-dream-ambient { from { transform: scale(1.06) translate3d(-2%, 0, 0); } to { transform: scale(1.16) translate3d(2%, -1%, 0); } }
 
 @media (prefers-reduced-motion: reduce) {
