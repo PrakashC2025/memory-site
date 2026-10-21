@@ -101,6 +101,22 @@ interface ReelCard {
   video?: HTMLVideoElement;
 }
 
+const getMediaFrameSize = (aspect: number) => {
+  // Fit the complete source inside a generous frame without forcing every
+  // portrait into a landscape card. The frame is then scaled by the camera
+  // path, so this remains readable on phones, desktops, and TVs.
+  const safeAspect = clamp(Number.isFinite(aspect) && aspect > 0 ? aspect : 1.5, 0.3, 3.2);
+  const maxWidth = 560;
+  const maxHeight = 440;
+  let width = maxWidth;
+  let height = width / safeAspect;
+  if (height > maxHeight) {
+    height = maxHeight;
+    width = height * safeAspect;
+  }
+  return { width: Math.round(width), height: Math.round(height) };
+};
+
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const ease = (value: number) => value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2;
@@ -268,10 +284,11 @@ export class MemoryReelController {
       const column = index % columns;
       // Give portrait and square media a taller frame so the complete image
       // can breathe without forcing it into a landscape crop.
-      const height = media.aspect < 0.9 ? 420 : media.aspect < 1.15 ? 400 : 360;
-      const width = Math.min(560, Math.max(300, height * media.aspect));
+      const { width, height } = getMediaFrameSize(media.aspect);
       const card = document.createElement('div');
-      card.className = `card${random() < 0.16 ? ' frame' : ''}`;
+      const aspectClass = media.aspect < 0.9 ? ' media-portrait' : media.aspect > 1.15 ? ' media-landscape' : ' media-square';
+      card.className = `card${aspectClass}${random() < 0.16 ? ' frame' : ''}`;
+      card.style.setProperty('--media-aspect', String(media.aspect));
       card.style.width = `${width}px`;
       card.style.height = `${height}px`;
       card.appendChild(media.node);
@@ -390,7 +407,12 @@ export class MemoryReelController {
         image.onload = () => {
           const aspect = image.naturalWidth / image.naturalHeight || 1.5;
           const isQuarterTurn = ((item.rotation || 0) / 90) % 2 === 1;
-          if (item.rotation) image.style.rotate = `${item.rotation}deg`;
+          if (item.rotation) {
+            // The individual `rotate` property is unavailable on older TV
+            // Chromium, so use the widely supported transform there.
+            if (this.options.legacyTv) image.style.transform = `rotate(${item.rotation}deg)`;
+            else image.style.rotate = `${item.rotation}deg`;
+          }
           finish({ node: image, aspect: isQuarterTurn ? 1 / aspect : aspect });
         };
         image.onerror = () => {
@@ -806,23 +828,40 @@ export class MemoryReelController {
         'neon-grid': 0.62,
       };
       this.world.style.transform = usesTemplateLayout ? 'none' : `scale(${this.scale * audioScale})`;
+      const driftAmount = this.options.reducedMotion ? 0 : 1;
+      const legacyCameraX = lerp(from.x, to.x, progress) + Math.sin(time * 0.22 + shot * 0.8) * 14 * driftAmount;
+      const legacyCameraY = lerp(from.y, to.y, progress) + Math.cos(time * 0.18 + shot * 0.6) * 9 * driftAmount;
       this.cards.forEach((card, index) => {
         const isCurrent = index === shot;
         const isPrevious = index === previousShot;
-        const visibility = isCurrent ? transition : isPrevious ? 1 - transition : restingOpacity[template];
         if (usesTemplateLayout) {
+          const visibility = isCurrent ? transition : isPrevious ? 1 - transition : restingOpacity[template];
           // Let each template's unlayered CSS retain its own framing,
           // rotation, grid position and animation on older WebViews.
           card.card.style.removeProperty('transform');
           card.card.style.removeProperty('filter');
+          card.card.style.setProperty('opacity', String(visibility), 'important');
+          card.card.style.zIndex = isCurrent ? '20' : isPrevious ? '19' : '1';
         } else {
-          const push = isCurrent ? (1 - transition) * 22 : isPrevious ? -transition * 22 : 0;
-          const scale = isCurrent || isPrevious ? 1 + visibility * 0.035 : 0.96;
-          card.card.style.setProperty('transform', `translate3d(${-card.width / 2 + push}px,${-card.height / 2}px,0) scale(${scale})`, 'important');
-          card.card.style.setProperty('filter', 'none', 'important');
+          // Keep a few neighboring frames around the focused photo. The
+          // nearby cards are softly blurred and dimmed, while the focused
+          // frame stays crisp and follows a slow 2D camera drift on old TVs.
+          const distance = Math.hypot(card.x - legacyCameraX, card.y - legacyCameraY);
+          const surroundingOpacity = distance < 500 ? 0.34 : distance < 860 ? 0.14 : 0;
+          const visibility = isCurrent ? transition : isPrevious ? 1 - transition : surroundingOpacity;
+          const breathing = isCurrent && driftAmount ? Math.sin(time * 0.26 + shot) * 0.012 : 0;
+          const scale = isCurrent || isPrevious ? 1.02 + visibility * 0.025 + breathing : distance < 500 ? 0.78 : 0.66;
+          const blur = isCurrent ? 0 : distance < 500 ? 1.8 : 3.2;
+          const brightness = isCurrent ? 1 : distance < 500 ? 0.76 : 0.58;
+          card.card.style.setProperty(
+            'transform',
+            `translate3d(${card.x - legacyCameraX - card.width / 2}px,${card.y - legacyCameraY - card.height / 2}px,0) rotateZ(${card.rot}deg) scale(${scale})`,
+            'important',
+          );
+          card.card.style.setProperty('filter', blur ? `blur(${blur}px) brightness(${brightness})` : 'none', 'important');
+          card.card.style.setProperty('opacity', String(visibility), 'important');
+          card.card.style.zIndex = isCurrent ? '20' : isPrevious ? '19' : distance < 500 ? '8' : '3';
         }
-        card.card.style.setProperty('opacity', String(visibility), 'important');
-        card.card.style.zIndex = isCurrent ? '20' : isPrevious ? '19' : '1';
         if (card.video) {
           if (isCurrent && !this.paused) this.playMutedVideo(card.video);
           else card.video.pause();
@@ -932,10 +971,10 @@ interface MusicQueueItem {
 }
 
 const STORY_MUSIC_STORAGE_KEY = 'memoriya-story-music-v1';
-// v2 makes the original camera-motion look the default again. Existing v1
-// choices are intentionally not carried over so every TV starts with the
-// reliable cinematic camera experience.
-const STORY_TEMPLATE_STORAGE_KEY = 'memoriya-story-template-v2';
+// v3 makes the original camera-motion Memory Showcase the default again.
+// Older saved choices are intentionally migrated away once so Story Mode
+// opens with the requested camera journey on every device.
+const STORY_TEMPLATE_STORAGE_KEY = 'memoriya-story-template-v3';
 
 interface StoredStoryMusic {
   driveSongs: DriveAudioFile[];

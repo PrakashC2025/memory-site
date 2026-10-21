@@ -2884,6 +2884,21 @@ input[type="number"]::-webkit-inner-spin-button {
   background: #090d16;
 }
 
+/* The controller sizes each card from the source aspect ratio. Keep every
+   orientation fully visible, including portrait phone photos and square
+   scans, instead of cropping them into one universal landscape frame. */
+.memory-reel-stage .card.media-portrait .m,
+.memory-reel-stage .card.media-square .m,
+.memory-reel-stage .card.media-landscape .m {
+  object-fit: contain;
+  object-position: center;
+}
+
+.memory-reel-stage .card.frame .m {
+  object-fit: contain !important;
+  object-position: center;
+}
+
 .memory-reel-stage .vignette {
   position: absolute;
   inset: 0;
