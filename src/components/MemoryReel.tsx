@@ -785,27 +785,55 @@ export class MemoryReelController {
 
     if (this.options.legacyTv) {
       // Chromium 66 can animate ordinary 2D transforms and opacity reliably,
-      // but its 3D/filter compositor is unstable. Keep every template and
-      // frame in the story while using a lightweight cross-fade and push.
+      // but its 3D/filter compositor is unstable. Orbit therefore uses a
+      // lightweight cross-fade and push. The other nine looks keep their own
+      // card layout and 2D keyframe animation so old TVs still feel varied.
       const transitioning = shot > 0 && local < move;
       const transition = transitioning ? clamp(local / move, 0, 1) : 1;
       const previousShot = transitioning ? shot - 1 : -1;
-      this.world.style.transform = `scale(${this.scale * audioScale})`;
+      const template = this.options.template || 'orbit';
+      const usesTemplateLayout = template !== 'orbit';
+      const restingOpacity: Record<MemoryReelTemplate, number> = {
+        orbit: 0,
+        cinema: 0,
+        filmstrip: 0.24,
+        polaroid: 0.2,
+        mosaic: 0.62,
+        spotlight: 0,
+        super8: 0,
+        dreamscape: 0,
+        scrapbook: 0.62,
+        'neon-grid': 0.62,
+      };
+      this.world.style.transform = usesTemplateLayout ? 'none' : `scale(${this.scale * audioScale})`;
       this.cards.forEach((card, index) => {
         const isCurrent = index === shot;
         const isPrevious = index === previousShot;
-        const visibility = isCurrent ? transition : isPrevious ? 1 - transition : 0;
-        const push = isCurrent ? (1 - transition) * 22 : isPrevious ? -transition * 22 : 0;
-        const scale = isCurrent || isPrevious ? 1 + visibility * 0.035 : 0.96;
-        card.card.style.setProperty('transform', `translate3d(${-card.width / 2 + push}px,${-card.height / 2}px,0) scale(${scale})`, 'important');
+        const visibility = isCurrent ? transition : isPrevious ? 1 - transition : restingOpacity[template];
+        if (usesTemplateLayout) {
+          // Let each template's unlayered CSS retain its own framing,
+          // rotation, grid position and animation on older WebViews.
+          card.card.style.removeProperty('transform');
+          card.card.style.removeProperty('filter');
+        } else {
+          const push = isCurrent ? (1 - transition) * 22 : isPrevious ? -transition * 22 : 0;
+          const scale = isCurrent || isPrevious ? 1 + visibility * 0.035 : 0.96;
+          card.card.style.setProperty('transform', `translate3d(${-card.width / 2 + push}px,${-card.height / 2}px,0) scale(${scale})`, 'important');
+          card.card.style.setProperty('filter', 'none', 'important');
+        }
         card.card.style.setProperty('opacity', String(visibility), 'important');
-        card.card.style.setProperty('filter', 'none', 'important');
         card.card.style.zIndex = isCurrent ? '20' : isPrevious ? '19' : '1';
         if (card.video) {
-          if ((isCurrent || isPrevious) && visibility > 0.5 && !this.paused) this.playMutedVideo(card.video);
+          if (isCurrent && !this.paused) this.playMutedVideo(card.video);
           else card.video.pause();
         }
       });
+      const focusedMedia = this.cards[shot]?.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
+      const ambientSource = focusedMedia?.currentSrc || focusedMedia?.getAttribute('src') || '';
+      if (ambientSource && ambientSource !== this.ambientSource) {
+        this.ambientSource = ambientSource;
+        this.ambient.style.backgroundImage = `url("${ambientSource.replace(/"/g, '\\"')}")`;
+      }
     } else if (this.options.reducedMotion) {
       const visibleShot = shot > 0 && local < move && progress < 0.5 ? shot - 1 : shot;
       this.world.style.transform = `scale(${this.scale * audioScale}) translate3d(0,0,0)`;
@@ -962,6 +990,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const visualMemories = useMemo(() => memories.filter(isVisualMemory), [memories]);
   const storedStoryMusic = useMemo(readStoredStoryMusic, []);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const musicPanelRef = useRef<HTMLDivElement | null>(null);
+  const templatePanelRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<MemoryReelController | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const audioObjectUrlsRef = useRef<string[]>([]);
@@ -1004,6 +1034,63 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const audioPauseGuardRef = useRef(false);
   const musicHydratedRef = useRef(false);
   moreConfigRef.current = { hasMore, loadingMore, onNeedMore };
+
+  useEffect(() => {
+    // Story Mode owns the viewport. Without this lock, an older WebView can
+    // send remote-wheel/trackpad events through the fixed overlay to Home.
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousDocumentOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousDocumentOverflow;
+    };
+  }, []);
+
+  const scrollStoryPanel = (panel: HTMLDivElement, amount: number) => {
+    if (typeof panel.scrollBy === 'function') panel.scrollBy(0, amount);
+    else panel.scrollTop += amount;
+  };
+
+  const handleStoryPanelKeyDown = (event: React.KeyboardEvent<HTMLDivElement>, panelRef: React.RefObject<HTMLDivElement | null>) => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const amount = event.key === 'PageDown' || event.key === 'PageUp'
+      ? Math.max(180, Math.round(panel.clientHeight * 0.72))
+      : 72;
+    const target = event.target as HTMLElement;
+    const isInteractiveControl = target !== panel && Boolean(target.closest?.('button, input, select'));
+    if (event.key === 'ArrowDown' || event.key === 'PageDown') {
+      // Keep native focus movement between TV buttons. Only the panel itself
+      // needs a forced scroll when it owns focus.
+      if (!isInteractiveControl || event.key === 'PageDown') event.preventDefault();
+      event.stopPropagation();
+      scrollStoryPanel(panel, amount);
+    } else if (event.key === 'ArrowUp' || event.key === 'PageUp') {
+      if (!isInteractiveControl || event.key === 'PageUp') event.preventDefault();
+      event.stopPropagation();
+      scrollStoryPanel(panel, -amount);
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      event.stopPropagation();
+      panel.scrollTop = event.key === 'Home' ? 0 : panel.scrollHeight;
+    }
+  };
+
+  const keepFocusedControlVisible = (event: React.FocusEvent<HTMLDivElement>) => {
+    const panel = event.currentTarget;
+    const target = event.target as HTMLElement;
+    if (target === panel || !panel.contains(target)) return;
+    const panelRect = panel.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    if (targetRect.bottom > panelRect.bottom) panel.scrollTop += targetRect.bottom - panelRect.bottom + 12;
+    else if (targetRect.top < panelRect.top) panel.scrollTop -= panelRect.top - targetRect.top + 12;
+  };
+
+  const stopPanelScrollPropagation = (event: React.WheelEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+  };
 
   useEffect(() => {
     if (driveAccessToken) driveAccessTokenRef.current = driveAccessToken;
@@ -1725,7 +1812,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
   return (
     <div className="memory-reel-overlay" role="dialog" aria-modal="true" aria-label="Memory story reel">
-      <div className={`memory-reel-shell${fullscreen ? ' is-fullscreen' : ''}`}>
+      <div className={`memory-reel-shell${fullscreen ? ' is-fullscreen' : ''}${musicOpen || templateOpen ? ' has-panel-open' : ''}`}>
         <div ref={stageRef} className="reel memory-reel-stage" />
         <div className="memory-reel-toolbar">
           <button type="button" onClick={toggleStoryPlayback} disabled={loading}>
@@ -1786,7 +1873,15 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           <button type="button" onClick={applyTitle}>Apply title</button>
         </div>
         {musicOpen && (
-          <div className="memory-reel-music-panel">
+          <div
+            ref={musicPanelRef}
+            className="memory-reel-music-panel"
+            tabIndex={0}
+            onKeyDown={event => handleStoryPanelKeyDown(event, musicPanelRef)}
+            onFocusCapture={keepFocusedControlVisible}
+            onWheel={stopPanelScrollPropagation}
+            onTouchMove={stopPanelScrollPropagation}
+          >
             {musicQueue.length > 0 && (
               <button type="button" className="memory-reel-music-primary" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}>
                 <Volume2 size={16} /> {audioLoading ? 'Loading music…' : audioPlaying ? 'Stop music' : 'Play selected music'}
@@ -1843,7 +1938,16 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           </div>
         )}
         {templateOpen && (
-          <div className="memory-reel-template-panel" aria-label="Choose a cinematic Story Mode template">
+          <div
+            ref={templatePanelRef}
+            className="memory-reel-template-panel"
+            aria-label="Choose a cinematic Story Mode template"
+            tabIndex={0}
+            onKeyDown={event => handleStoryPanelKeyDown(event, templatePanelRef)}
+            onFocusCapture={keepFocusedControlVisible}
+            onWheel={stopPanelScrollPropagation}
+            onTouchMove={stopPanelScrollPropagation}
+          >
             <div className="memory-reel-template-heading">
               <div><WandSparkles size={16} /><strong>Choose your cinematic look</strong></div>
               <span>{MEMORY_REEL_TEMPLATES.find(item => item.id === template)?.name}</span>
@@ -1875,8 +1979,16 @@ const usePrefersReducedMotion = () => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');
     const update = () => setReduced(query.matches);
     update();
-    query.addEventListener?.('change', update);
-    return () => query.removeEventListener?.('change', update);
+    const legacyQuery = query as MediaQueryList & {
+      addListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+      removeListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+    };
+    if (query.addEventListener) query.addEventListener('change', update);
+    else legacyQuery.addListener?.(update);
+    return () => {
+      if (query.removeEventListener) query.removeEventListener('change', update);
+      else legacyQuery.removeListener?.(update);
+    };
   }, []);
   return reduced;
 };
