@@ -1,5 +1,5 @@
 const CACHE_NAME = "memoriya-runtime-v5";
-const LEGACY_TV_BROWSER = /Android\s*(?:TV|\d).*?(?:TV|SMART-TV|HbbTV)|GoogleTV|AFT[BSM]|BRAVIA|SHIELD/i.test(self.navigator.userAgent || "");
+const LEGACY_TV_BROWSER = /Android\s+\d[^)]*(?:sdk_google_atv|google_atv|android\s*tv|smart[- ]?tv|hbbtv)|GoogleTV|AFT[BSM]|BRAVIA|SHIELD/i.test(self.navigator.userAgent || "");
 
 self.addEventListener("install", event => {
   event.waitUntil(self.skipWaiting());

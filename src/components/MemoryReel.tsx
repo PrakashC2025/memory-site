@@ -78,6 +78,7 @@ interface MemoryReelOptions {
   move?: number;
   loop?: boolean;
   reducedMotion?: boolean;
+  legacyTv?: boolean;
   onProgress?: (progress: number, total: number) => void;
   onStateChange?: (playing: boolean) => void;
   onAudioStateChange?: (playing: boolean) => void;
@@ -142,7 +143,7 @@ const normalizeAudioFile = (file: File) => file.type.startsWith('audio/')
  */
 export class MemoryReelController {
   private readonly el: HTMLElement;
-  private readonly options: Required<Pick<MemoryReelOptions, 'hold' | 'move' | 'loop' | 'reducedMotion'>> & MemoryReelOptions;
+  private readonly options: Required<Pick<MemoryReelOptions, 'hold' | 'move' | 'loop' | 'reducedMotion' | 'legacyTv'>> & MemoryReelOptions;
   private world: HTMLDivElement;
   private ambient: HTMLDivElement;
   private ambientSource = '';
@@ -179,6 +180,7 @@ export class MemoryReelController {
       move: 1.2,
       loop: false,
       reducedMotion: false,
+      legacyTv: false,
       template: 'orbit',
       ...options,
     };
@@ -781,7 +783,30 @@ export class MemoryReelController {
       holdProgress = (local - move) / shotHold;
     }
 
-    if (this.options.reducedMotion) {
+    if (this.options.legacyTv) {
+      // Chromium 66 can animate ordinary 2D transforms and opacity reliably,
+      // but its 3D/filter compositor is unstable. Keep every template and
+      // frame in the story while using a lightweight cross-fade and push.
+      const transitioning = shot > 0 && local < move;
+      const transition = transitioning ? clamp(local / move, 0, 1) : 1;
+      const previousShot = transitioning ? shot - 1 : -1;
+      this.world.style.transform = `scale(${this.scale * audioScale})`;
+      this.cards.forEach((card, index) => {
+        const isCurrent = index === shot;
+        const isPrevious = index === previousShot;
+        const visibility = isCurrent ? transition : isPrevious ? 1 - transition : 0;
+        const push = isCurrent ? (1 - transition) * 22 : isPrevious ? -transition * 22 : 0;
+        const scale = isCurrent || isPrevious ? 1 + visibility * 0.035 : 0.96;
+        card.card.style.setProperty('transform', `translate3d(${-card.width / 2 + push}px,${-card.height / 2}px,0) scale(${scale})`, 'important');
+        card.card.style.setProperty('opacity', String(visibility), 'important');
+        card.card.style.setProperty('filter', 'none', 'important');
+        card.card.style.zIndex = isCurrent ? '20' : isPrevious ? '19' : '1';
+        if (card.video) {
+          if ((isCurrent || isPrevious) && visibility > 0.5 && !this.paused) this.playMutedVideo(card.video);
+          else card.video.pause();
+        }
+      });
+    } else if (this.options.reducedMotion) {
       const visibleShot = shot > 0 && local < move && progress < 0.5 ? shot - 1 : shot;
       this.world.style.transform = `scale(${this.scale * audioScale}) translate3d(0,0,0)`;
       this.cards.forEach((card, index) => {
@@ -1096,7 +1121,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       title: activeTitle,
       audio: undefined,
       loop: loopEnabled,
-      reducedMotion: reducedMotion || legacyTvMode,
+      reducedMotion,
+      legacyTv: legacyTvMode,
       template,
       onProgress: (current, total) => {
         setProgress({ progress: current, total });
