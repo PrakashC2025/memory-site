@@ -93,9 +93,26 @@ html.legacy-tv-browser .memory-reel-fullscreen-controls {
 
 html.legacy-tv-browser .memory-reel-overlay {
   display: block;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   overflow: hidden;
   padding: 12px;
 }
+
+/* Keep old WebViews on a predictable, low-compositing surface. These
+   browsers either ignore backdrop-filter or repaint it continuously. */
+html.legacy-tv-browser,
+html.legacy-tv-browser body,
+html.legacy-tv-browser #root,
+html.legacy-tv-browser .memory-reel-overlay {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html.legacy-tv-browser .navbar-links > * { margin-right: 8px; }
+html.legacy-tv-browser .navbar-actions > * { margin-left: 8px; }
 
 html.legacy-tv-browser .memory-reel-shell {
   width: 100%;
@@ -117,7 +134,7 @@ html.legacy-tv-browser .memory-reel-stage .world {
 }
 
 html.legacy-tv-browser .memory-reel-stage .ambient {
-  filter: blur(18px) saturate(1.06) brightness(.82);
+  filter: blur(12px) saturate(1.04) brightness(.82);
   opacity: .48;
   transform: scale(1.08);
 }
@@ -199,9 +216,9 @@ html.legacy-tv-browser .memory-reel-stage .world {
 }
 
 html.legacy-tv-browser .memory-reel-stage .card {
-  will-change: transform, opacity;
+  will-change: opacity;
   backface-visibility: hidden;
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.52);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
 }
 
 html.legacy-tv-browser .memory-reel-stage .card .m {
@@ -211,7 +228,7 @@ html.legacy-tv-browser .memory-reel-stage .card .m {
 html.legacy-tv-browser .memory-reel-stage .ambient {
   opacity: 0.48;
   background-color: #111827;
-  filter: blur(18px) saturate(1.06) brightness(.82);
+  filter: blur(12px) saturate(1.04) brightness(.82);
   transform: scale(1.04);
 }
 

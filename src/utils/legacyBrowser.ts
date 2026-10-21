@@ -5,7 +5,7 @@ export const isLegacyTvBrowser = () => {
   // The Android TV emulator and several real TVs identify themselves as
   // `sdk_google_atv` without including the words "Android TV". Keep mobile
   // Android WebViews out of this path unless they advertise a TV platform.
-  return /Android\s+\d[^)]*(?:sdk_google_atv|google_atv|android\s*tv|smart[- ]?tv|hbbtv)|GoogleTV|AFT[BSM]|BRAVIA|SHIELD/i.test(userAgent);
+  return /(?:Android\s+\d[^)]*(?:sdk_google_atv|google_atv|android\s*tv|smart[- ]?tv|hbbtv|\bTV\b)|GoogleTV|AFT[BSM]|BRAVIA|SHIELD)/i.test(userAgent);
 };
 
 export const installLegacyBrowserSupport = () => {
@@ -42,6 +42,25 @@ export const installLegacyBrowserSupport = () => {
         }, []);
       },
     });
+  }
+
+  if (!String.prototype.padStart) {
+    String.prototype.padStart = function (targetLength: number, padString = ' ') {
+      const value = String(this);
+      if (value.length >= targetLength) return value;
+      const fill = String(padString || ' ');
+      const needed = targetLength - value.length;
+      return fill.repeat(Math.ceil(needed / fill.length)).slice(0, needed) + value;
+    };
+  }
+
+  const rafWindow = browserWindow as Window & {
+    requestAnimationFrame?: (callback: FrameRequestCallback) => number;
+    cancelAnimationFrame?: (handle: number) => void;
+  };
+  if (!rafWindow.requestAnimationFrame) {
+    rafWindow.requestAnimationFrame = callback => window.setTimeout(() => callback(Date.now()), 16) as unknown as number;
+    rafWindow.cancelAnimationFrame = handle => window.clearTimeout(handle as unknown as number);
   }
 
   if (!browserWindow.IntersectionObserver) {

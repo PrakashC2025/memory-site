@@ -177,6 +177,7 @@ export class MemoryReelController {
   private elapsed = 0;
   private paused = true;
   private total = 0;
+  private lastPaint = 0;
   private audio?: HTMLAudioElement;
   private audioElement?: HTMLAudioElement;
   private audioQueue: string[] = [];
@@ -540,6 +541,10 @@ export class MemoryReelController {
   }
 
   private readAudioLevel() {
+    // Audio-reactive sampling is surprisingly expensive on Chromium 66 and
+    // older TV WebViews. The music still plays; the TV renderer uses a calm,
+    // fixed camera scale instead of reading the analyser every frame.
+    if (this.options.legacyTv) return 0;
     if (!this.audio || this.audio.paused) return 0;
     if (this.audioAnalyser && this.audioData) {
       this.audioAnalyser.getByteFrequencyData(this.audioData);
@@ -556,6 +561,7 @@ export class MemoryReelController {
     this.poster.classList.add('off');
     this.options.onStateChange?.(true);
     this.last = performance.now();
+    this.lastPaint = 0;
     void this.playAudio();
     const tick = (now: number) => {
       if (this.paused || this.destroyed) return;
@@ -577,7 +583,14 @@ export class MemoryReelController {
           return;
         }
       }
-      this.render(this.elapsed);
+      // A stable 30fps paint budget is smoother than an overloaded 60fps DOM
+      // loop on old TVs. The elapsed clock remains real-time and the browser
+      // still schedules frames normally, so transitions never speed up.
+      const paintInterval = this.options.legacyTv ? 1000 / 30 : 0;
+      if (!paintInterval || now - this.lastPaint >= paintInterval) {
+        this.render(this.elapsed);
+        this.lastPaint = now;
+      }
       this.raf = requestAnimationFrame(tick);
     };
     this.raf = requestAnimationFrame(tick);
@@ -766,7 +779,7 @@ export class MemoryReelController {
     if (!count) return;
     const audioLevel = this.readAudioLevel();
     const audioScale = 1 + audioLevel * 0.035;
-    this.ambient.style.opacity = (0.68 + audioLevel * 0.16).toFixed(3);
+    if (!this.options.legacyTv) this.ambient.style.opacity = (0.68 + audioLevel * 0.16).toFixed(3);
 
     let shot = 0;
     let local = Math.max(0, time);
@@ -902,7 +915,11 @@ export class MemoryReelController {
       };
       const push = 100 + clamp(holdProgress, 0, 1) * 180 - dip * 360;
       const sway = Math.sin(time * 0.7) * 3 * (1 - dip);
-      this.world.style.transform = `scale(${this.scale * audioScale}) translate3d(0,0,${push}px) rotateY(${-6 + sway}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${-camera.x}px,${-camera.y}px,${-camera.z}px)`;
+      // Keep the same camera targets and pacing on TV, but avoid the costly
+      // rotateY/rotateZ/depth stack that makes older WebViews hitch.
+      this.world.style.transform = this.options.legacyTv
+        ? `scale(${this.scale}) translate3d(${-camera.x}px,${-camera.y}px,0)`
+        : `scale(${this.scale * audioScale}) translate3d(0,0,${push}px) rotateY(${-6 + sway}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${-camera.x}px,${-camera.y}px,${-camera.z}px)`;
       const flyBlur = dip * 5;
       let focusedIndex = 0;
       let focusedDistance = Number.POSITIVE_INFINITY;
@@ -912,11 +929,13 @@ export class MemoryReelController {
           focusedDistance = distance;
           focusedIndex = index;
         }
-        const blur = clamp((distance - 360) / 100, 0, 5) + (distance > 360 ? flyBlur * 0.65 : 0);
+        const blur = this.options.legacyTv ? 0 : clamp((distance - 360) / 100, 0, 5) + (distance > 360 ? flyBlur * 0.65 : 0);
         const near = distance < 200;
-        card.card.style.opacity = '1';
+        card.card.style.opacity = this.options.legacyTv && distance > 900 ? '0.72' : '1';
         card.card.style.zIndex = index === focusedIndex ? '20' : '1';
-        card.card.style.filter = (blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : '') + (near ? '' : ' brightness(.9)');
+        card.card.style.filter = this.options.legacyTv
+          ? 'none'
+          : (blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : '') + (near ? '' : ' brightness(.9)');
         if (card.video) {
           const active = near && !this.paused;
           if (active && card.video.paused) this.playMutedVideo(card.video);
