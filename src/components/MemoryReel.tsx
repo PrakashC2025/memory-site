@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import { isVisualMemory, type Memory } from '../data/memories';
-import { googleDriveService, type DriveAudioFile } from '../services/googleDriveService';
+import { googleDriveService, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
 import { saveDriveAccessToken } from '../services/driveLibrary';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
 import { readCachedDriveMedia } from '../services/driveCache';
@@ -308,7 +308,7 @@ export class MemoryReelController {
       let finished = false;
       let attemptedFallback = false;
       let attemptedAuthenticated = false;
-      const timer = window.setTimeout(() => finish(null), 12000);
+      let timer = 0;
       const finish = (value: LoadedMedia | null) => {
         if (finished) return;
         finished = true;
@@ -334,6 +334,9 @@ export class MemoryReelController {
           poster.onerror = () => finish(null);
           poster.src = item.poster;
         };
+        // Some older TV decoders never fire metadata/error for a codec they
+        // cannot decode. Fall back to the poster instead of hanging a story.
+        timer = window.setTimeout(() => finishVideoPoster(), 8000);
         video.onloadedmetadata = finishVideo;
         video.onloadeddata = finishVideo;
         video.onerror = () => {
@@ -430,6 +433,7 @@ export class MemoryReelController {
         } else {
           image.src = item.src;
         }
+        timer = window.setTimeout(() => finish(null), 12000);
       }
     });
   }
@@ -840,6 +844,11 @@ export class MemoryReelController {
 
 const isVideoMemory = (memory: Memory) => memory.type === 'video' || Boolean(memory.mimeType?.startsWith('video/'));
 
+const isLegacyTvBrowser = () => {
+  const userAgent = navigator.userAgent.toLowerCase();
+  return /android\s*tv|googletv|smart-tv|hbbtv|aftb|afts|aftm|aftt|bravia|shield/.test(userAgent);
+};
+
 const resolveReelSources = async (memories: Memory[], signal: AbortSignal, driveAccessToken?: string) => {
   const sources = memories.flatMap(memory => {
     const video = isVideoMemory(memory);
@@ -913,9 +922,18 @@ const readStoredStoryTemplate = (fallback: MemoryReelTemplate): MemoryReelTempla
 };
 
 const buildDriveAudioUrl = (song: DriveAudioFile, token: string) =>
-  `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(song.id)}?alt=media&access_token=${encodeURIComponent(token)}`;
+  `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(song.id)}?alt=media&supportsAllDrives=true&access_token=${encodeURIComponent(token)}`;
 
 const FULLSCREEN_CONTROLS_HIDE_DELAY = 3600;
+
+type LegacyFullscreenDocument = Document & {
+  webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => void | Promise<void>;
+};
+
+type LegacyFullscreenElement = HTMLElement & {
+  webkitRequestFullscreen?: () => void | Promise<void>;
+};
 
 const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, template: initialTemplate = 'orbit', autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onDriveReconnect, onClose }) => {
   const visualMemories = useMemo(() => memories.filter(isVisualMemory), [memories]);
@@ -924,6 +942,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const controllerRef = useRef<MemoryReelController | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const audioObjectUrlsRef = useRef<string[]>([]);
+  const driveAccessTokenRef = useRef(driveAccessToken || '');
+  const resolvedDriveAudioSourcesRef = useRef(new Map<string, string>());
   const [resolvedSources, setResolvedSources] = useState<ReelSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState(false);
@@ -950,6 +970,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [musicQueue, setMusicQueue] = useState<MusicQueueItem[]>(() => audio ? [{ id: 'initial-audio', src: audio, label: 'Background music' }] : []);
   const [loopEnabled, setLoopEnabled] = useState(loop);
   const reducedMotion = usePrefersReducedMotion();
+  const legacyTvMode = useMemo(isLegacyTvBrowser, []);
   const moreRequestedRef = useRef(false);
   const hasLoadedSourcesRef = useRef(false);
   const sourceSignatureRef = useRef('');
@@ -960,6 +981,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const audioPauseGuardRef = useRef(false);
   const musicHydratedRef = useRef(false);
   moreConfigRef.current = { hasMore, loadingMore, onNeedMore };
+
+  useEffect(() => {
+    if (driveAccessToken) driveAccessTokenRef.current = driveAccessToken;
+  }, [driveAccessToken]);
 
   useEffect(() => {
     let active = true;
@@ -1073,7 +1098,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       title: activeTitle,
       audio: undefined,
       loop: loopEnabled,
-      reducedMotion,
+      reducedMotion: reducedMotion || legacyTvMode,
       template,
       onProgress: (current, total) => {
         setProgress({ progress: current, total });
@@ -1091,7 +1116,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       controller.destroy();
       controllerRef.current = null;
     };
-  }, [audio, reducedMotion]);
+  }, [audio, legacyTvMode, reducedMotion]);
 
   useEffect(() => {
     controllerRef.current?.setTemplate(template);
@@ -1164,9 +1189,17 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   }, [activeTitle]);
 
   useEffect(() => {
-    const onFullscreen = () => setFullscreen(document.fullscreenElement === stageRef.current?.parentElement);
+    const onFullscreen = () => {
+      const doc = document as LegacyFullscreenDocument;
+      const shell = stageRef.current?.parentElement;
+      setFullscreen(doc.fullscreenElement === shell || doc.webkitFullscreenElement === shell);
+    };
     document.addEventListener('fullscreenchange', onFullscreen);
-    return () => document.removeEventListener('fullscreenchange', onFullscreen);
+    document.addEventListener('webkitfullscreenchange', onFullscreen);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreen);
+      document.removeEventListener('webkitfullscreenchange', onFullscreen);
+    };
   }, []);
 
   useEffect(() => {
@@ -1217,13 +1250,22 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   useEffect(() => () => {
     audioObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     audioObjectUrlsRef.current = [];
+    resolvedDriveAudioSourcesRef.current.clear();
   }, []);
 
   const toggleFullscreen = async () => {
     const shell = stageRef.current?.parentElement;
     if (!shell) return;
-    if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
-    else await shell.requestFullscreen?.().catch(() => undefined);
+    const doc = document as LegacyFullscreenDocument;
+    const activeFullscreen = doc.fullscreenElement || doc.webkitFullscreenElement;
+    if (activeFullscreen) {
+      if (doc.exitFullscreen) await doc.exitFullscreen().catch(() => undefined);
+      else await Promise.resolve(doc.webkitExitFullscreen?.()).catch(() => undefined);
+      return;
+    }
+    const legacyShell = shell as LegacyFullscreenElement;
+    if (shell.requestFullscreen) await shell.requestFullscreen().catch(() => undefined);
+    else await Promise.resolve(legacyShell.webkitRequestFullscreen?.()).catch(() => undefined);
   };
 
   const chooseMusicFiles = (files: FileList | File[]) => {
@@ -1272,7 +1314,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     `drive-audio-${song.id}-${song.modifiedTime || 'current'}`;
 
   const driveAudioUrl = (song: DriveAudioFile, token: string) =>
-    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(song.id)}?alt=media&access_token=${encodeURIComponent(token)}`;
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(song.id)}?alt=media&supportsAllDrives=true&access_token=${encodeURIComponent(token)}`;
 
   const warmDriveAudioCache = async (song: DriveAudioFile, cacheKey: string, token: string) => {
     if (await readCachedStoryMedia(cacheKey)) return;
@@ -1283,6 +1325,46 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     } catch {
       // The queue already has a direct authenticated source. Cache warming is
       // best-effort so a slow Drive download can never block queue insertion.
+    }
+  };
+
+  const reconnectDriveForPlayback = async () => {
+    const token = onDriveReconnect
+      ? await onDriveReconnect()
+      : await googleDriveService.refreshAccessToken();
+    if (!token) throw new Error('Google Drive authorization was not refreshed. Reconnect Drive and try again.');
+    driveAccessTokenRef.current = token;
+    saveDriveAccessToken(token);
+    return token;
+  };
+
+  const prepareDriveTrackForPlayback = async (track: MusicQueueItem, allowRefresh = false) => {
+    if (track.source !== 'drive' || !track.driveFileId) return track.src;
+    const song = driveSongs.find(item => item.id === track.driveFileId);
+    if (!song) return track.src;
+    const cacheKey = track.cacheKey || driveAudioCacheKey(song);
+    const rememberedSource = resolvedDriveAudioSourcesRef.current.get(cacheKey);
+    if (rememberedSource) return rememberedSource;
+
+    const createSource = async (token: string) => {
+      const cached = await readCachedStoryMedia(cacheKey);
+      const blob = cached || await googleDriveService.downloadMediaFile(token, song.id);
+      const playableBlob = normalizeDriveAudioBlob(blob, song);
+      if (!cached) void writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
+      const objectUrl = URL.createObjectURL(playableBlob);
+      resolvedDriveAudioSourcesRef.current.set(cacheKey, objectUrl);
+      audioObjectUrlsRef.current.push(objectUrl);
+      return objectUrl;
+    };
+
+    let token = driveAccessTokenRef.current || driveAccessToken;
+    if (!token) throw new Error('Connect Google Drive before playing this song.');
+    try {
+      return await createSource(token);
+    } catch (error) {
+      if (!allowRefresh || !isDriveAuthorizationError(error)) throw error;
+      token = await reconnectDriveForPlayback();
+      return createSource(token);
     }
   };
 
@@ -1316,22 +1398,29 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setMusicQueue(current => index === 0 ? current : [track, ...current.filter(item => item.id !== track.id)]);
     const element = audioPlayerRef.current;
     if (!element) return;
-    audioPauseGuardRef.current = true;
-    element.pause();
-    if (element.src !== track.src) {
-      element.src = track.src;
-      element.load();
-    }
-    audioPauseGuardRef.current = false;
+    setAudioLoading(true);
     try {
+      const source = await prepareDriveTrackForPlayback(track, true);
+      audioPauseGuardRef.current = true;
+      element.pause();
+      if (element.src !== source) {
+        element.src = source;
+        element.load();
+      }
+      audioPauseGuardRef.current = false;
       await element.play();
       setAudioPlaying(true);
       setMusicError('');
-    } catch {
+    } catch (error) {
+      audioPauseGuardRef.current = false;
       setAudioPlaying(false);
       setMusicError(track.source === 'drive'
-        ? 'Drive audio could not play. Tap Reconnect Drive, then select the queued song again.'
+        ? (error instanceof Error && /authorization|access denied|reconnect/i.test(error.message)
+          ? 'Google Drive authorization expired. Tap Reconnect Drive, then play the queued song again.'
+          : 'Drive audio could not be downloaded for playback. Check the file format and try again.')
         : 'Tap Play music once to allow audio on this device.');
+    } finally {
+      setAudioLoading(false);
     }
   };
 
@@ -1367,7 +1456,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   };
 
   const loadDriveSongs = async () => {
-    if (!driveAccessToken) {
+    const initialToken = driveAccessTokenRef.current || driveAccessToken;
+    if (!initialToken) {
       setMusicError('Connect Google Drive to load songs stored there.');
       return;
     }
@@ -1376,10 +1466,16 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setDriveSongsLoading(true);
     setMusicError('');
     try {
-      // Do not open an OAuth popup from an async failure callback. Browsers
-      // block it because the Load button gesture has already ended. The
-      // panel below exposes an explicit Reconnect button for this case.
-      setDriveSongs(await googleDriveService.listAudioFiles(driveAccessToken));
+      // Loading is an explicit user action. If the short-lived token has
+      // expired, renew it here before giving up with a 403 message.
+      let token = initialToken;
+      try {
+        setDriveSongs(await googleDriveService.listAudioFiles(token));
+      } catch (error) {
+        if (!isDriveAuthorizationError(error)) throw error;
+        token = await reconnectDriveForPlayback();
+        setDriveSongs(await googleDriveService.listAudioFiles(token));
+      }
       setDriveSongsLoaded(true);
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'Drive songs could not be loaded.');
@@ -1397,7 +1493,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   }, [driveAccessToken]);
 
   const chooseDriveSong = (song: DriveAudioFile) => {
-    if (!driveAccessToken) return;
+    const token = driveAccessTokenRef.current || driveAccessToken;
+    if (!token) return;
     const trackId = `drive-audio-${song.id}`;
     const existingTrack = musicQueue.find(item => item.driveFileId === song.id || item.id === trackId);
     if (existingTrack) {
@@ -1418,7 +1515,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     // TV, while the IndexedDB cache warms without blocking the UI.
     const selectedTrack = {
       id: trackId,
-      src: driveAudioUrl(song, driveAccessToken),
+      src: driveAudioUrl(song, token),
       label: song.name,
       source: 'drive',
       driveFileId: song.id,
@@ -1431,7 +1528,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setAudioPlaying(false);
     setMusicName(song.name);
     setMusicQueue(current => [selectedTrack, ...current.filter(item => item.driveFileId !== song.id && item.id !== trackId)]);
-    void warmDriveAudioCache(song, cacheKey, driveAccessToken);
+    void warmDriveAudioCache(song, cacheKey, token);
   };
 
   const uploadSongsToDrive = async (files: FileList | File[]) => {
@@ -1505,29 +1602,36 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setMusicOpen(false);
   };
 
-  const playStoryAudio = async () => {
+  const playStoryAudio = async (fromUserGesture = false) => {
     const element = audioPlayerRef.current;
     const sourceTrack = musicQueue[0];
     const source = sourceTrack?.src;
     if (!element || !source || audioManuallyStoppedRef.current) return false;
-    if (element.src !== source) {
-      audioPauseGuardRef.current = true;
-      element.pause();
-      element.src = source;
-      element.load();
-      audioPauseGuardRef.current = false;
-    }
+    setAudioLoading(true);
     try {
+      const playableSource = await prepareDriveTrackForPlayback(sourceTrack, fromUserGesture);
+      if (element.src !== playableSource) {
+        audioPauseGuardRef.current = true;
+        element.pause();
+        element.src = playableSource;
+        element.load();
+        audioPauseGuardRef.current = false;
+      }
       await element.play();
       setAudioPlaying(true);
       setMusicError('');
       return true;
-    } catch {
+    } catch (error) {
+      audioPauseGuardRef.current = false;
       setAudioPlaying(false);
       setMusicError(sourceTrack?.source === 'drive'
-        ? 'Drive audio could not play. Tap Reconnect Drive, then select the queued song again.'
+        ? (error instanceof Error && /authorization|access denied|reconnect/i.test(error.message)
+          ? 'Google Drive authorization expired. Tap Reconnect Drive, then play the queued song again.'
+          : 'Drive audio could not be downloaded for playback. Check the file format and try again.')
         : 'Tap Play music once to allow audio on this device.');
       return false;
+    } finally {
+      setAudioLoading(false);
     }
   };
 
@@ -1542,10 +1646,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       return;
     }
     controller.play();
-    void playStoryAudio();
+    void playStoryAudio(true);
   };
 
-  const advanceMusic = () => {
+  const advanceMusic = async () => {
     const currentQueue = musicQueue;
     const element = audioPlayerRef.current;
     if (!currentQueue.length || !element) return;
@@ -1565,14 +1669,22 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setMusicQueue(nextQueue);
     setMusicName(nextTrack.label);
     audioManuallyStoppedRef.current = false;
-    audioPauseGuardRef.current = true;
-    element.pause();
-    audioPauseGuardRef.current = false;
-    element.src = nextTrack.src;
-    element.load();
-    void element.play()
-      .then(() => setAudioPlaying(true))
-      .catch(() => setAudioPlaying(false));
+    setAudioLoading(true);
+    try {
+      const source = await prepareDriveTrackForPlayback(nextTrack);
+      audioPauseGuardRef.current = true;
+      element.pause();
+      element.src = source;
+      element.load();
+      audioPauseGuardRef.current = false;
+      await element.play();
+      setAudioPlaying(true);
+    } catch {
+      audioPauseGuardRef.current = false;
+      setAudioPlaying(false);
+    } finally {
+      setAudioLoading(false);
+    }
   };
 
   const toggleMusic = async () => {
@@ -1584,12 +1696,12 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       return;
     }
     audioManuallyStoppedRef.current = false;
-    await playStoryAudio();
+    await playStoryAudio(true);
   };
 
   return (
     <div className="memory-reel-overlay" role="dialog" aria-modal="true" aria-label="Memory story reel">
-      <div className="memory-reel-shell">
+      <div className={`memory-reel-shell${fullscreen ? ' is-fullscreen' : ''}`}>
         <div ref={stageRef} className="reel memory-reel-stage" />
         <div className="memory-reel-toolbar">
           <button type="button" onClick={toggleStoryPlayback} disabled={loading}>
@@ -1621,7 +1733,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             setAudioPlaying(false);
             if (!audioPauseGuardRef.current) audioManuallyStoppedRef.current = true;
           }}
-          onEnded={advanceMusic}
+          onEnded={() => void advanceMusic()}
           onError={() => {
             setAudioLoading(false);
             setAudioPlaying(false);

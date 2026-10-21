@@ -2947,8 +2947,8 @@ input[type="number"]::-webkit-inner-spin-button {
 
 @media (max-width: 760px) {
   .memory-reel-overlay { padding: 0; place-items: stretch; }
-  .memory-reel-shell { min-height: 100dvh; align-content: center; padding: 0.7rem; }
-  .memory-reel-stage { aspect-ratio: 9 / 16; min-height: min(78dvh, 720px); border-radius: 12px; }
+  .memory-reel-shell { min-height: 100vh; min-height: 100dvh; align-content: center; padding: 0.7rem; }
+  .memory-reel-stage { aspect-ratio: 9 / 16; min-height: min(78vh, 720px); min-height: min(78dvh, 720px); border-radius: 12px; }
   .memory-reel-toolbar button { flex: 1 1 auto; justify-content: center; }
   .memory-reel-toolbar .memory-reel-close { margin-left: 0; }
 }
@@ -9120,6 +9120,86 @@ textarea:focus-visible {
 }
 
 .memory-reel-shell:fullscreen .memory-reel-template-panel { display: none; }
+
+/* Older Android TV Chromium exposes only the prefixed fullscreen API, so it
+   does not match :fullscreen selectors. Keep the same cinema surface when
+   the React state class is used as the fallback. */
+.memory-reel-shell.is-fullscreen {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  padding: 0;
+  overflow: hidden;
+  background: #020307;
+}
+
+.memory-reel-shell.is-fullscreen .memory-reel-stage {
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+
+.memory-reel-shell.is-fullscreen .memory-reel-toolbar,
+.memory-reel-shell.is-fullscreen .memory-reel-progress-text,
+.memory-reel-shell.is-fullscreen .memory-reel-editor,
+.memory-reel-shell.is-fullscreen .memory-reel-music-panel,
+.memory-reel-shell.is-fullscreen .memory-reel-audio-player,
+.memory-reel-shell.is-fullscreen .memory-reel-template-panel {
+  display: none;
+}
+
+.memory-reel-shell.is-fullscreen .memory-reel-fullscreen-controls {
+  position: absolute;
+  left: 50%;
+  bottom: max(1.25rem, env(safe-area-inset-bottom));
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(6, 8, 14, 0.68);
+  box-shadow: 0 16px 55px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transform: translateX(-50%);
+  backdrop-filter: blur(18px) saturate(130%);
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 240ms ease, transform 240ms ease, visibility 240ms ease;
+}
+
+.memory-reel-shell.is-fullscreen .memory-reel-fullscreen-controls.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, 0.65rem);
+}
+
+.memory-reel-shell.is-fullscreen .memory-reel-fullscreen-controls button {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.memory-reel-shell.is-fullscreen .memory-reel-fullscreen-controls button:first-child {
+  background: linear-gradient(135deg, rgba(244, 201, 138, 0.92), rgba(233, 135, 135, 0.9));
+  color: #171316;
+}
+
+.memory-reel-shell.is-fullscreen .memory-reel-fullscreen-controls button:hover,
+.memory-reel-shell.is-fullscreen .memory-reel-fullscreen-controls button:focus-visible {
+  border-color: rgba(244, 201, 138, 0.7);
+  outline: none;
+  transform: translateY(-1px);
+}
 
 /* Every look has a different camera language. The current memory is always
    the sharp, elevated hero; nearby cards add context without covering it. */

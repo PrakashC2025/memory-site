@@ -433,8 +433,8 @@ export default function DomeGallery({
     const scrim = scrimRef.current;
     if (!scrim) return undefined;
 
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') closeFocusedItem();
+    const onKey = (event: Event) => {
+      if ((event as unknown as { key?: string }).key === 'Escape') closeFocusedItem();
     };
 
     scrim.addEventListener('click', closeFocusedItem);

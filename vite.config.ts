@@ -10,6 +10,12 @@ const __dirname = path.dirname(__filename);
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Android 9 TVs can ship with older Chromium/WebView builds. Transpile
+  // optional chaining, nullish coalescing, and similar syntax so the app can
+  // parse before any Story Mode code runs.
+  build: {
+    target: 'es2017',
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

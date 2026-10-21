@@ -16,6 +16,16 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Android 9 TV WebView (Chromium 66) has no queueMicrotask. This must
+      // run before the module graph is evaluated because React may use it
+      // during module initialization.
+      if (!window.queueMicrotask) {
+        window.queueMicrotask = function (callback) {
+          Promise.resolve().then(callback);
+        };
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
