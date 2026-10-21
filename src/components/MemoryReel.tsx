@@ -27,7 +27,7 @@ export type MemoryReelTemplate =
   | 'neon-grid';
 
 export const MEMORY_REEL_TEMPLATES: Array<{ id: MemoryReelTemplate; name: string; description: string }> = [
-  { id: 'orbit', name: 'Cinematic Memory Orbit', description: 'The original floating 3D wall with depth and camera movement.' },
+  { id: 'orbit', name: 'Cinematic Camera Motion', description: 'The original camera-wall journey with depth, movement, and living frames.' },
   { id: 'cinema', name: 'Wide Cinema', description: 'A full-frame director cut with a slow, elegant Ken Burns drift.' },
   { id: 'filmstrip', name: 'Filmstrip Journey', description: 'A living horizontal reel that keeps nearby moments in view.' },
   { id: 'polaroid', name: 'Polaroid Afterglow', description: 'Warm stacked prints that feel like a memory journal.' },
@@ -932,7 +932,10 @@ interface MusicQueueItem {
 }
 
 const STORY_MUSIC_STORAGE_KEY = 'memoriya-story-music-v1';
-const STORY_TEMPLATE_STORAGE_KEY = 'memoriya-story-template-v1';
+// v2 makes the original camera-motion look the default again. Existing v1
+// choices are intentionally not carried over so every TV starts with the
+// reliable cinematic camera experience.
+const STORY_TEMPLATE_STORAGE_KEY = 'memoriya-story-template-v2';
 
 interface StoredStoryMusic {
   driveSongs: DriveAudioFile[];
@@ -1095,6 +1098,16 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   useEffect(() => {
     if (driveAccessToken) driveAccessTokenRef.current = driveAccessToken;
   }, [driveAccessToken]);
+
+  useEffect(() => {
+    if (!musicOpen && !templateOpen) return;
+    const panel = musicOpen ? musicPanelRef.current : templatePanelRef.current;
+    const firstControl = panel?.querySelector<HTMLElement>('button, input, select');
+    if (!firstControl) return;
+    const focusPanel = () => firstControl.focus();
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(focusPanel);
+    else window.setTimeout(focusPanel, 0);
+  }, [musicOpen, templateOpen]);
 
   useEffect(() => {
     let active = true;
@@ -1367,6 +1380,15 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const toggleFullscreen = async () => {
     const shell = stageRef.current?.parentElement;
     if (!shell) return;
+    // Android TV WebViews often expose a partial Fullscreen API. Calling it
+    // can leave the renderer waiting forever and trigger the TV's "page not
+    // responding" dialog. The WebView already occupies the TV screen, so a
+    // CSS cinema surface is the reliable fullscreen implementation there.
+    if (legacyTvMode) {
+      setFullscreen(value => !value);
+      setFullscreenControlsVisible(true);
+      return;
+    }
     const doc = document as LegacyFullscreenDocument;
     const activeFullscreen = doc.fullscreenElement || doc.webkitFullscreenElement;
     if (activeFullscreen) {
@@ -1811,7 +1833,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   };
 
   return (
-    <div className="memory-reel-overlay" role="dialog" aria-modal="true" aria-label="Memory story reel">
+    <div className={`memory-reel-overlay${fullscreen ? ' is-fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label="Memory story reel">
       <div className={`memory-reel-shell${fullscreen ? ' is-fullscreen' : ''}${musicOpen || templateOpen ? ' has-panel-open' : ''}`}>
         <div ref={stageRef} className="reel memory-reel-stage" />
         <div className="memory-reel-toolbar">
