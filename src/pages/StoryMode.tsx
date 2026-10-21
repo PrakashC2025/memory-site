@@ -216,6 +216,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         }
         if (isDriveAuthorizationError(syncError)) {
           driveAuthRequiredRef.current = true;
+          // The saved changes cursor is tied to the expired authorization
+          // session. Clear it so reconnecting performs a clean folder scan.
+          clearDriveChangePageToken();
           setDriveError('Drive needs to reconnect. Return to Memoriya and tap Sync Drive once. Cached memories will keep playing.');
         } else {
           setDriveError('Drive is temporarily unavailable. Cached memories will keep playing.');

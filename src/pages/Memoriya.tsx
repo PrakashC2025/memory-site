@@ -323,6 +323,12 @@ const Memoriya: React.FC = () => {
         // poller until the user explicitly reconnects from the Drive button.
         if (isDriveAuthorizationError(syncError)) {
           driveAuthRequiredRef.current = true;
+          // A changes cursor belongs to the previous authorized Drive
+          // session. Never retry it after a 401/403; the next explicit
+          // reconnect must establish a fresh cursor and folder snapshot.
+          driveChangePageTokenRef.current = '';
+          setDriveChangePageToken('');
+          clearDriveChangePageToken();
           if (active) setError('Drive needs to reconnect. Tap Sync Drive once to restore live photos, videos, and uploads.');
         }
       } finally {
@@ -418,6 +424,11 @@ const Memoriya: React.FC = () => {
       if (!token) throw new Error('Google Drive authorization was cancelled.');
       connectedToken = token;
       driveAuthRequiredRef.current = false;
+      // Reconnect with a clean change cursor. A cursor from an expired token
+      // can otherwise make the first post-reconnect poll fail with 401 again.
+      driveChangePageTokenRef.current = '';
+      setDriveChangePageToken('');
+      clearDriveChangePageToken();
       setAccessToken(token);
       // Refresh the token stored on existing Drive memories so they keep working,
       // instead of clearing and re-downloading everything on every reconnect.

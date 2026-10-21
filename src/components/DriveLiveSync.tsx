@@ -89,6 +89,10 @@ const DriveLiveSync: React.FC = () => {
         }
         if (isDriveAuthorizationError(error)) {
           driveAuthRequiredRef.current = true;
+          // A changes cursor is scoped to the authorization session that
+          // created it. Drop it with the token so the next reconnect starts
+          // with a fresh Drive snapshot instead of retrying a stale cursor.
+          clearDriveChangePageToken();
         }
       } finally {
         releaseDriveSyncLock();
