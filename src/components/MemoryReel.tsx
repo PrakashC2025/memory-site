@@ -1149,6 +1149,18 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   }, [musicOpen, templateOpen]);
 
   useEffect(() => {
+    if (!musicOpen && !templateOpen) return;
+    const closePanels = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' && event.key !== 'Backspace') return;
+      event.preventDefault();
+      setMusicOpen(false);
+      setTemplateOpen(false);
+    };
+    window.addEventListener('keydown', closePanels);
+    return () => window.removeEventListener('keydown', closePanels);
+  }, [musicOpen, templateOpen]);
+
+  useEffect(() => {
     let active = true;
     const stored = storedStoryMusic;
     audioManuallyStoppedRef.current = true;
@@ -1943,6 +1955,15 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             onWheel={stopPanelScrollPropagation}
             onTouchMove={stopPanelScrollPropagation}
           >
+            <div className="memory-reel-panel-heading">
+              <div>
+                <strong>Story music</strong>
+                <span>{musicQueue.length ? `${musicQueue.length} queued` : 'Choose a song'}</span>
+              </div>
+              <button type="button" className="memory-reel-panel-close" onClick={() => setMusicOpen(false)} aria-label="Close music panel">
+                <X size={17} />
+              </button>
+            </div>
             {musicQueue.length > 0 && (
               <button type="button" className="memory-reel-music-primary" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}>
                 <Volume2 size={16} /> {audioLoading ? 'Loading music…' : audioPlaying ? 'Stop music' : 'Play selected music'}
@@ -2011,7 +2032,12 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           >
             <div className="memory-reel-template-heading">
               <div><WandSparkles size={16} /><strong>Choose your cinematic look</strong></div>
-              <span>{MEMORY_REEL_TEMPLATES.find(item => item.id === template)?.name}</span>
+              <div className="memory-reel-template-heading-actions">
+                <span>{MEMORY_REEL_TEMPLATES.find(item => item.id === template)?.name}</span>
+                <button type="button" className="memory-reel-panel-close" onClick={() => setTemplateOpen(false)} aria-label="Close template panel">
+                  <X size={17} />
+                </button>
+              </div>
             </div>
             <div className="memory-reel-template-grid">
               {MEMORY_REEL_TEMPLATES.map((item, index) => (

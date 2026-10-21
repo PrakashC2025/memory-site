@@ -3119,6 +3119,58 @@ input[type="number"]::-webkit-inner-spin-button {
   background: rgba(10, 13, 22, 0.86);
 }
 
+.memory-reel-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.memory-reel-panel-heading > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 0.14rem;
+}
+
+.memory-reel-panel-heading strong {
+  color: #fff;
+  font-size: 0.86rem;
+}
+
+.memory-reel-panel-heading span {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-reel-panel-close {
+  display: grid !important;
+  flex: 0 0 auto;
+  width: 2.35rem;
+  min-width: 2.35rem !important;
+  height: 2.35rem;
+  min-height: 2.35rem !important;
+  place-items: center;
+  padding: 0 !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.07) !important;
+  color: rgba(255, 255, 255, 0.86) !important;
+}
+
+.memory-reel-panel-close:hover,
+.memory-reel-panel-close:focus-visible {
+  border-color: rgba(255, 208, 138, 0.72) !important;
+  background: rgba(255, 208, 138, 0.16) !important;
+  color: #ffd08a !important;
+  outline: none;
+}
+
 .memory-reel-music-primary {
   display: inline-flex;
   align-items: center;
@@ -9347,6 +9399,13 @@ textarea:focus-visible {
 .memory-reel-template-heading > div { color: #ffd08a; }
 .memory-reel-template-heading strong { color: #fff; font-size: 0.82rem; }
 
+.memory-reel-template-heading-actions {
+  display: flex !important;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
 .memory-reel-template-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -9415,21 +9474,94 @@ textarea:focus-visible {
   -webkit-line-clamp: 2;
 }
 
-/* Keep the open picker above the cinema surface. This prevents a TV remote
-   scroll from moving the page behind Story Mode and gives the picker its own
-   predictable viewport on both large and small screens. */
+/* Keep the open picker above the cinema surface. On wide screens it becomes a
+   real side panel so it never covers the story controls or hero image. */
 .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-music-panel,
 .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-template-panel {
   position: fixed;
+  top: 12px;
   right: 12px;
   bottom: 12px;
-  left: 12px;
+  left: auto;
+  width: min(420px, calc(100vw - 24px));
   z-index: 120;
-  max-height: calc(100vh - 220px);
+  max-height: calc(100vh - 24px);
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   box-shadow: 0 20px 80px rgba(0, 0, 0, 0.68);
+}
+
+@media (min-width: 1100px) {
+  .memory-reel-shell.has-panel-open:not(.is-fullscreen) {
+    width: calc(100% - 452px);
+    max-width: none;
+    margin-left: 12px;
+    margin-right: 440px;
+  }
+
+  .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-music-panel,
+  .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-template-panel {
+    width: 420px;
+  }
+
+  .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-template-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1099px) {
+  .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-music-panel,
+  .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-template-panel {
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+    max-height: calc(100vh - 180px);
+  }
+}
+
+@media (min-width: 820px) {
+  html.legacy-tv-browser .memory-reel-shell.has-panel-open:not(.is-fullscreen) {
+    width: calc(100% - 452px);
+    max-width: none;
+    margin-left: 12px;
+    margin-right: 440px;
+  }
+
+  html.legacy-tv-browser .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-stage {
+    height: calc(100vh - 148px);
+  }
+
+  html.legacy-tv-browser .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-music-panel,
+  html.legacy-tv-browser .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-template-panel {
+    top: 12px;
+    right: 12px;
+    bottom: 12px;
+    left: auto;
+    width: 420px;
+    max-height: calc(100vh - 24px);
+  }
+
+  html.legacy-tv-browser .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-template-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  nav.memoriya-navbar .navbar-links {
+    display: flex !important;
+  }
+
+  nav.memoriya-navbar .navbar-user,
+  nav.memoriya-navbar .navbar-signout {
+    display: flex !important;
+  }
+
+  nav.memoriya-navbar > .navbar-actions > button:last-child {
+    display: none !important;
+  }
 }
 
 .memory-reel-shell:fullscreen .memory-reel-template-panel { display: none; }
