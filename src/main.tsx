@@ -47,6 +47,15 @@ createRoot(document.getElementById("root")!).render(
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {
+    const legacyTvBrowser = /Android\s*(?:TV|\d).*?(?:TV|SMART-TV|HbbTV)|GoogleTV|AFT[BSM]|BRAVIA|SHIELD/i.test(navigator.userAgent);
+    if (legacyTvBrowser) {
+      // Older TV WebViews can keep a broken service-worker fetch handler alive
+      // after a deployment. Let the browser use the network directly.
+      navigator.serviceWorker.getRegistrations()
+        .then(registrations => Promise.all(registrations.map(registration => registration.unregister())))
+        .catch(() => undefined);
+      return;
+    }
     navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   });
 }
