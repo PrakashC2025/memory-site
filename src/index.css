@@ -221,6 +221,17 @@ html.legacy-tv-browser .memory-reel-stage .card {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
 }
 
+/* A single light blur keeps the surrounding frames cinematic while the
+   active frame stays sharp. It is intentionally static so old Chromium does
+   not repaint a changing filter on every animation frame. */
+html.legacy-tv-browser .memory-reel-stage.memory-reel-template-orbit .card:not(.is-active) {
+  filter: blur(1.15px) brightness(0.84);
+}
+
+html.legacy-tv-browser .memory-reel-stage.memory-reel-template-orbit .card.is-active {
+  filter: none;
+}
+
 html.legacy-tv-browser .memory-reel-stage .card .m {
   image-rendering: auto;
 }

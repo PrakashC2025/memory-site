@@ -229,10 +229,16 @@ export class MemoryReelController {
     const generation = ++this.loadGeneration;
     const wasPlaying = !this.paused;
     const previousElapsed = this.elapsed;
-    this.pause();
-    this.revokeObjectUrls();
-    this.world.innerHTML = '';
-    this.cards = [];
+    const keepCurrentWall = preserveProgress && this.cards.length > 0 && items.length > 0;
+    const previousObjectUrls = keepCurrentWall ? new Set(this.objectUrls) : undefined;
+    // A live Drive update is loaded beside the current wall. Do not pause the
+    // story/audio or clear the stage while the replacement images arrive.
+    if (!keepCurrentWall) {
+      this.pause();
+      this.revokeObjectUrls();
+      this.world.innerHTML = '';
+      this.cards = [];
+    }
     if (!items.length) {
       this.options.onProgress?.(0, 0);
       return;
@@ -248,7 +254,7 @@ export class MemoryReelController {
         return;
       }
       loaded.push(media);
-      this.rebuildWall(loaded, preserveProgress || loaded.length > 1, previousElapsed, wasPlaying);
+      if (!keepCurrentWall) this.rebuildWall(loaded, preserveProgress || loaded.length > 1, previousElapsed, wasPlaying);
       if (!ready) {
         ready = true;
         resolveReady();
@@ -259,6 +265,17 @@ export class MemoryReelController {
       const media = await this.load(item);
       if (media) reveal(media);
     })).then(() => {
+      if (generation !== this.loadGeneration) return;
+      if (keepCurrentWall && loaded.length) {
+        // Swap the complete wall once, preserving the current story clock.
+        this.rebuildWall(loaded, true, previousElapsed, wasPlaying);
+        previousObjectUrls?.forEach(url => {
+          if (this.objectUrls.has(url)) {
+            this.objectUrls.delete(url);
+            URL.revokeObjectURL(url);
+          }
+        });
+      }
       if (!ready) {
         ready = true;
         resolveReady();
@@ -916,9 +933,12 @@ export class MemoryReelController {
       const push = 100 + clamp(holdProgress, 0, 1) * 180 - dip * 360;
       const sway = Math.sin(time * 0.7) * 3 * (1 - dip);
       // Keep the same camera targets and pacing on TV, but avoid the costly
-      // rotateY/rotateZ/depth stack that makes older WebViews hitch.
+      // rotateY/rotateZ/depth stack that makes older WebViews hitch. The
+      // gentle zoom pulse restores the cinematic push-in without a jump at
+      // each slide boundary.
+      const tvZoom = 1.055 + Math.sin(time * 0.24 + shot * 0.7) * 0.045;
       this.world.style.transform = this.options.legacyTv
-        ? `scale(${this.scale}) translate3d(${-camera.x}px,${-camera.y}px,0)`
+        ? `scale(${this.scale * tvZoom}) translate3d(${-camera.x}px,${-camera.y}px,0)`
         : `scale(${this.scale * audioScale}) translate3d(0,0,${push}px) rotateY(${-6 + sway}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${-camera.x}px,${-camera.y}px,${-camera.z}px)`;
       const flyBlur = dip * 5;
       let focusedIndex = 0;
@@ -934,7 +954,7 @@ export class MemoryReelController {
         card.card.style.opacity = this.options.legacyTv && distance > 900 ? '0.72' : '1';
         card.card.style.zIndex = index === focusedIndex ? '20' : '1';
         card.card.style.filter = this.options.legacyTv
-          ? 'none'
+          ? ''
           : (blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : '') + (near ? '' : ' brightness(.9)');
         if (card.video) {
           const active = near && !this.paused;
@@ -1258,8 +1278,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const controller = new AbortController();
     const photos = visualMemories.filter(memory => !isVideoMemory(memory));
     const videos = visualMemories.filter(memory => isVideoMemory(memory));
-    setLoading(true);
-    setResolvedSources([]);
+    const liveUpdate = hasLoadedSourcesRef.current;
+    // Keep the current wall visible during a live Drive change. The reel
+    // controller swaps the updated list atomically after it has loaded.
+    if (!liveUpdate) setLoading(true);
     void (async () => {
       const photoSources = await resolveReelSources(photos, controller.signal, driveAccessToken);
       if (controller.signal.aborted) return;
@@ -1274,7 +1296,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       // Resolve an empty input as a completed state too. This prevents the
       // progress overlay from hanging when a live Drive folder is cleared or
       // all of its media fails validation.
-      if (!photoSources.length) setLoading(false);
+      if (!photoSources.length && !liveUpdate) setLoading(false);
     })();
     return () => {
       controller.abort();
