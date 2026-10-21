@@ -410,8 +410,9 @@ export class MemoryReelController {
           if (item.rotation) {
             // The individual `rotate` property is unavailable on older TV
             // Chromium, so use the widely supported transform there.
-            if (this.options.legacyTv) image.style.transform = `rotate(${item.rotation}deg)`;
-            else image.style.rotate = `${item.rotation}deg`;
+            // Use the widely supported transform property on every browser.
+            // The individual `rotate` property is missing on older TV WebViews.
+            image.style.transform = `rotate(${item.rotation}deg)`;
           }
           finish({ node: image, aspect: isQuarterTurn ? 1 / aspect : aspect });
         };
@@ -805,7 +806,11 @@ export class MemoryReelController {
       holdProgress = (local - move) / shotHold;
     }
 
-    if (this.options.legacyTv) {
+    // Keep the same camera-wall composition on PC, mobile, and Android TV.
+    // TV-specific CSS remains available for old controls/fullscreen support,
+    // but it must not replace the shared cinematic animation.
+    const useLegacyVisualFallback = false;
+    if (this.options.legacyTv && useLegacyVisualFallback) {
       // Chromium 66 can animate ordinary 2D transforms and opacity reliably,
       // but its 3D/filter compositor is unstable. Orbit therefore uses a
       // lightweight cross-fade and push. The other nine looks keep their own

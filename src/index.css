@@ -106,23 +106,25 @@ html.legacy-tv-browser .memory-reel-stage {
   height: calc(100vh - 148px);
   min-height: 270px;
   aspect-ratio: auto;
-  perspective: none;
-  isolation: auto;
+  perspective: 1200px;
+  perspective-origin: 50% 50%;
+  isolation: isolate;
 }
 
 html.legacy-tv-browser .memory-reel-stage .world {
-  transform-style: flat;
-  will-change: auto;
+  transform-style: preserve-3d;
+  will-change: transform;
 }
 
 html.legacy-tv-browser .memory-reel-stage .ambient {
-  filter: none;
-  opacity: .2;
+  filter: blur(18px) saturate(1.06) brightness(.82);
+  opacity: .48;
+  transform: scale(1.08);
 }
 
 html.legacy-tv-browser .memory-reel-stage .card {
-  transition: none;
-  backface-visibility: visible;
+  transition: opacity 0.35s ease, filter 0.35s ease;
+  backface-visibility: hidden;
 }
 
 html.legacy-tv-browser .memory-reel-toolbar,
@@ -193,13 +195,12 @@ html.legacy-tv-browser .memory-reel-shell.is-fullscreen .memory-reel-fullscreen-
 }
 
 html.legacy-tv-browser .memory-reel-stage .world {
-  transform-style: flat !important;
-  perspective: none !important;
+  transform-style: preserve-3d !important;
 }
 
 html.legacy-tv-browser .memory-reel-stage .card {
   will-change: transform, opacity;
-  backface-visibility: visible;
+  backface-visibility: hidden;
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.52);
 }
 
@@ -208,9 +209,9 @@ html.legacy-tv-browser .memory-reel-stage .card .m {
 }
 
 html.legacy-tv-browser .memory-reel-stage .ambient {
-  opacity: 0.28;
+  opacity: 0.48;
   background-color: #111827;
-  filter: none;
+  filter: blur(18px) saturate(1.06) brightness(.82);
   transform: scale(1.04);
 }
 
