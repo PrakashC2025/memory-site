@@ -1,5 +1,146 @@
 @import "tailwindcss";
 
+/*
+ * Android TV Chromium 66 does not understand CSS cascade layers. The
+ * Tailwind utilities above therefore become invisible on those devices.
+ * Keep this small, unlayered compatibility set outside @layer so the login
+ * shell and every full-screen surface still occupy the viewport.
+ */
+html.legacy-tv-browser .fixed { position: fixed; }
+html.legacy-tv-browser .absolute { position: absolute; }
+html.legacy-tv-browser .relative { position: relative; }
+html.legacy-tv-browser .inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
+html.legacy-tv-browser .top-0 { top: 0; }
+html.legacy-tv-browser .right-0 { right: 0; }
+html.legacy-tv-browser .bottom-0 { bottom: 0; }
+html.legacy-tv-browser .left-0 { left: 0; }
+html.legacy-tv-browser .z-10 { z-index: 10; }
+html.legacy-tv-browser .z-40 { z-index: 40; }
+html.legacy-tv-browser .z-50 { z-index: 50; }
+html.legacy-tv-browser .z-\[5\] { z-index: 5; }
+html.legacy-tv-browser .z-\[100\] { z-index: 100; }
+html.legacy-tv-browser .z-\[150\] { z-index: 150; }
+html.legacy-tv-browser .z-\[200\] { z-index: 200; }
+html.legacy-tv-browser .pointer-events-none { pointer-events: none; }
+html.legacy-tv-browser .overflow-hidden { overflow: hidden; }
+html.legacy-tv-browser .flex { display: flex; }
+html.legacy-tv-browser .inline-flex { display: inline-flex; }
+html.legacy-tv-browser .grid { display: grid; }
+html.legacy-tv-browser .block { display: block; }
+html.legacy-tv-browser .hidden { display: none; }
+html.legacy-tv-browser .flex-col { flex-direction: column; }
+html.legacy-tv-browser .items-center { align-items: center; }
+html.legacy-tv-browser .items-start { align-items: flex-start; }
+html.legacy-tv-browser .justify-center { justify-content: center; }
+html.legacy-tv-browser .justify-between { justify-content: space-between; }
+html.legacy-tv-browser .flex-wrap { flex-wrap: wrap; }
+html.legacy-tv-browser .grid-cols-1 { grid-template-columns: 1fr; }
+html.legacy-tv-browser .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+html.legacy-tv-browser .grid-cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+html.legacy-tv-browser .w-full { width: 100%; }
+html.legacy-tv-browser .h-full { height: 100%; }
+html.legacy-tv-browser .min-h-screen { min-height: 100vh; }
+html.legacy-tv-browser .max-w-md { max-width: 28rem; }
+html.legacy-tv-browser .max-w-6xl { max-width: 72rem; }
+html.legacy-tv-browser .mx-auto { margin-left: auto; margin-right: auto; }
+html.legacy-tv-browser .text-center { text-align: center; }
+html.legacy-tv-browser .gap-2 { gap: .5rem; }
+html.legacy-tv-browser .gap-3 { gap: .75rem; }
+html.legacy-tv-browser .gap-4 { gap: 1rem; }
+html.legacy-tv-browser .gap-5 { gap: 1.25rem; }
+html.legacy-tv-browser .p-4 { padding: 1rem; }
+html.legacy-tv-browser .p-5 { padding: 1.25rem; }
+html.legacy-tv-browser .px-4 { padding-left: 1rem; padding-right: 1rem; }
+html.legacy-tv-browser .px-5 { padding-left: 1.25rem; padding-right: 1.25rem; }
+html.legacy-tv-browser .py-8 { padding-top: 2rem; padding-bottom: 2rem; }
+html.legacy-tv-browser .mt-2 { margin-top: .5rem; }
+html.legacy-tv-browser .mt-3 { margin-top: .75rem; }
+html.legacy-tv-browser .mt-5 { margin-top: 1.25rem; }
+html.legacy-tv-browser .mt-6 { margin-top: 1.5rem; }
+html.legacy-tv-browser .mt-7 { margin-top: 1.75rem; }
+html.legacy-tv-browser .mt-8 { margin-top: 2rem; }
+html.legacy-tv-browser .mb-5 { margin-bottom: 1.25rem; }
+html.legacy-tv-browser .mb-6 { margin-bottom: 1.5rem; }
+html.legacy-tv-browser .w-14 { width: 3.5rem; }
+html.legacy-tv-browser .h-14 { height: 3.5rem; }
+html.legacy-tv-browser .h-10 { height: 2.5rem; }
+html.legacy-tv-browser .space-y-4 > * + * { margin-top: 1rem; }
+
+@media (min-width: 820px) {
+  html.legacy-tv-browser .neon-shell > .grid { grid-template-columns: 1.05fr .95fr; }
+}
+
+/* A low-compositing surface for old Android TV WebViews. */
+html.legacy-tv-browser,
+html.legacy-tv-browser body,
+html.legacy-tv-browser #root {
+  min-height: 100%;
+  background: #030407;
+}
+
+html.legacy-tv-browser .neon-grid,
+html.legacy-tv-browser .splash-cursor {
+  display: none !important;
+}
+
+html.legacy-tv-browser .glass-card,
+html.legacy-tv-browser .neon-card,
+html.legacy-tv-browser .memory-reel-overlay,
+html.legacy-tv-browser .memory-reel-fullscreen-controls {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html.legacy-tv-browser .memory-reel-overlay {
+  display: block;
+  overflow: hidden;
+  padding: 12px;
+}
+
+html.legacy-tv-browser .memory-reel-shell {
+  width: 100%;
+  max-width: none;
+}
+
+html.legacy-tv-browser .memory-reel-stage {
+  height: calc(100vh - 148px);
+  min-height: 270px;
+  aspect-ratio: auto;
+  perspective: none;
+  isolation: auto;
+}
+
+html.legacy-tv-browser .memory-reel-stage .world {
+  transform-style: flat;
+  will-change: auto;
+}
+
+html.legacy-tv-browser .memory-reel-stage .ambient {
+  filter: none;
+  opacity: .2;
+}
+
+html.legacy-tv-browser .memory-reel-stage .card {
+  transition: none;
+  backface-visibility: visible;
+}
+
+html.legacy-tv-browser .memory-reel-toolbar,
+html.legacy-tv-browser .memory-reel-fullscreen-controls {
+  gap: 6px;
+}
+
+html.legacy-tv-browser .memory-reel-toolbar button,
+html.legacy-tv-browser .memory-reel-fullscreen-controls button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+html.legacy-tv-browser .memory-reel-shell.is-fullscreen .memory-reel-stage {
+  width: 100vw;
+  height: 100vh;
+}
+
 :root {
   color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

@@ -7,6 +7,7 @@ import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/op
 import { readCachedDriveMedia } from '../services/driveCache';
 import { readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 import { withMediaFetch } from '../utils/mediaQueue';
+import { isLegacyTvBrowser } from '../utils/legacyBrowser';
 
 export interface MemoryReelTitle {
   line?: string;
@@ -784,9 +785,11 @@ export class MemoryReelController {
       const visibleShot = shot > 0 && local < move && progress < 0.5 ? shot - 1 : shot;
       this.world.style.transform = `scale(${this.scale * audioScale}) translate3d(0,0,0)`;
       this.cards.forEach((card, index) => {
-        card.card.style.transform = `translate3d(${-card.width / 2}px,${-card.height / 2}px,0)`;
-        card.card.style.opacity = index === visibleShot ? '1' : '0';
-        card.card.style.filter = 'none';
+        // Important inline values win over template-specific CSS rules on old
+        // WebViews, keeping exactly one readable frame visible at a time.
+        card.card.style.setProperty('transform', `translate3d(${-card.width / 2}px,${-card.height / 2}px,0)`, 'important');
+        card.card.style.setProperty('opacity', index === visibleShot ? '1' : '0', 'important');
+        card.card.style.setProperty('filter', 'none', 'important');
         if (card.video) {
           if (index === visibleShot && !this.paused) this.playMutedVideo(card.video);
           else card.video.pause();
@@ -843,11 +846,6 @@ export class MemoryReelController {
 }
 
 const isVideoMemory = (memory: Memory) => memory.type === 'video' || Boolean(memory.mimeType?.startsWith('video/'));
-
-const isLegacyTvBrowser = () => {
-  const userAgent = navigator.userAgent.toLowerCase();
-  return /android\s*tv|googletv|smart-tv|hbbtv|aftb|afts|aftm|aftt|bravia|shield/.test(userAgent);
-};
 
 const resolveReelSources = async (memories: Memory[], signal: AbortSignal, driveAccessToken?: string) => {
   const sources = memories.flatMap(memory => {

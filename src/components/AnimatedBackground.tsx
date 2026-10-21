@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { useTheme } from '../context/ThemeContext';
+import { isLegacyTvBrowser } from '../utils/legacyBrowser';
 
 interface Particle {
   x: number;
@@ -202,6 +203,11 @@ const AnimatedBackground: React.FC = () => {
       window.clearTimeout(frameRef.current);
     };
   }, [config]);
+
+  // Older TV WebViews spend too much time compositing the animated canvas and
+  // can leave the app layer blank. The static page background is clearer and
+  // keeps Story Mode/video playback responsive on those devices.
+  if (isLegacyTvBrowser()) return null;
 
   return (
     <>

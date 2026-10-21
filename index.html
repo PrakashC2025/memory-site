@@ -17,6 +17,15 @@
   <body>
     <div id="root"></div>
     <script>
+      // Mark Android TV before styles and React mount. Chromium 66 ignores
+      // Tailwind's @layer utilities, so the legacy layout must be active from
+      // the first paint. sdk_google_atv is used by the Android 9 TV image.
+      (function () {
+        var ua = navigator.userAgent || '';
+        if (/Android\s+\d[^)]*(?:sdk_google_atv|google_atv|android\s*tv|smart[- ]?tv|hbbtv)|GoogleTV|AFT[BSM]|BRAVIA|SHIELD/i.test(ua)) {
+          document.documentElement.className += ' legacy-tv-browser';
+        }
+      }());
       // Android 9 TV WebView (Chromium 66) has no queueMicrotask. This must
       // run before the module graph is evaluated because React may use it
       // during module initialization.

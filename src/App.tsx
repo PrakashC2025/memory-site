@@ -6,6 +6,7 @@ import DriveLiveSync from './components/DriveLiveSync';
 import MusicPlayer from './components/MusicPlayer';
 import Navbar from './components/Navbar';
 import SplashCursor from './components/SplashCursor';
+import { isLegacyTvBrowser } from './utils/legacyBrowser';
 import { ThemeProvider } from './context/ThemeContext';
 import { UserProvider, useUser } from './context/UserContext';
 import Login from './pages/Login';
@@ -75,7 +76,7 @@ const AppContent: React.FC = () => {
     <>
       <DriveLiveSync />
       <AnimatedBackground />
-      {currentPage !== 'story' && (
+      {!isLegacyTvBrowser() && currentPage !== 'story' && (
         <SplashCursor
           SIM_RESOLUTION={96}
           DYE_RESOLUTION={720}

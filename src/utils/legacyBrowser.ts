@@ -1,6 +1,12 @@
-/* Small, dependency-free fallbacks for older Android TV Chromium builds.
-   These are intentionally conservative: they keep the app renderable when a
-   browser lacks an optional observer or Array helper. */
+/* Small, dependency-free fallbacks for older Android TV Chromium builds. */
+
+export const isLegacyTvBrowser = () => {
+  const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent || '';
+  // The Android TV emulator and several real TVs identify themselves as
+  // `sdk_google_atv` without including the words "Android TV". Keep mobile
+  // Android WebViews out of this path unless they advertise a TV platform.
+  return /Android\s+\d[^)]*(?:sdk_google_atv|google_atv|android\s*tv|smart[- ]?tv|hbbtv)|GoogleTV|AFT[BSM]|BRAVIA|SHIELD/i.test(userAgent);
+};
 
 export const installLegacyBrowserSupport = () => {
   const browserWindow = window as Window & {
@@ -8,6 +14,13 @@ export const installLegacyBrowserSupport = () => {
     IntersectionObserver?: typeof IntersectionObserver;
     ResizeObserver?: typeof ResizeObserver;
   };
+
+  // Tailwind v4 emits its utilities inside @layer blocks. Chromium 66 (used
+  // by several Android TV devices) ignores those blocks, so add a marker that
+  // lets the plain-CSS compatibility rules restore the essential layout.
+  if (isLegacyTvBrowser()) {
+    document.documentElement.classList.add('legacy-tv-browser');
+  }
 
   // Android 9 TV WebView (Chromium 66) does not expose queueMicrotask,
   // which modern React/runtime code may call during the first render.
