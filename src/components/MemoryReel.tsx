@@ -197,6 +197,8 @@ export class MemoryReelController {
   private dustContext?: CanvasRenderingContext2D;
   private dustParticles: DustParticle[] = [];
   private dustDpr = 1;
+  private dustWidth = 0;
+  private dustHeight = 0;
   private dustLastPaint = 0;
   private ambientSource = '';
   private titleEl: HTMLDivElement;
@@ -223,7 +225,6 @@ export class MemoryReelController {
   private audioAnalyser?: AnalyserNode;
   private audioSource?: MediaElementAudioSourceNode;
   private audioData?: Uint8Array<ArrayBuffer>;
-  private audioWaveform?: Uint8Array<ArrayBuffer>;
   private audioAnalysisAttempted = false;
   private smoothedBass = 0;
   private smoothedMid = 0;
@@ -232,6 +233,7 @@ export class MemoryReelController {
   private beatPulse = 0;
   private previousBass = 0;
   private bassHistory: Array<{ time: number; value: number }> = [];
+  private bassHistoryTotal = 0;
   private lastBeatAt = -Infinity;
   private beatCount = 0;
   private lastRenderedShot = 0;
@@ -243,6 +245,10 @@ export class MemoryReelController {
   private orientationHandler?: (event: DeviceOrientationEvent) => void;
   private visibilityHandler?: () => void;
   private wasVisiblePlaying = false;
+  private lastMetricKey = '';
+  private lastLayoutShot = -1;
+  private lastStoryPlaying = false;
+  private lastAudioActive = false;
   private objectUrls = new Set<string>();
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
@@ -446,6 +452,7 @@ export class MemoryReelController {
       this.world.appendChild(card.card);
       this.cards.push(card);
     });
+    this.lastLayoutShot = -1;
 
     this.total = this.cards.reduce((total, card, index) => (
       total + this.cardHold(card) + (index < this.cards.length - 1 ? this.options.move : 0)
@@ -701,6 +708,8 @@ export class MemoryReelController {
     const rect = this.el.getBoundingClientRect();
     const width = Math.max(1, Math.round(rect.width));
     const height = Math.max(1, Math.round(rect.height));
+    this.dustWidth = width;
+    this.dustHeight = height;
     this.dustDpr = Math.min(1.5, window.devicePixelRatio || 1);
     this.dustCanvas.width = Math.round(width * this.dustDpr);
     this.dustCanvas.height = Math.round(height * this.dustDpr);
@@ -710,8 +719,8 @@ export class MemoryReelController {
     const particleCount = width < 640 ? 60 : Math.min(96, Math.max(60, Math.round(width / 12)));
     while (this.dustParticles.length < particleCount) {
       this.dustParticles.push({
-        x: Math.random() * width,
-        y: Math.random() * height,
+        x: Math.random() * this.dustWidth,
+        y: Math.random() * this.dustHeight,
         vx: (Math.random() - 0.5) * 0.08,
         vy: -0.05 - Math.random() * 0.12,
         radius: 1 + Math.random() * 2.2,
@@ -780,14 +789,12 @@ export class MemoryReelController {
       this.audioSource = source;
       this.audioAnalyser = analyser;
       this.audioData = new Uint8Array(analyser.frequencyBinCount);
-      this.audioWaveform = new Uint8Array(analyser.fftSize);
     } catch {
       // Cross-origin audio may not expose an analyser. Keep normal playback
       // working and let the visualizer use its gentle time-based fallback.
       this.audioSource = undefined;
       this.audioAnalyser = undefined;
       this.audioData = undefined;
-      this.audioWaveform = undefined;
     }
   }
 
@@ -797,8 +804,11 @@ export class MemoryReelController {
     this.audioSource = undefined;
     this.audioAnalyser = undefined;
     this.audioData = undefined;
-    this.audioWaveform = undefined;
     this.audioAnalysisAttempted = false;
+    this.bassHistory = [];
+    this.bassHistoryTotal = 0;
+    this.previousBass = 0;
+    this.lastBeatAt = -Infinity;
   }
 
   private readAudioMetrics(time: number) {
@@ -807,7 +817,6 @@ export class MemoryReelController {
     const playing = Boolean(analysisAudio && !analysisAudio.paused);
     if (playing && this.audioAnalyser && this.audioData) {
       this.audioAnalyser.getByteFrequencyData(this.audioData);
-      if (this.audioWaveform) this.audioAnalyser.getByteTimeDomainData(this.audioWaveform);
       const size = this.audioData.length;
       const binHz = (this.audioContext?.sampleRate || 44100) / this.audioAnalyser.fftSize;
       const averageBand = (startHz: number, endHz: number) => {
@@ -827,8 +836,9 @@ export class MemoryReelController {
       this.smoothedLevel = lerp(this.smoothedLevel, rawLevel, 0.15);
       const now = performance.now();
       this.bassHistory.push({ time: now, value: bass });
-      while (this.bassHistory.length && now - this.bassHistory[0].time > 1500) this.bassHistory.shift();
-      const average = this.bassHistory.reduce((sum, sample) => sum + sample.value, 0) / Math.max(1, this.bassHistory.length);
+      this.bassHistoryTotal += bass;
+      while (this.bassHistory.length && now - this.bassHistory[0].time > 1500) this.bassHistoryTotal -= this.bassHistory.shift()!.value;
+      const average = this.bassHistoryTotal / Math.max(1, this.bassHistory.length);
       this.previousBass = bass;
       if (bass > Math.max(0.18, average * 1.3) && now - this.lastBeatAt >= 250) {
         this.lastBeatAt = now;
@@ -890,8 +900,8 @@ export class MemoryReelController {
 
   private renderDust(metrics: { treble: number; beat: number }, playing: boolean) {
     const context = this.dustContext;
-    const width = this.dustCanvas.clientWidth;
-    const height = this.dustCanvas.clientHeight;
+    const width = this.dustWidth;
+    const height = this.dustHeight;
     if (!context || !width || !height || this.options.effect === 'off' || this.options.reducedMotion) {
       context?.clearRect(0, 0, width, height);
       return;
@@ -904,6 +914,8 @@ export class MemoryReelController {
     context.clearRect(0, 0, width, height);
     context.save();
     context.globalCompositeOperation = 'screen';
+    context.shadowBlur = 8 + treble * 16 + beat * 14;
+    context.shadowColor = 'rgba(255, 206, 141, 0.55)';
     this.dustParticles.forEach(particle => {
       const speed = (playing ? 1 : 0.18) * (0.35 + treble * 1.8);
       particle.x += particle.vx * speed * delta * 60;
@@ -916,8 +928,6 @@ export class MemoryReelController {
       const alpha = particle.alpha * (0.55 + treble * 0.7 + beat * 0.4) * (0.86 + Math.sin(particle.phase) * 0.14);
       context.beginPath();
       context.fillStyle = `rgba(255, ${204 + Math.round(treble * 34)}, 142, ${clamp(alpha, 0.05, 0.9)})`;
-      context.shadowBlur = 8 + treble * 16 + beat * 14;
-      context.shadowColor = 'rgba(255, 206, 141, 0.55)';
       context.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
       context.fill();
     });
@@ -1160,26 +1170,40 @@ export class MemoryReelController {
     // Keep the empty space alive with a gentle music pulse. Beat and frequency
     // bands are smoothed so visuals breathe with the track instead of twitching.
     const effectLevel = audioLevel;
-    this.ambientEffects.style.setProperty('--audio-level', effectLevel.toFixed(3));
-    this.ambientEffects.style.setProperty('--bass-level', audioMetrics.bass.toFixed(3));
-    this.ambientEffects.style.setProperty('--mid-level', audioMetrics.mid.toFixed(3));
-    this.ambientEffects.style.setProperty('--treble-level', audioMetrics.treble.toFixed(3));
-    this.ambientEffects.style.setProperty('--beat-pulse', audioMetrics.beat.toFixed(3));
-    this.ambientEffects.style.setProperty('--wave-shift', `${(audioMetrics.bass * 18 + audioMetrics.mid * 8).toFixed(2)}px`);
-    this.ambientEffects.style.setProperty('--effect-opacity', (0.34 + effectLevel * 0.42).toFixed(3));
-    this.ambientEffects.style.setProperty('--glow-scale', (0.92 + effectLevel * 0.48).toFixed(3));
-    this.ambientEffects.style.setProperty('--particle-opacity', (0.28 + effectLevel * 0.72).toFixed(3));
-    this.ambientEffects.style.setProperty('--particle-scale', (0.72 + effectLevel * 1.1).toFixed(3));
-    this.ambientEffects.style.setProperty('--butterfly-opacity', (0.24 + effectLevel * 0.76).toFixed(3));
-    this.ambientEffects.style.setProperty('--butterfly-scale', (0.78 + effectLevel * 0.42).toFixed(3));
-    this.el.style.setProperty('--bass-level', audioMetrics.bass.toFixed(3));
-    this.el.style.setProperty('--mid-level', audioMetrics.mid.toFixed(3));
-    this.el.style.setProperty('--treble-level', audioMetrics.treble.toFixed(3));
-    this.el.style.setProperty('--beat-pulse', audioMetrics.beat.toFixed(3));
+    const metricKey = [
+      effectLevel.toFixed(3),
+      audioMetrics.bass.toFixed(3),
+      audioMetrics.mid.toFixed(3),
+      audioMetrics.treble.toFixed(3),
+      audioMetrics.beat.toFixed(3),
+    ].join('|');
+    if (metricKey !== this.lastMetricKey) {
+      this.lastMetricKey = metricKey;
+      this.ambientEffects.style.setProperty('--audio-level', effectLevel.toFixed(3));
+      this.ambientEffects.style.setProperty('--bass-level', audioMetrics.bass.toFixed(3));
+      this.ambientEffects.style.setProperty('--mid-level', audioMetrics.mid.toFixed(3));
+      this.ambientEffects.style.setProperty('--treble-level', audioMetrics.treble.toFixed(3));
+      this.ambientEffects.style.setProperty('--beat-pulse', audioMetrics.beat.toFixed(3));
+      this.ambientEffects.style.setProperty('--wave-shift', `${(audioMetrics.bass * 18 + audioMetrics.mid * 8).toFixed(2)}px`);
+      this.ambientEffects.style.setProperty('--effect-opacity', (0.34 + effectLevel * 0.42).toFixed(3));
+      this.ambientEffects.style.setProperty('--glow-scale', (0.92 + effectLevel * 0.48).toFixed(3));
+      this.ambientEffects.style.setProperty('--particle-opacity', (0.28 + effectLevel * 0.72).toFixed(3));
+      this.ambientEffects.style.setProperty('--particle-scale', (0.72 + effectLevel * 1.1).toFixed(3));
+      this.ambientEffects.style.setProperty('--butterfly-opacity', (0.24 + effectLevel * 0.76).toFixed(3));
+      this.ambientEffects.style.setProperty('--butterfly-scale', (0.78 + effectLevel * 0.42).toFixed(3));
+      this.el.style.setProperty('--bass-level', audioMetrics.bass.toFixed(3));
+      this.el.style.setProperty('--mid-level', audioMetrics.mid.toFixed(3));
+      this.el.style.setProperty('--treble-level', audioMetrics.treble.toFixed(3));
+      this.el.style.setProperty('--beat-pulse', audioMetrics.beat.toFixed(3));
+    }
     const audioActive = Boolean((this.analysisAudio || this.audio) && !(this.analysisAudio || this.audio)?.paused);
-    this.ambientEffects.classList.toggle('is-playing', !this.paused && audioActive);
-    this.el.classList.toggle('is-playing', !this.paused);
-    this.el.classList.toggle('is-music-playing', audioActive);
+    if (this.lastStoryPlaying !== !this.paused || this.lastAudioActive !== audioActive) {
+      this.lastStoryPlaying = !this.paused;
+      this.lastAudioActive = audioActive;
+      this.ambientEffects.classList.toggle('is-playing', !this.paused && audioActive);
+      this.el.classList.toggle('is-playing', !this.paused);
+      this.el.classList.toggle('is-music-playing', audioActive);
+    }
     this.renderDust(audioMetrics, audioActive);
 
     let shot = 0;
@@ -1198,14 +1222,17 @@ export class MemoryReelController {
     let progress = 1;
     let dip = 0;
     let holdProgress = 0;
-    this.el.style.setProperty('--reel-active', String(shot));
-    this.cards.forEach((card, index) => {
-      card.card.classList.toggle('is-active', index === shot);
-      card.card.style.setProperty('--reel-index', String(index));
-      card.card.style.setProperty('--reel-offset', `${(index - shot) * 34}vw`);
-      card.card.style.setProperty('--reel-angle', `${((index % 5) - 2) * 3}deg`);
-      card.card.style.setProperty('--reel-depth', `${Math.min(Math.abs(index - shot) * 18, 120)}px`);
-    });
+    if (this.lastLayoutShot !== shot) {
+      this.lastLayoutShot = shot;
+      this.el.style.setProperty('--reel-active', String(shot));
+      this.cards.forEach((card, index) => {
+        card.card.classList.toggle('is-active', index === shot);
+        card.card.style.setProperty('--reel-index', String(index));
+        card.card.style.setProperty('--reel-offset', `${(index - shot) * 34}vw`);
+        card.card.style.setProperty('--reel-angle', `${((index % 5) - 2) * 3}deg`);
+        card.card.style.setProperty('--reel-depth', `${Math.min(Math.abs(index - shot) * 18, 120)}px`);
+      });
+    }
 
     if (shot === 0 && local < shotHold) {
       holdProgress = local / shotHold;

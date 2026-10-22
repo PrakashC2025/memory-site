@@ -10269,8 +10269,13 @@ textarea:focus-visible {
 }
 
 .memory-reel-stage .card {
-  will-change: transform, opacity, filter;
+  will-change: auto;
   transform-style: preserve-3d;
+}
+
+.memory-reel-stage .card.is-active,
+.memory-reel-stage .card.beat-fly-front {
+  will-change: transform, opacity, filter;
 }
 
 .memory-reel-stage .card .m {
