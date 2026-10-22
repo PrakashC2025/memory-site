@@ -7800,6 +7800,7 @@ nav.fixed.left-0.right-0.top-0 {
 }
 
 .drive-preview-fallback {
+  position: relative;
   display: grid;
   place-items: center;
   align-content: center;
@@ -7863,6 +7864,30 @@ nav.fixed.left-0.right-0.top-0 {
   border-top-color: #9bffec;
   border-radius: 999px;
   animation: memoriya-spin 0.72s linear infinite;
+}
+
+.drive-preview-loading-poster {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.72;
+}
+
+.drive-preview-loading-label {
+  position: absolute;
+  inset: auto 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.45rem;
+  background: linear-gradient(transparent, rgba(4, 7, 14, 0.9));
+  color: #fff;
+}
+
+.drive-preview-loading-label .drive-preview-spinner {
+  width: 0.85rem;
+  height: 0.85rem;
 }
 
 .timeline-memory-media {

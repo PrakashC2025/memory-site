@@ -43,15 +43,14 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
 
   useEffect(() => {
     const canUseDriveMedia = Boolean(memory.authToken && memory.driveFileId);
-    // Video cards already have a lightweight Drive poster and should not fetch
-    // the complete original just because they entered the gallery. Only fetch
-    // a video blob after its preview URL fails; images can still use the
-    // authenticated fallback when needed.
+    // Show Drive's thumbnail immediately. The original is only needed when a
+    // thumbnail is missing/broken or when a video is explicitly opened. This
+    // keeps a slow original download from replacing a perfectly good preview.
     const drivePreviewNeedsAuth = Boolean(
       memory.driveFileId
-      && (memory.type === 'video' ? videoActive : !imageCandidates.length),
+      && (!imageCandidates.length || failed || (memory.type === 'video' && videoActive)),
     );
-    if (!canUseDriveMedia || fallbackLoading || blobSrc || authAttemptedRef.current || (memory.type === 'video' && !failed && !drivePreviewNeedsAuth) || (!eager && !failed && !drivePreviewNeedsAuth)) return undefined;
+    if (!canUseDriveMedia || fallbackLoading || blobSrc || authAttemptedRef.current || !drivePreviewNeedsAuth) return undefined;
     const controller = new AbortController();
     let cancelled = false;
     authAttemptedRef.current = true;
@@ -139,14 +138,17 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setVideoActive(true); }}
           aria-label={`Play preview for ${memory.title}`}
         >
-          {memory.thumbnail && !memory.driveFileId ? (
+          {memory.thumbnail ? (
             <img
               src={memory.thumbnail}
               alt={alt ?? memory.title}
               className={`${className} drive-media-preview`}
               loading={eager ? 'eager' : 'lazy'}
               decoding="async"
-              onError={() => setFailed(true)}
+              onError={() => {
+                setFailed(true);
+                setVideoActive(true);
+              }}
             />
           ) : (
             <span className={`drive-preview-fallback ${className} drive-media-preview`}>
@@ -156,6 +158,14 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
             </span>
           )}
           <span aria-hidden="true"><Play size={24} /></span>
+        </span>
+      ) : fallbackLoading && memory.type === 'video' && memory.thumbnail ? (
+        <span className={`drive-preview-fallback ${className} drive-media-preview`}>
+          <img src={memory.thumbnail} alt={alt ?? memory.title} className="drive-preview-loading-poster" />
+          <span className="drive-preview-loading-label">
+            <span className="drive-preview-spinner" aria-hidden="true" />
+            <small>Opening video…</small>
+          </span>
         </span>
       ) : fallbackLoading ? (
         <span className={`drive-preview-fallback ${className} drive-media-preview`}>
@@ -174,12 +184,11 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
 };
 
 const buildImageCandidates = (memory: Memory) => {
-  // Drive thumbnailLink values are short-lived lh3 URLs. They must not be
-  // assigned directly to an image because they later produce 401/403 loops.
-  // The authenticated cache/download effect above supplies the object URL.
-  if (memory.driveFileId) return [];
+  // A Drive thumbnail is the fast, exact visual preview for the gallery. Do
+  // not make the first paint wait for the much larger authenticated original.
   const thumbnail = memory.thumbnail;
   const resizedThumbnail = sharpenThumbnail(memory.thumbnail);
+  if (memory.driveFileId) return Array.from(new Set([thumbnail, resizedThumbnail].filter(Boolean)));
   const candidates = [
     thumbnail,
     resizedThumbnail,
