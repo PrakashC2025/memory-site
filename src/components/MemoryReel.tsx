@@ -1740,6 +1740,29 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     if (!element) return;
     setAudioLoading(true);
     try {
+      // Keep the first play() call inside the user's tap event. Mobile
+      // browsers revoke the user-activation token while an async Drive
+      // download is pending; this is especially visible when the phone is
+      // mirrored to a TV. The authenticated media URL is safe to use as the
+      // immediate native source, while the blob/cache path remains the
+      // fallback for browsers that cannot stream it directly.
+      if (track.source === 'drive' && track.src && !track.src.startsWith('blob:')) {
+        audioPauseGuardRef.current = true;
+        element.pause();
+        if (element.src !== track.src) {
+          element.src = track.src;
+          element.load();
+        }
+        audioPauseGuardRef.current = false;
+        try {
+          await element.play();
+          setAudioPlaying(true);
+          setMusicError('');
+          return;
+        } catch {
+          // Fall through to the downloaded blob/cache source below.
+        }
+      }
       const source = await prepareDriveTrackForPlayback(track, true);
       audioPauseGuardRef.current = true;
       element.pause();
@@ -1949,6 +1972,27 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     if (!element || !source || audioManuallyStoppedRef.current) return false;
     setAudioLoading(true);
     try {
+      // Start Drive playback before awaiting any network work. Calling
+      // play() after prepareDriveTrackForPlayback() loses mobile user
+      // activation and can be blocked when the phone is screen-mirroring.
+      if (fromUserGesture && sourceTrack.source === 'drive' && !source.startsWith('blob:')) {
+        audioPauseGuardRef.current = true;
+        element.pause();
+        if (element.src !== source) {
+          element.src = source;
+          element.load();
+        }
+        audioPauseGuardRef.current = false;
+        try {
+          await element.play();
+          setAudioPlaying(true);
+          setMusicError('');
+          return true;
+        } catch {
+          // The direct stream may fail on an older browser; use the local
+          // object URL fallback below.
+        }
+      }
       const playableSource = await prepareDriveTrackForPlayback(sourceTrack, fromUserGesture);
       if (element.src !== playableSource) {
         audioPauseGuardRef.current = true;
@@ -2062,6 +2106,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           ref={audioPlayerRef}
           className={`memory-reel-audio-player${musicOpen && musicQueue.length ? ' is-visible' : ''}`}
           controls
+          playsInline
           preload="metadata"
           aria-label="Story music player"
           onLoadStart={() => setAudioLoading(true)}
