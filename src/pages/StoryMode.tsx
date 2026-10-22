@@ -315,8 +315,8 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
             </label>
           )}
           <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-center">
-            <button onClick={() => localInputRef.current?.click()} className="neon-button px-4 py-2 text-sm font-black">Use Local Photos</button>
-            <button onClick={onExit} className="neon-button px-4 py-2 text-sm font-black">Back to Memoriya</button>
+            <button type="button" onClick={() => localInputRef.current?.click()} className="neon-button px-4 py-2 text-sm font-black">Use Local Photos</button>
+            <button type="button" onClick={onExit} className="neon-button px-4 py-2 text-sm font-black">Back to Memoriya</button>
           </div>
         </section>
       </div>

@@ -98,6 +98,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">
             <button
+              type="button"
               onClick={() => onNavigate('story')}
               className="flex items-center justify-center gap-2 rounded-lg px-5 py-3 text-sm font-black text-black"
               style={{ background: `linear-gradient(135deg, ${config.primary}, ${config.secondary})`, boxShadow: `0 0 28px ${config.glow}` }}
@@ -105,7 +106,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
               <Film size={17} />
               Play Story
             </button>
-            <button onClick={() => onNavigate('timeline')} className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-bold">
+            <button type="button" onClick={() => onNavigate('timeline')} className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-bold">
               <CalendarDays size={17} />
               View Timeline
             </button>

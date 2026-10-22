@@ -63,7 +63,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
         style={{ background: `linear-gradient(90deg, transparent, ${config.primary}99, ${config.secondary}99, transparent)` }}
         aria-hidden="true"
       />
-      <motion.button onClick={() => handleNavigate('memoriya')} className="navbar-brand" whileHover={{ scale: 1.01 }}>
+      <motion.button type="button" onClick={() => handleNavigate('memoriya')} className="navbar-brand" whileHover={{ scale: 1.01 }} aria-label="Open Memoriya home">
         <span
           className="flex h-10 w-10 items-center justify-center rounded-xl border"
           style={{
@@ -88,12 +88,16 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
           const active = currentPage === id;
           return (
             <button
+              type="button"
               key={id}
               onClick={() => handleNavigate(id)}
               className="navbar-link relative flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-all"
               style={{
                 color: active ? config.primary : 'rgba(255,255,255,0.66)',
               }}
+              title={label}
+              aria-label={label}
+              aria-current={active ? 'page' : undefined}
             >
               {active && (
                 <motion.span
@@ -123,12 +127,15 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
       <div className="navbar-actions flex items-center gap-2 md:gap-3">
         <div className="relative">
           <motion.button
+            type="button"
             whileHover={{ scale: 1.06 }}
             whileTap={{ scale: 0.95 }}
             onClick={() => setThemeOpen(v => !v)}
             className="neon-button flex h-10 w-10 items-center justify-center"
             style={{ color: config.primary, borderColor: config.primary + '55' }}
             aria-label="Change theme"
+            aria-expanded={themeOpen}
+            aria-haspopup="menu"
           >
             <Palette size={17} />
           </motion.button>
@@ -143,6 +150,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
               >
                 {(Object.entries(THEMES) as [Theme, typeof THEMES[Theme]][]).map(([key, item]) => (
                   <button
+                    type="button"
                     key={key}
                     onClick={() => {
                       setTheme(key);
@@ -173,6 +181,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
         </div>
 
         <motion.button
+          type="button"
           whileHover={{ scale: 1.03 }}
           whileTap={{ scale: 0.96 }}
           onClick={logout}
@@ -183,10 +192,13 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
         </motion.button>
 
         <button
+          type="button"
           className="neon-button flex h-10 w-10 items-center justify-center md:hidden"
           onClick={() => setMenuOpen(v => !v)}
           style={{ color: config.primary, borderColor: config.primary + '44' }}
-          aria-label="Open menu"
+          aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
         >
           {menuOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
@@ -204,6 +216,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
             <div className="flex flex-col gap-1 px-4 py-3">
               {NAV_ITEMS.map(({ id, label, Icon }) => (
                 <button
+                  type="button"
                   key={id}
                   onClick={() => handleNavigate(id)}
                   className="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-sm font-semibold"
@@ -216,7 +229,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentPage, onNavigate }) => {
                   {label}
                 </button>
               ))}
-              <button onClick={logout} className="flex items-center gap-3 px-4 py-3 text-left text-sm text-white/50">
+              <button type="button" onClick={logout} className="flex items-center gap-3 px-4 py-3 text-left text-sm text-white/50">
                 <LogOut size={17} />
                 Sign Out
               </button>

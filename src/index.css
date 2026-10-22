@@ -2882,6 +2882,11 @@ input[type="number"]::-webkit-inner-spin-button {
    opacity only so it stays smooth on TV browsers. */
 .memory-reel-stage .ambient-effects {
   --audio-level: 0;
+  --bass-level: 0;
+  --mid-level: 0;
+  --treble-level: 0;
+  --beat-pulse: 0;
+  --wave-shift: 0px;
   --effect-opacity: 0.34;
   --glow-scale: 0.92;
   --particle-opacity: 0.28;
@@ -2895,6 +2900,186 @@ input[type="number"]::-webkit-inner-spin-button {
   pointer-events: none;
   opacity: var(--effect-opacity);
   transition: opacity 500ms ease;
+}
+
+.memory-reel-stage .ambient-effects.effect-off {
+  display: none;
+  opacity: 0 !important;
+  visibility: hidden;
+}
+
+.memory-reel-stage .ambient-effects.effect-waves .ambient-particle,
+.memory-reel-stage .ambient-effects.effect-waves .ambient-butterfly,
+.memory-reel-stage .ambient-effects.effect-neon .ambient-butterfly,
+.memory-reel-stage .ambient-effects.effect-cinematic .ambient-butterfly,
+.memory-reel-stage .ambient-effects.effect-birthday .ambient-butterfly,
+.memory-reel-stage .ambient-effects.effect-stardust .ambient-butterfly {
+  opacity: 0;
+}
+
+.memory-reel-stage .ambient-effects.effect-birthday .ambient-particle,
+.memory-reel-stage .ambient-effects.effect-neon .ambient-particle {
+  opacity: calc(var(--particle-opacity) * 0.6);
+}
+
+.memory-reel-stage .effect-wave,
+.memory-reel-stage .effect-rings,
+.memory-reel-stage .effect-confetti,
+.memory-reel-stage .effect-film-grain {
+  position: absolute;
+  pointer-events: none;
+}
+
+.memory-reel-stage .effect-wave {
+  right: 8%;
+  bottom: 7%;
+  left: 8%;
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  gap: clamp(3px, 0.45vw, 8px);
+  height: clamp(50px, 10vh, 110px);
+  opacity: 0;
+  transform: translate3d(var(--wave-shift), 0, 0);
+  transition: opacity 600ms ease;
+}
+
+.memory-reel-stage .effect-wave-bar {
+  display: block;
+  width: clamp(3px, 0.42vw, 7px);
+  height: calc(12px + var(--mid-level) * 34px + var(--bass-level) * 48px * var(--bar-weight));
+  min-height: 8px;
+  border-radius: 999px 999px 3px 3px;
+  background: linear-gradient(to top, rgba(255, 190, 111, 0.22), rgba(155, 255, 236, 0.88));
+  box-shadow: 0 0 calc(8px + var(--beat-pulse) * 20px) rgba(155, 255, 236, 0.46);
+  transform-origin: bottom;
+  transform: scaleY(calc(0.76 + var(--treble-level) * 0.38 + var(--beat-pulse) * 0.25));
+  transition: height 110ms ease-out, transform 160ms ease-out, box-shadow 180ms ease;
+}
+
+.memory-reel-stage .effect-wave-bar:nth-child(3n) { --bar-weight: 1.15; }
+.memory-reel-stage .effect-wave-bar:nth-child(3n + 1) { --bar-weight: 0.78; }
+.memory-reel-stage .effect-wave-bar:nth-child(3n + 2) { --bar-weight: 0.96; }
+.memory-reel-stage .ambient-effects.effect-waves .effect-wave,
+.memory-reel-stage .ambient-effects.effect-neon .effect-wave {
+  opacity: calc(0.22 + var(--audio-level) * 0.72 + var(--beat-pulse) * 0.18);
+}
+
+.memory-reel-stage .ambient-effects.effect-neon .effect-wave-bar {
+  background: linear-gradient(to top, rgba(113, 92, 255, 0.26), rgba(91, 245, 255, 0.95) 55%, rgba(255, 111, 216, 0.92));
+}
+
+.memory-reel-stage .effect-rings {
+  top: 50%;
+  left: 50%;
+  width: min(42vw, 520px);
+  aspect-ratio: 1;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(calc(0.78 + var(--bass-level) * 0.08 + var(--beat-pulse) * 0.18));
+  transition: opacity 500ms ease, transform 160ms ease-out;
+}
+
+.memory-reel-stage .effect-ring {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(155, 255, 236, 0.24);
+  border-radius: 50%;
+  box-shadow: 0 0 30px rgba(155, 255, 236, 0.08), inset 0 0 30px rgba(255, 208, 138, 0.04);
+  transform: scale(calc(0.52 + var(--mid-level) * 0.08 + var(--beat-pulse) * 0.2));
+}
+
+.memory-reel-stage .effect-ring-2 { transform: scale(calc(0.72 + var(--bass-level) * 0.12 + var(--beat-pulse) * 0.26)); opacity: 0.58; }
+.memory-reel-stage .effect-ring-3 { transform: scale(calc(0.91 + var(--treble-level) * 0.06 + var(--beat-pulse) * 0.3)); opacity: 0.32; }
+.memory-reel-stage .ambient-effects.effect-waves .effect-rings,
+.memory-reel-stage .ambient-effects.effect-cinematic .effect-rings,
+.memory-reel-stage .ambient-effects.effect-neon .effect-rings {
+  opacity: calc(0.18 + var(--audio-level) * 0.32 + var(--beat-pulse) * 0.34);
+}
+
+.memory-reel-stage .effect-confetti {
+  inset: -12% 0 0;
+  opacity: 0;
+  transition: opacity 450ms ease;
+}
+
+.memory-reel-stage .effect-confetti-piece {
+  position: absolute;
+  top: -12%;
+  left: calc(4% + (var(--confetti-index) * 7%));
+  width: 7px;
+  height: 17px;
+  border-radius: 3px;
+  background: var(--confetti-color);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--confetti-color) 60%, transparent);
+  opacity: calc(0.34 + var(--beat-pulse) * 0.66);
+  transform: rotate(var(--confetti-rotate));
+  animation: memory-reel-confetti-fall var(--confetti-speed) linear infinite;
+  animation-delay: var(--confetti-delay);
+}
+
+.memory-reel-stage .effect-confetti-piece:nth-child(1) { --confetti-index: 1; --confetti-color: #ffd08a; --confetti-rotate: 18deg; --confetti-speed: 7s; --confetti-delay: -1s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(2) { --confetti-index: 2; --confetti-color: #ff8db5; --confetti-rotate: -22deg; --confetti-speed: 8.5s; --confetti-delay: -4s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(3) { --confetti-index: 3; --confetti-color: #9bffec; --confetti-rotate: 42deg; --confetti-speed: 6.6s; --confetti-delay: -2s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(4) { --confetti-index: 4; --confetti-color: #a9a0ff; --confetti-rotate: -34deg; --confetti-speed: 9.2s; --confetti-delay: -6s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(5) { --confetti-index: 5; --confetti-color: #fff4c1; --confetti-rotate: 66deg; --confetti-speed: 7.8s; --confetti-delay: -3s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(6) { --confetti-index: 6; --confetti-color: #ffb3f2; --confetti-rotate: -12deg; --confetti-speed: 10s; --confetti-delay: -5s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(7) { --confetti-index: 7; --confetti-color: #8fc7ff; --confetti-rotate: 27deg; --confetti-speed: 8.2s; --confetti-delay: -7s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(8) { --confetti-index: 8; --confetti-color: #ffd08a; --confetti-rotate: -48deg; --confetti-speed: 6.9s; --confetti-delay: -2.7s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(9) { --confetti-index: 9; --confetti-color: #9bffec; --confetti-rotate: 14deg; --confetti-speed: 9.6s; --confetti-delay: -4.8s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(10) { --confetti-index: 10; --confetti-color: #ff8db5; --confetti-rotate: 52deg; --confetti-speed: 7.4s; --confetti-delay: -1.8s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(11) { --confetti-index: 11; --confetti-color: #fff4c1; --confetti-rotate: -30deg; --confetti-speed: 8.8s; --confetti-delay: -6.8s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(12) { --confetti-index: 12; --confetti-color: #a9a0ff; --confetti-rotate: 38deg; --confetti-speed: 10.4s; --confetti-delay: -3.6s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(13) { --confetti-index: 13; --confetti-color: #8fc7ff; --confetti-rotate: -58deg; --confetti-speed: 7.1s; --confetti-delay: -5.6s; }
+.memory-reel-stage .effect-confetti-piece:nth-child(14) { --confetti-index: 14; --confetti-color: #ffd08a; --confetti-rotate: 8deg; --confetti-speed: 9.9s; --confetti-delay: -8s; }
+.memory-reel-stage .ambient-effects.effect-birthday .effect-confetti { opacity: calc(0.4 + var(--audio-level) * 0.3 + var(--beat-pulse) * 0.3); }
+
+.memory-reel-stage .effect-film-grain {
+  inset: 0;
+  opacity: 0;
+  background-image: radial-gradient(rgba(255,255,255,0.18) 0.7px, transparent 0.8px), linear-gradient(115deg, transparent 0 44%, rgba(255,208,138,0.08) 50%, transparent 56%);
+  background-size: 5px 5px, 180% 100%;
+  mix-blend-mode: screen;
+  animation: memory-reel-film-sweep 14s ease-in-out infinite;
+  transition: opacity 500ms ease;
+}
+
+.memory-reel-stage .ambient-effects.effect-cinematic .effect-film-grain {
+  opacity: calc(0.08 + var(--beat-pulse) * 0.16);
+}
+
+.memory-reel-stage .ambient-effects.effect-cinematic::before,
+.memory-reel-stage .ambient-effects.effect-cinematic::after {
+  background: radial-gradient(circle, rgba(255, 208, 138, calc(0.12 + var(--beat-pulse) * 0.16)), transparent 68%);
+}
+
+.memory-reel-stage .ambient-effects.effect-stardust .ambient-particle {
+  width: 6px;
+  height: 6px;
+  background: #e8e4ff;
+  box-shadow: 0 0 calc(12px + var(--beat-pulse) * 14px) 3px rgba(169, 160, 255, 0.65);
+}
+
+.memory-reel-stage .ambient-effects.effect-neon::before,
+.memory-reel-stage .ambient-effects.effect-neon::after {
+  background: radial-gradient(circle, rgba(106, 129, 255, calc(0.16 + var(--beat-pulse) * 0.22)), transparent 68%);
+}
+
+@keyframes memory-reel-confetti-fall {
+  0% { transform: translate3d(0, -10%, 0) rotate(var(--confetti-rotate)); }
+  50% { transform: translate3d(calc(var(--wave-shift) * 1.6), 56vh, 0) rotate(calc(var(--confetti-rotate) + 180deg)); }
+  100% { transform: translate3d(calc(var(--wave-shift) * -1.2), 116vh, 0) rotate(calc(var(--confetti-rotate) + 360deg)); }
+}
+
+@keyframes memory-reel-film-sweep {
+  0%, 100% { background-position: 0 0, -20% 0; }
+  50% { background-position: 22px -16px, 120% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-reel-stage .effect-confetti-piece,
+  .memory-reel-stage .effect-film-grain,
+  .memory-reel-stage .ambient-effects .ambient-particle,
+  .memory-reel-stage .ambient-effects .ambient-butterfly { animation: none !important; }
 }
 
 .memory-reel-stage .ambient-effects::before,
@@ -8465,6 +8650,55 @@ textarea:focus-visible {
   outline-offset: 2px;
 }
 
+/* Keep the shared chrome readable and touch-friendly at every viewport size. */
+.memoriya-navbar button,
+.memoriya-navbar a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.memoriya-navbar .navbar-link[aria-current="page"] {
+  color: var(--memory-ink) !important;
+}
+
+.memoriya-navbar .navbar-link:focus-visible,
+.memoriya-navbar .navbar-brand:focus-visible {
+  outline-color: var(--memory-champagne);
+}
+
+@media (max-width: 1160px) and (min-width: 821px) {
+  .memoriya-navbar .navbar-link {
+    min-width: 2.95rem;
+  }
+
+  .memoriya-navbar .navbar-link::after {
+    content: attr(aria-label);
+    position: absolute;
+    top: calc(100% + 0.45rem);
+    left: 50%;
+    z-index: 60;
+    max-width: 12rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid rgba(248, 244, 238, 0.14);
+    border-radius: 0.55rem;
+    background: rgba(8, 10, 16, 0.96);
+    color: var(--memory-ink);
+    font-size: 0.66rem;
+    font-weight: 800;
+    line-height: 1.2;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, -0.25rem);
+    transition: opacity 140ms ease, transform 140ms ease;
+    white-space: nowrap;
+  }
+
+  .memoriya-navbar .navbar-link:hover::after,
+  .memoriya-navbar .navbar-link:focus-visible::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
 /* Gradient headline identities — each page picks one */
 .gt-amber {
   color: #ffd08a;
@@ -9664,6 +9898,54 @@ textarea:focus-visible {
   -webkit-line-clamp: 2;
 }
 
+.memory-reel-effects-note {
+  margin: -0.2rem 0 0;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.memory-reel-effect-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.memory-reel-effect-grid button {
+  display: grid;
+  min-height: 70px;
+  gap: 0.28rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+.memory-reel-effect-grid button:hover,
+.memory-reel-effect-grid button:focus-visible,
+.memory-reel-effect-grid button.is-active {
+  border-color: rgba(155, 255, 236, 0.72);
+  background: linear-gradient(135deg, rgba(155, 255, 236, 0.14), rgba(255, 208, 138, 0.1));
+  box-shadow: 0 0 24px rgba(155, 255, 236, 0.1);
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.memory-reel-effect-grid strong {
+  font-size: 0.76rem;
+  line-height: 1.25;
+}
+
+.memory-reel-effect-grid small {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.66rem;
+  line-height: 1.35;
+}
+
 /* Keep the open picker above the cinema surface. On wide screens it becomes a
    real side panel so it never covers the story controls or hero image. */
 .memory-reel-shell.has-panel-open:not(.is-fullscreen) .memory-reel-music-panel,
@@ -9710,6 +9992,10 @@ textarea:focus-visible {
     width: auto;
     max-height: calc(100vh - 180px);
   }
+}
+
+@media (max-width: 520px) {
+  .memory-reel-effect-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (min-width: 820px) {

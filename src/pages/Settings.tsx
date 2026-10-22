@@ -107,6 +107,7 @@ const Settings: React.FC = () => {
               <p className="mt-1 text-xs text-white/50">Use the bottom-right player to switch YouTube-backed tracks.</p>
             </div>
             <button
+              type="button"
               onClick={() => setMusicOn(!isMusicOn)}
               className="relative h-7 w-14 rounded-full transition-all"
               style={{ background: isMusicOn ? `linear-gradient(135deg, ${config.primary}, ${config.secondary})` : 'rgba(255,255,255,0.18)' }}
@@ -154,9 +155,11 @@ const Settings: React.FC = () => {
               ['cinemaBars', 'Cinema Bars'],
             ].map(([key, label]) => (
               <button
+                type="button"
                 key={key}
                 onClick={() => toggleSlideshow(key as keyof typeof slideshow)}
                 className="flex items-center justify-between rounded-lg border px-3 py-3 text-left"
+                aria-pressed={Boolean(slideshow[key as keyof typeof slideshow])}
                 style={{ borderColor: config.primary + '24', background: 'rgba(255,255,255,0.045)' }}
               >
                 <span className="text-sm font-bold text-white">{label}</span>
@@ -178,7 +181,7 @@ const Settings: React.FC = () => {
             { key: 'familySpace', label: 'Shared Family Space', desc: 'Invite family members by email', Icon: Users },
             { key: 'friendsCollab', label: 'Friends Collaboration', desc: 'Allow friends to add memories', Icon: Users },
           ].map(item => (
-            <button key={item.label} onClick={() => togglePrivacy(item.key as keyof typeof privacy)} className="flex w-full items-center justify-between gap-4 border-b py-3 text-left last:border-b-0" style={{ borderColor: config.primary + '18' }}>
+            <button type="button" key={item.label} onClick={() => togglePrivacy(item.key as keyof typeof privacy)} className="flex w-full items-center justify-between gap-4 border-b py-3 text-left last:border-b-0" aria-pressed={privacy[item.key as keyof typeof privacy]} style={{ borderColor: config.primary + '18' }}>
               <div className="flex items-start gap-3">
                 <item.Icon size={17} style={{ color: config.primary }} />
                 <div>

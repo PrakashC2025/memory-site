@@ -59,7 +59,7 @@ const Login: React.FC = () => {
   const error = localError || authError;
 
   return (
-    <div className="neon-shell flex min-h-screen w-full items-center justify-center overflow-hidden px-4 py-8">
+    <div className="neon-shell flex min-h-screen w-full items-center justify-center overflow-x-hidden overflow-y-auto px-4 py-8">
       <motion.div
         initial={{ opacity: 0, scale: 0.96, y: 28 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -112,6 +112,7 @@ const Login: React.FC = () => {
               { id: 'create', label: 'Create account' },
             ].map(item => (
               <button
+                type="button"
                 key={item.id}
                 onClick={() => setMode(item.id as AuthMode)}
                 className="rounded-lg px-3 py-2 text-sm font-black"
@@ -148,7 +149,7 @@ const Login: React.FC = () => {
                   placeholder="At least 6 characters"
                   onKeyDown={event => event.key === 'Enter' && submit()}
                 />
-                <button onClick={() => setShowPassword(value => !value)} aria-label="Toggle password visibility">
+                <button type="button" onClick={() => setShowPassword(value => !value)} aria-label="Toggle password visibility">
                   {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
@@ -168,6 +169,7 @@ const Login: React.FC = () => {
             </AnimatePresence>
 
             <button
+              type="button"
               onClick={submit}
               disabled={authLoading}
               className="relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg px-5 py-3.5 text-sm font-black text-black disabled:opacity-60"
@@ -180,7 +182,7 @@ const Login: React.FC = () => {
               {!authLoading && <ArrowRight size={17} />}
             </button>
 
-            <button onClick={googleLogin} disabled={authLoading} className="google-login-button">
+            <button type="button" onClick={googleLogin} disabled={authLoading} className="google-login-button">
               <span>G</span>
               Continue with Google
             </button>
@@ -194,6 +196,7 @@ const Login: React.FC = () => {
             <div className="grid grid-cols-5 gap-2">
               {(Object.entries(THEMES) as [Theme, typeof THEMES[Theme]][]).map(([key, item]) => (
                 <button
+                  type="button"
                   key={key}
                   onClick={() => setTheme(key)}
                   className="h-10 rounded-lg border"

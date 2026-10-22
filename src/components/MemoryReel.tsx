@@ -26,6 +26,15 @@ export type MemoryReelTemplate =
   | 'scrapbook'
   | 'neon-grid';
 
+export type MemoryReelEffect =
+  | 'off'
+  | 'natural'
+  | 'birthday'
+  | 'waves'
+  | 'cinematic'
+  | 'stardust'
+  | 'neon';
+
 export const MEMORY_REEL_TEMPLATES: Array<{ id: MemoryReelTemplate; name: string; description: string }> = [
   { id: 'orbit', name: 'Cinematic Camera Motion', description: 'The original camera-wall journey with depth, movement, and living frames.' },
   { id: 'cinema', name: 'Wide Cinema', description: 'A full-frame director cut with a slow, elegant Ken Burns drift.' },
@@ -37,6 +46,16 @@ export const MEMORY_REEL_TEMPLATES: Array<{ id: MemoryReelTemplate; name: string
   { id: 'dreamscape', name: 'Dreamscape Dissolve', description: 'Soft, slow transitions for intimate and emotional stories.' },
   { id: 'scrapbook', name: 'Editorial Scrapbook', description: 'Layered cards and paper tones inspired by a travel journal.' },
   { id: 'neon-grid', name: 'Neon Memory Gallery', description: 'A vivid midnight gallery with luminous edges and energy.' },
+];
+
+export const MEMORY_REEL_EFFECTS: Array<{ id: MemoryReelEffect; name: string; description: string }> = [
+  { id: 'off', name: 'Off', description: 'Clean template with no extra effects.' },
+  { id: 'natural', name: 'Natural glow', description: 'Soft fireflies, breath, and gentle beat response.' },
+  { id: 'birthday', name: 'Birthday sparkle', description: 'Warm confetti and celebratory light bursts.' },
+  { id: 'waves', name: 'Music waves', description: 'Smooth waveform bars that follow bass and rhythm.' },
+  { id: 'cinematic', name: 'Cinematic film', description: 'Lens bloom, grain, and elegant beat flashes.' },
+  { id: 'stardust', name: 'Stardust', description: 'Slow floating stars with a soft musical pulse.' },
+  { id: 'neon', name: 'Neon pulse', description: 'Modern spectrum glow for energetic tracks.' },
 ];
 
 interface ReelSource {
@@ -74,6 +93,7 @@ interface MemoryReelOptions {
   title?: MemoryReelTitle;
   audio?: string;
   template?: MemoryReelTemplate;
+  effect?: MemoryReelEffect;
   hold?: number;
   move?: number;
   loop?: boolean;
@@ -181,12 +201,21 @@ export class MemoryReelController {
   private lastPaint = 0;
   private audio?: HTMLAudioElement;
   private audioElement?: HTMLAudioElement;
+  private analysisAudio?: HTMLAudioElement;
   private audioQueue: string[] = [];
   private audioIndex = 0;
   private audioContext?: AudioContext;
   private audioAnalyser?: AnalyserNode;
   private audioSource?: MediaElementAudioSourceNode;
   private audioData?: Uint8Array<ArrayBuffer>;
+  private audioWaveform?: Uint8Array<ArrayBuffer>;
+  private audioAnalysisAttempted = false;
+  private smoothedBass = 0;
+  private smoothedMid = 0;
+  private smoothedTreble = 0;
+  private smoothedLevel = 0;
+  private beatPulse = 0;
+  private previousBass = 0;
   private objectUrls = new Set<string>();
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
@@ -200,12 +229,13 @@ export class MemoryReelController {
       reducedMotion: false,
       legacyTv: false,
       template: 'orbit',
+      effect: 'natural',
       ...options,
     };
     this.world = Object.assign(document.createElement('div'), { className: 'world' });
     this.ambient = Object.assign(document.createElement('div'), { className: 'ambient' });
     this.ambientEffects = Object.assign(document.createElement('div'), {
-      className: 'ambient-effects',
+      className: 'ambient-effects effect-natural',
       ariaHidden: 'true',
     });
     for (let index = 0; index < 6; index += 1) {
@@ -216,6 +246,22 @@ export class MemoryReelController {
     this.ambientEffects.appendChild(Object.assign(document.createElement('span'), {
       className: 'ambient-butterfly',
     }));
+    const wave = Object.assign(document.createElement('div'), { className: 'effect-wave', ariaHidden: 'true' });
+    for (let index = 0; index < 18; index += 1) {
+      wave.appendChild(Object.assign(document.createElement('span'), { className: `effect-wave-bar effect-wave-bar-${index + 1}` }));
+    }
+    this.ambientEffects.appendChild(wave);
+    const rings = Object.assign(document.createElement('div'), { className: 'effect-rings', ariaHidden: 'true' });
+    for (let index = 0; index < 3; index += 1) {
+      rings.appendChild(Object.assign(document.createElement('span'), { className: `effect-ring effect-ring-${index + 1}` }));
+    }
+    this.ambientEffects.appendChild(rings);
+    const confetti = Object.assign(document.createElement('div'), { className: 'effect-confetti', ariaHidden: 'true' });
+    for (let index = 0; index < 14; index += 1) {
+      confetti.appendChild(Object.assign(document.createElement('span'), { className: `effect-confetti-piece effect-confetti-piece-${index + 1}` }));
+    }
+    this.ambientEffects.appendChild(confetti);
+    this.ambientEffects.appendChild(Object.assign(document.createElement('div'), { className: 'effect-film-grain', ariaHidden: 'true' }));
     const vignette = Object.assign(document.createElement('div'), { className: 'vignette' });
     this.titleEl = Object.assign(document.createElement('div'), { className: 'title' });
     this.progressEl = Object.assign(document.createElement('div'), { className: 'prog' });
@@ -226,6 +272,7 @@ export class MemoryReelController {
     this.el.innerHTML = '';
     this.el.append(this.world, this.ambient, this.ambientEffects, vignette, this.titleEl, this.progressEl, tap, this.poster);
     this.applyTemplateClass();
+    this.setEffect(this.options.effect || 'natural');
     if (this.options.audio) this.setAudio(this.options.audio);
 
     this.resizeObserver = typeof ResizeObserver !== 'undefined'
@@ -608,6 +655,26 @@ export class MemoryReelController {
     this.el.classList.add(`memory-reel-template-${this.options.template || 'orbit'}`);
   }
 
+  setEffect(effect: MemoryReelEffect) {
+    this.options.effect = effect;
+    MEMORY_REEL_EFFECTS.forEach(item => this.ambientEffects.classList.remove(`effect-${item.id}`));
+    this.ambientEffects.classList.add(`effect-${effect}`);
+  }
+
+  setAudioAnalysisElement(element: HTMLAudioElement | null) {
+    if (this.analysisAudio === element) return;
+    this.disconnectAudioAnalysis();
+    this.analysisAudio = element || undefined;
+    this.audioAnalysisAttempted = false;
+  }
+
+  async resumeAudioAnalysis() {
+    const analysisAudio = this.analysisAudio || this.audio;
+    if (!analysisAudio) return;
+    if (!this.audioContext) this.connectAudioAnalysis();
+    if (this.audioContext?.state === 'suspended') await this.audioContext.resume();
+  }
+
   private playMutedVideo(video: HTMLVideoElement) {
     video.muted = true;
     video.defaultMuted = true;
@@ -618,29 +685,31 @@ export class MemoryReelController {
   }
 
   private connectAudioAnalysis() {
-    if (!this.audio) return;
+    const sourceAudio = this.analysisAudio || this.audio;
+    if (!sourceAudio || !sourceAudio.src || this.audioSource || this.audioAnalysisAttempted) return;
+    this.audioAnalysisAttempted = true;
     const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioContextConstructor) return;
 
     try {
-      this.audioSource?.disconnect();
-      this.audioAnalyser?.disconnect();
       this.audioContext ||= new AudioContextConstructor();
       const analyser = this.audioContext.createAnalyser();
       analyser.fftSize = 64;
       analyser.smoothingTimeConstant = 0.82;
-      const source = this.audioContext.createMediaElementSource(this.audio);
+      const source = this.audioContext.createMediaElementSource(sourceAudio);
       source.connect(analyser);
       analyser.connect(this.audioContext.destination);
       this.audioSource = source;
       this.audioAnalyser = analyser;
       this.audioData = new Uint8Array(analyser.frequencyBinCount);
+      this.audioWaveform = new Uint8Array(analyser.fftSize);
     } catch {
       // Cross-origin audio may not expose an analyser. Keep normal playback
       // working and let the visualizer use its gentle time-based fallback.
       this.audioSource = undefined;
       this.audioAnalyser = undefined;
       this.audioData = undefined;
+      this.audioWaveform = undefined;
     }
   }
 
@@ -650,20 +719,66 @@ export class MemoryReelController {
     this.audioSource = undefined;
     this.audioAnalyser = undefined;
     this.audioData = undefined;
+    this.audioWaveform = undefined;
+    this.audioAnalysisAttempted = false;
   }
 
-  private readAudioLevel() {
-    // Audio-reactive sampling is surprisingly expensive on Chromium 66 and
-    // older TV WebViews. The music still plays; the TV renderer uses a calm,
-    // fixed camera scale instead of reading the analyser every frame.
-    if (this.options.legacyTv) return 0;
-    if (!this.audio || this.audio.paused) return 0;
-    if (this.audioAnalyser && this.audioData) {
+  private readAudioMetrics(time: number) {
+    const analysisAudio = this.analysisAudio || this.audio;
+    if (analysisAudio && analysisAudio.src && !this.audioSource) this.connectAudioAnalysis();
+    const playing = Boolean(analysisAudio && !analysisAudio.paused);
+    if (playing && this.audioAnalyser && this.audioData) {
       this.audioAnalyser.getByteFrequencyData(this.audioData);
-      const average = this.audioData.reduce((sum, value) => sum + value, 0) / this.audioData.length / 255;
-      return Math.min(1, average * 1.8);
+      if (this.audioWaveform) this.audioAnalyser.getByteTimeDomainData(this.audioWaveform);
+      const size = this.audioData.length;
+      const averageBand = (start: number, end: number) => {
+        const from = Math.max(0, Math.floor(size * start));
+        const to = Math.max(from + 1, Math.floor(size * end));
+        let total = 0;
+        for (let index = from; index < Math.min(size, to); index += 1) total += this.audioData![index] / 255;
+        return total / Math.max(1, to - from);
+      };
+      const bass = averageBand(0, 0.16);
+      const mid = averageBand(0.16, 0.58);
+      const treble = averageBand(0.58, 1);
+      const rawLevel = bass * 0.52 + mid * 0.32 + treble * 0.16;
+      this.smoothedBass += (bass - this.smoothedBass) * 0.18;
+      this.smoothedMid += (mid - this.smoothedMid) * 0.14;
+      this.smoothedTreble += (treble - this.smoothedTreble) * 0.14;
+      this.smoothedLevel += (rawLevel - this.smoothedLevel) * 0.16;
+      const onset = Math.max(0, bass - this.previousBass);
+      this.previousBass = bass;
+      if (onset > 0.055 && bass > 0.22) this.beatPulse = Math.min(1, this.beatPulse + onset * 4.6 + bass * 0.16);
+      this.beatPulse *= 0.84;
+    } else {
+      const fallbackClock = analysisAudio?.currentTime || time;
+      const fallback = playing
+        ? this.options.legacyTv
+          ? 0.12 + Math.abs(Math.sin(time * 3.2)) * 0.16
+          : 0.05 + Math.abs(Math.sin(fallbackClock * 5.2)) * 0.08
+        : 0;
+      this.smoothedLevel += (fallback - this.smoothedLevel) * 0.08;
+      this.smoothedBass += (fallback * 1.1 - this.smoothedBass) * 0.08;
+      this.smoothedMid += (fallback * 0.8 - this.smoothedMid) * 0.08;
+      this.smoothedTreble += (fallback * 0.65 - this.smoothedTreble) * 0.08;
+      this.beatPulse = Math.max(this.beatPulse, playing ? Math.pow(Math.max(0, Math.sin(fallbackClock * 5.2)), 8) * 0.24 : 0);
+      this.beatPulse *= 0.86;
+      this.previousBass *= 0.9;
     }
-    return 0.05 + Math.abs(Math.sin(this.audio.currentTime * 5.2)) * 0.08;
+    if (!playing) {
+      this.smoothedLevel *= 0.9;
+      this.smoothedBass *= 0.9;
+      this.smoothedMid *= 0.9;
+      this.smoothedTreble *= 0.9;
+      this.beatPulse *= 0.82;
+    }
+    return {
+      level: clamp(this.smoothedLevel * 1.8, 0, 1),
+      bass: clamp(this.smoothedBass * 1.65, 0, 1),
+      mid: clamp(this.smoothedMid * 1.55, 0, 1),
+      treble: clamp(this.smoothedTreble * 1.8, 0, 1),
+      beat: clamp(this.beatPulse, 0, 1),
+    };
   }
 
   play() {
@@ -861,6 +976,7 @@ export class MemoryReelController {
     void this.audioContext?.close().catch(() => undefined);
     this.audioContext = undefined;
     this.audio = undefined;
+    this.analysisAudio = undefined;
     this.world.innerHTML = '';
     this.cards = [];
     this.revokeObjectUrls();
@@ -889,15 +1005,19 @@ export class MemoryReelController {
     const { move } = this.options;
     const count = this.cards.length;
     if (!count) return;
-    const audioLevel = this.readAudioLevel();
+    const audioMetrics = this.readAudioMetrics(time);
+    const audioLevel = audioMetrics.level;
     const audioScale = 1 + audioLevel * 0.035;
     if (!this.options.legacyTv) this.ambient.style.opacity = (0.68 + audioLevel * 0.16).toFixed(3);
-    // Keep the empty space alive with a gentle music pulse. Legacy TVs skip
-    // analyser reads, so they use a deterministic fallback tied to story time.
-    const effectLevel = this.options.legacyTv && !this.paused
-      ? 0.12 + Math.abs(Math.sin(time * 3.2)) * 0.16
-      : audioLevel;
+    // Keep the empty space alive with a gentle music pulse. Beat and frequency
+    // bands are smoothed so visuals breathe with the track instead of twitching.
+    const effectLevel = audioLevel;
     this.ambientEffects.style.setProperty('--audio-level', effectLevel.toFixed(3));
+    this.ambientEffects.style.setProperty('--bass-level', audioMetrics.bass.toFixed(3));
+    this.ambientEffects.style.setProperty('--mid-level', audioMetrics.mid.toFixed(3));
+    this.ambientEffects.style.setProperty('--treble-level', audioMetrics.treble.toFixed(3));
+    this.ambientEffects.style.setProperty('--beat-pulse', audioMetrics.beat.toFixed(3));
+    this.ambientEffects.style.setProperty('--wave-shift', `${(audioMetrics.bass * 18 + audioMetrics.mid * 8).toFixed(2)}px`);
     this.ambientEffects.style.setProperty('--effect-opacity', (0.34 + effectLevel * 0.42).toFixed(3));
     this.ambientEffects.style.setProperty('--glow-scale', (0.92 + effectLevel * 0.48).toFixed(3));
     this.ambientEffects.style.setProperty('--particle-opacity', (0.28 + effectLevel * 0.72).toFixed(3));
@@ -1129,6 +1249,7 @@ const STORY_MUSIC_STORAGE_KEY = 'memoriya-story-music-v1';
 // Older saved choices are intentionally migrated away once so Story Mode
 // opens with the requested camera journey on every device.
 const STORY_TEMPLATE_STORAGE_KEY = 'memoriya-story-template-v3';
+const STORY_EFFECT_STORAGE_KEY = 'memoriya-story-effect-v1';
 
 interface StoredStoryMusic {
   driveSongs: DriveAudioFile[];
@@ -1156,6 +1277,15 @@ const writeStoredStoryMusic = (value: StoredStoryMusic) => {
     window.localStorage.setItem(STORY_MUSIC_STORAGE_KEY, JSON.stringify(value));
   } catch {
     // Local storage is optional; the current Story Mode session still works.
+  }
+};
+
+const readStoredStoryEffect = (fallback: MemoryReelEffect): MemoryReelEffect => {
+  try {
+    const stored = window.localStorage.getItem(STORY_EFFECT_STORAGE_KEY) as MemoryReelEffect | null;
+    return stored && MEMORY_REEL_EFFECTS.some(item => item.id === stored) ? stored : fallback;
+  } catch {
+    return fallback;
   }
 };
 
@@ -1188,6 +1318,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const stageRef = useRef<HTMLDivElement | null>(null);
   const musicPanelRef = useRef<HTMLDivElement | null>(null);
   const templatePanelRef = useRef<HTMLDivElement | null>(null);
+  const effectsPanelRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<MemoryReelController | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const audioObjectUrlsRef = useRef<string[]>([]);
@@ -1204,7 +1335,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [activeTitle, setActiveTitle] = useState<MemoryReelTitle | undefined>(title);
   const [musicOpen, setMusicOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
+  const [effectsOpen, setEffectsOpen] = useState(false);
   const [template, setTemplate] = useState<MemoryReelTemplate>(() => readStoredStoryTemplate(initialTemplate));
+  const [effect, setEffect] = useState<MemoryReelEffect>(() => readStoredStoryEffect('natural'));
   const [musicQuery, setMusicQuery] = useState('');
   const [musicResults, setMusicResults] = useState<OpenSourceMusicTrack[]>([]);
   const [musicLoading, setMusicLoading] = useState(false);
@@ -1293,26 +1426,27 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   }, [driveAccessToken]);
 
   useEffect(() => {
-    if (!musicOpen && !templateOpen) return;
-    const panel = musicOpen ? musicPanelRef.current : templatePanelRef.current;
+    if (!musicOpen && !templateOpen && !effectsOpen) return;
+    const panel = musicOpen ? musicPanelRef.current : effectsOpen ? effectsPanelRef.current : templatePanelRef.current;
     const firstControl = panel?.querySelector<HTMLElement>('button, input, select');
     if (!firstControl) return;
     const focusPanel = () => firstControl.focus();
     if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(focusPanel);
     else window.setTimeout(focusPanel, 0);
-  }, [musicOpen, templateOpen]);
+  }, [effectsOpen, musicOpen, templateOpen]);
 
   useEffect(() => {
-    if (!musicOpen && !templateOpen) return;
+    if (!musicOpen && !templateOpen && !effectsOpen) return;
     const closePanels = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' && event.key !== 'Backspace') return;
       event.preventDefault();
       setMusicOpen(false);
       setTemplateOpen(false);
+      setEffectsOpen(false);
     };
     window.addEventListener('keydown', closePanels);
     return () => window.removeEventListener('keydown', closePanels);
-  }, [musicOpen, templateOpen]);
+  }, [effectsOpen, musicOpen, templateOpen]);
 
   useEffect(() => {
     let active = true;
@@ -1443,6 +1577,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       onAudioStateChange: setAudioPlaying,
     });
     controllerRef.current = controller;
+    controller.setAudioAnalysisElement(audioPlayerRef.current);
     return () => {
       controller.destroy();
       controllerRef.current = null;
@@ -1457,6 +1592,15 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       // Template persistence is optional; the current Story Mode remains active.
     }
   }, [template]);
+
+  useEffect(() => {
+    controllerRef.current?.setEffect(effect);
+    try {
+      window.localStorage.setItem(STORY_EFFECT_STORAGE_KEY, effect);
+    } catch {
+      // Effect persistence is optional; the current story remains active.
+    }
+  }, [effect]);
 
   useEffect(() => {
     const controller = controllerRef.current;
@@ -1739,6 +1883,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const element = audioPlayerRef.current;
     if (!element) return;
     setAudioLoading(true);
+    void controllerRef.current?.resumeAudioAnalysis().catch(() => undefined);
     try {
       // Keep the first play() call inside the user's tap event. Mobile
       // browsers revoke the user-activation token while an async Drive
@@ -1957,12 +2102,22 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const openMusic = () => {
     const next = !musicOpen;
     setMusicOpen(next);
-    if (next) setTemplateOpen(false);
+    if (next) {
+      setTemplateOpen(false);
+      setEffectsOpen(false);
+    }
   };
 
   const openTemplates = () => {
     setTemplateOpen(value => !value);
     setMusicOpen(false);
+    setEffectsOpen(false);
+  };
+
+  const openEffects = () => {
+    setEffectsOpen(value => !value);
+    setMusicOpen(false);
+    setTemplateOpen(false);
   };
 
   const playStoryAudio = async (fromUserGesture = false) => {
@@ -1971,6 +2126,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const source = sourceTrack?.src;
     if (!element || !source || audioManuallyStoppedRef.current) return false;
     setAudioLoading(true);
+    if (fromUserGesture) void controllerRef.current?.resumeAudioAnalysis().catch(() => undefined);
     try {
       // Start Drive playback before awaiting any network work. Calling
       // play() after prepareDriveTrackForPlayback() loses mobile user
@@ -2085,7 +2241,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
   return (
     <div className={`memory-reel-overlay${fullscreen ? ' is-fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label="Memory story reel">
-      <div className={`memory-reel-shell${fullscreen ? ' is-fullscreen' : ''}${musicOpen || templateOpen ? ' has-panel-open' : ''}`}>
+      <div className={`memory-reel-shell${fullscreen ? ' is-fullscreen' : ''}${musicOpen || templateOpen || effectsOpen ? ' has-panel-open' : ''}`}>
         <div ref={stageRef} className="reel memory-reel-stage" />
         <div className="memory-reel-toolbar">
           <button type="button" onClick={toggleStoryPlayback} disabled={loading}>
@@ -2096,6 +2252,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Music2 size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : driveSongs.length ? `(${driveSongs.length} Drive)` : ''}</button>
           <button type="button" className={templateOpen ? 'is-active' : ''} aria-expanded={templateOpen} onClick={openTemplates}><WandSparkles size={16} /> Template</button>
           {musicQueue.length > 0 && <button type="button" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}><Volume2 size={16} /> {audioPlaying ? 'Stop music' : 'Play music'}</button>}
+          <button type="button" className={effectsOpen ? 'is-active' : ''} aria-expanded={effectsOpen} onClick={openEffects}><WandSparkles size={16} /> Effects</button>
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
             <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
           )}
@@ -2106,6 +2263,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           ref={audioPlayerRef}
           className={`memory-reel-audio-player${musicOpen && musicQueue.length ? ' is-visible' : ''}`}
           controls
+          crossOrigin="anonymous"
           playsInline
           preload="metadata"
           aria-label="Story music player"
@@ -2251,6 +2409,43 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
                 >
                   <span className="memory-reel-template-number">{String(index + 1).padStart(2, '0')}</span>
                   <span><strong>{item.name}</strong><small>{item.description}</small></span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {effectsOpen && (
+          <div
+            ref={effectsPanelRef}
+            className="memory-reel-template-panel memory-reel-effects-panel"
+            aria-label="Choose music reactive effects"
+            tabIndex={0}
+            onKeyDown={event => handleStoryPanelKeyDown(event, effectsPanelRef)}
+            onFocusCapture={keepFocusedControlVisible}
+            onWheel={stopPanelScrollPropagation}
+            onTouchMove={stopPanelScrollPropagation}
+          >
+            <div className="memory-reel-template-heading">
+              <div><WandSparkles size={16} /><strong>Music-reactive effects</strong></div>
+              <div className="memory-reel-template-heading-actions">
+                <span>{MEMORY_REEL_EFFECTS.find(item => item.id === effect)?.name}</span>
+                <button type="button" className="memory-reel-panel-close" onClick={() => setEffectsOpen(false)} aria-label="Close effects panel">
+                  <X size={17} />
+                </button>
+              </div>
+            </div>
+            <p className="memory-reel-effects-note">Effects follow the real music spectrum with a soft response. Choose Off for a clean, still overlay.</p>
+            <div className="memory-reel-effect-grid">
+              {MEMORY_REEL_EFFECTS.map(item => (
+                <button
+                  type="button"
+                  key={item.id}
+                  className={effect === item.id ? 'is-active' : ''}
+                  onClick={() => setEffect(item.id)}
+                  aria-pressed={effect === item.id}
+                >
+                  <strong>{item.name}</strong>
+                  <small>{item.description}</small>
                 </button>
               ))}
             </div>

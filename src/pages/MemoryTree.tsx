@@ -1001,10 +1001,10 @@ const MemoryTree: React.FC = () => {
         </div>
 
         <div className="memory-mobile-controls">
-          <button onClick={() => setZoom(value => clamp(value - 0.08, 0.62, 1.2))}><Minus size={16} /></button>
-          <button onClick={() => journey ? setViewerAutoplay(value => !value) : startCinematicJourney()}>{journey ? <Pause size={16} /> : <Play size={16} />}</button>
-          <button onClick={() => setZoom(value => clamp(value + 0.08, 0.62, 1.2))}><Plus size={16} /></button>
-          <button onClick={resetView}><RefreshCcw size={16} /></button>
+          <button type="button" onClick={() => setZoom(value => clamp(value - 0.08, 0.62, 1.2))} aria-label="Zoom out" title="Zoom out"><Minus size={16} /></button>
+          <button type="button" onClick={() => journey ? setViewerAutoplay(value => !value) : startCinematicJourney()} aria-label={journey ? 'Pause memory journey' : 'Play memory journey'} title={journey ? 'Pause journey' : 'Play journey'}>{journey ? <Pause size={16} /> : <Play size={16} />}</button>
+          <button type="button" onClick={() => setZoom(value => clamp(value + 0.08, 0.62, 1.2))} aria-label="Zoom in" title="Zoom in"><Plus size={16} /></button>
+          <button type="button" onClick={resetView} aria-label="Reset tree view" title="Reset view"><RefreshCcw size={16} /></button>
         </div>
       </section>
 
