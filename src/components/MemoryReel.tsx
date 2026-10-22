@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, WandSparkles, X } from 'lucide-react';
+import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, VolumeX, WandSparkles, X } from 'lucide-react';
 import { isVisualMemory, type Memory } from '../data/memories';
 import { googleDriveService, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
 import { saveDriveAccessToken } from '../services/driveLibrary';
@@ -121,6 +121,16 @@ interface ReelCard {
   video?: HTMLVideoElement;
 }
 
+interface DustParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  alpha: number;
+  phase: number;
+}
+
 const getMediaFrameSize = (aspect: number) => {
   // Fit the complete source inside a generous frame without forcing every
   // portrait into a landscape card. The frame is then scaled by the camera
@@ -183,6 +193,11 @@ export class MemoryReelController {
   private world: HTMLDivElement;
   private ambient: HTMLDivElement;
   private ambientEffects: HTMLDivElement;
+  private dustCanvas: HTMLCanvasElement;
+  private dustContext?: CanvasRenderingContext2D;
+  private dustParticles: DustParticle[] = [];
+  private dustDpr = 1;
+  private dustLastPaint = 0;
   private ambientSource = '';
   private titleEl: HTMLDivElement;
   private progressEl: HTMLDivElement;
@@ -216,6 +231,18 @@ export class MemoryReelController {
   private smoothedLevel = 0;
   private beatPulse = 0;
   private previousBass = 0;
+  private bassHistory: Array<{ time: number; value: number }> = [];
+  private lastBeatAt = -Infinity;
+  private beatCount = 0;
+  private lastRenderedShot = 0;
+  private beatFrontIndex = -1;
+  private beatFrontStarted = -Infinity;
+  private parallaxX = 0;
+  private parallaxY = 0;
+  private pointerHandler?: (event: PointerEvent) => void;
+  private orientationHandler?: (event: DeviceOrientationEvent) => void;
+  private visibilityHandler?: () => void;
+  private wasVisiblePlaying = false;
   private objectUrls = new Set<string>();
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
@@ -234,6 +261,11 @@ export class MemoryReelController {
     };
     this.world = Object.assign(document.createElement('div'), { className: 'world' });
     this.ambient = Object.assign(document.createElement('div'), { className: 'ambient' });
+    this.dustCanvas = Object.assign(document.createElement('canvas'), {
+      className: 'memory-reel-dust-canvas',
+      ariaHidden: 'true',
+    });
+    this.dustContext = this.dustCanvas.getContext('2d', { alpha: true }) || undefined;
     this.ambientEffects = Object.assign(document.createElement('div'), {
       className: 'ambient-effects effect-natural',
       ariaHidden: 'true',
@@ -270,10 +302,34 @@ export class MemoryReelController {
     tap.onclick = () => this.paused ? this.play() : this.pause();
     this.poster.onclick = () => this.play();
     this.el.innerHTML = '';
-    this.el.append(this.world, this.ambient, this.ambientEffects, vignette, this.titleEl, this.progressEl, tap, this.poster);
+    this.el.append(this.world, this.ambient, this.dustCanvas, this.ambientEffects, vignette, this.titleEl, this.progressEl, tap, this.poster);
     this.applyTemplateClass();
     this.setEffect(this.options.effect || 'natural');
     if (this.options.audio) this.setAudio(this.options.audio);
+
+    this.pointerHandler = event => {
+      if (this.options.reducedMotion || this.options.legacyTv) return;
+      const rect = this.el.getBoundingClientRect();
+      this.parallaxX = clamp((event.clientX - rect.left) / Math.max(1, rect.width) * 2 - 1, -1, 1);
+      this.parallaxY = clamp((event.clientY - rect.top) / Math.max(1, rect.height) * 2 - 1, -1, 1);
+    };
+    this.el.addEventListener('pointermove', this.pointerHandler, { passive: true });
+    this.orientationHandler = event => {
+      if (this.options.reducedMotion || this.options.legacyTv) return;
+      this.parallaxX = clamp((event.gamma || 0) / 32, -1, 1);
+      this.parallaxY = clamp((event.beta || 0) / 42, -1, 1);
+    };
+    window.addEventListener('deviceorientation', this.orientationHandler, { passive: true });
+    this.visibilityHandler = () => {
+      if (document.hidden) {
+        this.wasVisiblePlaying = !this.paused;
+        this.pause();
+      } else if (this.wasVisiblePlaying && !this.destroyed) {
+        this.wasVisiblePlaying = false;
+        this.play();
+      }
+    };
+    document.addEventListener('visibilitychange', this.visibilityHandler);
 
     this.resizeObserver = typeof ResizeObserver !== 'undefined'
       ? new ResizeObserver(() => this.resize())
@@ -375,7 +431,7 @@ export class MemoryReelController {
       // Keep cards on one plane. A large depth spread makes a nearby card
       // grow over the focused card and hide part of it.
       const z = 0;
-      const rot = (random() - 0.5) * 20;
+      const rot = (random() - 0.5) * 24;
       card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
       card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
       return { card, x, y, z, rot, width, height, video: media.video } satisfies ReelCard;
@@ -642,6 +698,28 @@ export class MemoryReelController {
 
   private resize() {
     this.scale = this.el.clientHeight > 0 ? this.el.clientHeight / 720 : 1;
+    const rect = this.el.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
+    this.dustDpr = Math.min(1.5, window.devicePixelRatio || 1);
+    this.dustCanvas.width = Math.round(width * this.dustDpr);
+    this.dustCanvas.height = Math.round(height * this.dustDpr);
+    this.dustCanvas.style.width = `${width}px`;
+    this.dustCanvas.style.height = `${height}px`;
+    if (this.dustContext) this.dustContext.setTransform(this.dustDpr, 0, 0, this.dustDpr, 0, 0);
+    const particleCount = width < 640 ? 60 : Math.min(96, Math.max(60, Math.round(width / 12)));
+    while (this.dustParticles.length < particleCount) {
+      this.dustParticles.push({
+        x: Math.random() * width,
+        y: Math.random() * height,
+        vx: (Math.random() - 0.5) * 0.08,
+        vy: -0.05 - Math.random() * 0.12,
+        radius: 1 + Math.random() * 2.2,
+        alpha: 0.18 + Math.random() * 0.46,
+        phase: Math.random() * Math.PI * 2,
+      });
+    }
+    if (this.dustParticles.length > particleCount) this.dustParticles.length = particleCount;
   }
 
   setTemplate(template: MemoryReelTemplate) {
@@ -694,7 +772,7 @@ export class MemoryReelController {
     try {
       this.audioContext ||= new AudioContextConstructor();
       const analyser = this.audioContext.createAnalyser();
-      analyser.fftSize = 64;
+      analyser.fftSize = 512;
       analyser.smoothingTimeConstant = 0.82;
       const source = this.audioContext.createMediaElementSource(sourceAudio);
       source.connect(analyser);
@@ -731,25 +809,35 @@ export class MemoryReelController {
       this.audioAnalyser.getByteFrequencyData(this.audioData);
       if (this.audioWaveform) this.audioAnalyser.getByteTimeDomainData(this.audioWaveform);
       const size = this.audioData.length;
-      const averageBand = (start: number, end: number) => {
-        const from = Math.max(0, Math.floor(size * start));
-        const to = Math.max(from + 1, Math.floor(size * end));
+      const binHz = (this.audioContext?.sampleRate || 44100) / this.audioAnalyser.fftSize;
+      const averageBand = (startHz: number, endHz: number) => {
+        const from = Math.max(0, Math.floor(startHz / binHz));
+        const to = Math.min(size, Math.max(from + 1, Math.ceil(endHz / binHz)));
         let total = 0;
-        for (let index = from; index < Math.min(size, to); index += 1) total += this.audioData![index] / 255;
+        for (let index = from; index < to; index += 1) total += this.audioData![index] / 255;
         return total / Math.max(1, to - from);
       };
-      const bass = averageBand(0, 0.16);
-      const mid = averageBand(0.16, 0.58);
-      const treble = averageBand(0.58, 1);
+      const bass = averageBand(20, 150);
+      const mid = averageBand(150, 2000);
+      const treble = averageBand(2000, Math.max(2001, (this.audioContext?.sampleRate || 44100) / 2));
       const rawLevel = bass * 0.52 + mid * 0.32 + treble * 0.16;
-      this.smoothedBass += (bass - this.smoothedBass) * 0.18;
-      this.smoothedMid += (mid - this.smoothedMid) * 0.14;
-      this.smoothedTreble += (treble - this.smoothedTreble) * 0.14;
-      this.smoothedLevel += (rawLevel - this.smoothedLevel) * 0.16;
-      const onset = Math.max(0, bass - this.previousBass);
+      this.smoothedBass = lerp(this.smoothedBass, bass, 0.15);
+      this.smoothedMid = lerp(this.smoothedMid, mid, 0.15);
+      this.smoothedTreble = lerp(this.smoothedTreble, treble, 0.15);
+      this.smoothedLevel = lerp(this.smoothedLevel, rawLevel, 0.15);
+      const now = performance.now();
+      this.bassHistory.push({ time: now, value: bass });
+      while (this.bassHistory.length && now - this.bassHistory[0].time > 1500) this.bassHistory.shift();
+      const average = this.bassHistory.reduce((sum, sample) => sum + sample.value, 0) / Math.max(1, this.bassHistory.length);
       this.previousBass = bass;
-      if (onset > 0.055 && bass > 0.22) this.beatPulse = Math.min(1, this.beatPulse + onset * 4.6 + bass * 0.16);
-      this.beatPulse *= 0.84;
+      if (bass > Math.max(0.18, average * 1.3) && now - this.lastBeatAt >= 250) {
+        this.lastBeatAt = now;
+        this.beatCount += 1;
+        this.beatPulse = 1;
+        this.handleBeat(now);
+      } else {
+        this.beatPulse *= 0.84;
+      }
     } else {
       const fallbackClock = analysisAudio?.currentTime || time;
       const fallback = playing
@@ -781,6 +869,61 @@ export class MemoryReelController {
     };
   }
 
+  private handleBeat(now: number) {
+    if (this.options.reducedMotion || this.options.effect === 'off') return;
+    const current = this.cards[this.lastRenderedShot];
+    if (current) {
+      current.card.classList.remove('beat-hit');
+      requestAnimationFrame(() => current.card.classList.add('beat-hit'));
+      current.card.style.setProperty('--beat-glow', String(clamp(this.smoothedBass * 2, 0.2, 1)));
+    }
+    this.titleEl.classList.remove('beat-title');
+    requestAnimationFrame(() => this.titleEl.classList.add('beat-title'));
+    this.el.classList.add('beat-flash');
+    window.setTimeout(() => this.el.classList.remove('beat-flash'), 220);
+    if (this.beatCount % 4 === 0 && this.cards.length > 1) {
+      this.beatFrontIndex = (this.lastRenderedShot + 1) % this.cards.length;
+      this.beatFrontStarted = now;
+      this.cards[this.beatFrontIndex]?.card.classList.add('beat-fly-front');
+    }
+  }
+
+  private renderDust(metrics: { treble: number; beat: number }, playing: boolean) {
+    const context = this.dustContext;
+    const width = this.dustCanvas.clientWidth;
+    const height = this.dustCanvas.clientHeight;
+    if (!context || !width || !height || this.options.effect === 'off' || this.options.reducedMotion) {
+      context?.clearRect(0, 0, width, height);
+      return;
+    }
+    const now = performance.now();
+    const delta = this.dustLastPaint ? Math.min(0.04, (now - this.dustLastPaint) / 1000) : 0;
+    this.dustLastPaint = now;
+    const treble = metrics.treble;
+    const beat = metrics.beat;
+    context.clearRect(0, 0, width, height);
+    context.save();
+    context.globalCompositeOperation = 'screen';
+    this.dustParticles.forEach(particle => {
+      const speed = (playing ? 1 : 0.18) * (0.35 + treble * 1.8);
+      particle.x += particle.vx * speed * delta * 60;
+      particle.y += particle.vy * speed * delta * 60;
+      particle.phase += delta * (0.5 + treble * 2.2);
+      if (particle.y < -12) particle.y = height + 12;
+      if (particle.x < -12) particle.x = width + 12;
+      if (particle.x > width + 12) particle.x = -12;
+      const radius = particle.radius * (0.8 + treble * 1.65 + beat * 1.8);
+      const alpha = particle.alpha * (0.55 + treble * 0.7 + beat * 0.4) * (0.86 + Math.sin(particle.phase) * 0.14);
+      context.beginPath();
+      context.fillStyle = `rgba(255, ${204 + Math.round(treble * 34)}, 142, ${clamp(alpha, 0.05, 0.9)})`;
+      context.shadowBlur = 8 + treble * 16 + beat * 14;
+      context.shadowColor = 'rgba(255, 206, 141, 0.55)';
+      context.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
+      context.fill();
+    });
+    context.restore();
+  }
+
   play() {
     if (!this.cards.length || this.destroyed || !this.paused && this.raf) return;
     if (this.elapsed >= this.total) this.elapsed = 0;
@@ -789,7 +932,6 @@ export class MemoryReelController {
     this.options.onStateChange?.(true);
     this.last = performance.now();
     this.lastPaint = 0;
-    void this.playAudio();
     const tick = (now: number) => {
       if (this.paused || this.destroyed) return;
       // A delayed frame must not make the story jump several slides at once.
@@ -893,8 +1035,11 @@ export class MemoryReelController {
 
   setTitle(title?: MemoryReelTitle) {
     this.options.title = title;
+    const reveal = (value: string) => Array.from(value).map((character, index) =>
+      `<span class="title-letter" style="--letter-index:${index}">${character === ' ' ? '&nbsp;' : escapeHtml(character)}</span>`,
+    ).join('');
     this.titleEl.innerHTML = title
-      ? `<small>${escapeHtml(title.line || '')}</small><b>${escapeHtml(title.big || '')}</b>`
+      ? `<small>${reveal(title.line || '')}</small><b>${reveal(title.big || '')}</b>`
       : '';
   }
 
@@ -973,6 +1118,9 @@ export class MemoryReelController {
     this.pauseAudio();
     if (this.audio) this.audio.onended = null;
     this.disconnectAudioAnalysis();
+    if (this.pointerHandler) this.el.removeEventListener('pointermove', this.pointerHandler);
+    if (this.orientationHandler) window.removeEventListener('deviceorientation', this.orientationHandler);
+    if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
     void this.audioContext?.close().catch(() => undefined);
     this.audioContext = undefined;
     this.audio = undefined;
@@ -1024,7 +1172,15 @@ export class MemoryReelController {
     this.ambientEffects.style.setProperty('--particle-scale', (0.72 + effectLevel * 1.1).toFixed(3));
     this.ambientEffects.style.setProperty('--butterfly-opacity', (0.24 + effectLevel * 0.76).toFixed(3));
     this.ambientEffects.style.setProperty('--butterfly-scale', (0.78 + effectLevel * 0.42).toFixed(3));
-    this.ambientEffects.classList.toggle('is-playing', !this.paused);
+    this.el.style.setProperty('--bass-level', audioMetrics.bass.toFixed(3));
+    this.el.style.setProperty('--mid-level', audioMetrics.mid.toFixed(3));
+    this.el.style.setProperty('--treble-level', audioMetrics.treble.toFixed(3));
+    this.el.style.setProperty('--beat-pulse', audioMetrics.beat.toFixed(3));
+    const audioActive = Boolean((this.analysisAudio || this.audio) && !(this.analysisAudio || this.audio)?.paused);
+    this.ambientEffects.classList.toggle('is-playing', !this.paused && audioActive);
+    this.el.classList.toggle('is-playing', !this.paused);
+    this.el.classList.toggle('is-music-playing', audioActive);
+    this.renderDust(audioMetrics, audioActive);
 
     let shot = 0;
     let local = Math.max(0, time);
@@ -1152,12 +1308,28 @@ export class MemoryReelController {
       });
       shot = visibleShot;
     } else {
-      const camera = {
+      let camera = {
         x: lerp(from.x, to.x, progress),
         y: lerp(from.y, to.y, progress),
         z: lerp(from.z, to.z, progress),
         rot: lerp(from.rot, to.rot, progress),
       };
+      const beatAge = performance.now() - this.beatFrontStarted;
+      const beatFrontActive = this.beatFrontIndex >= 0 && beatAge >= 0 && beatAge < 900;
+      if (beatFrontActive) {
+        const frontTarget = this.target(this.beatFrontIndex);
+        const flyProgress = clamp(beatAge / 900, 0, 1);
+        const spring = 1 - Math.pow(1 - flyProgress, 3);
+        camera = {
+          x: lerp(camera.x, frontTarget.x, spring),
+          y: lerp(camera.y, frontTarget.y, spring),
+          z: lerp(camera.z, frontTarget.z, spring),
+          rot: lerp(camera.rot, frontTarget.rot, spring),
+        };
+      } else if (this.beatFrontIndex >= 0 && beatAge >= 900) {
+        this.cards[this.beatFrontIndex]?.card.classList.remove('beat-fly-front');
+        this.beatFrontIndex = -1;
+      }
       const push = 100 + clamp(holdProgress, 0, 1) * 180 - dip * 360;
       const sway = Math.sin(time * 0.7) * 3 * (1 - dip);
       // Keep the same camera targets and pacing on TV, but avoid the costly
@@ -1165,9 +1337,10 @@ export class MemoryReelController {
       // gentle zoom pulse restores the cinematic push-in without a jump at
       // each slide boundary.
       const tvZoom = 1.055 + Math.sin(time * 0.24 + shot * 0.7) * 0.045;
+      const parallax = this.options.legacyTv ? '' : ` translate3d(${(-this.parallaxX * 16).toFixed(1)}px,${(-this.parallaxY * 12).toFixed(1)}px,0)`;
       this.world.style.transform = this.options.legacyTv
         ? `scale(${this.scale * tvZoom}) translate3d(${-camera.x}px,${-camera.y}px,0)`
-        : `scale(${this.scale * audioScale}) translate3d(0,0,${push}px) rotateY(${-6 + sway}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${-camera.x}px,${-camera.y}px,${-camera.z}px)`;
+        : `scale(${this.scale * audioScale}) translate3d(0,0,${push}px) rotateY(${-6 + sway + this.parallaxX * 1.4}deg) rotateX(${this.parallaxY * -1.1}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${(-camera.x + this.parallaxX * 16).toFixed(1)}px,${(-camera.y + this.parallaxY * 12).toFixed(1)}px,${-camera.z}px)${parallax}`;
       const flyBlur = dip * 5;
       let focusedIndex = 0;
       let focusedDistance = Number.POSITIVE_INFINITY;
@@ -1179,6 +1352,12 @@ export class MemoryReelController {
         }
         const blur = this.options.legacyTv ? 0 : clamp((distance - 360) / 100, 0, 5) + (distance > 360 ? flyBlur * 0.65 : 0);
         const near = distance < 200;
+        const drift = this.options.reducedMotion ? 0 : (index === focusedIndex ? 0.45 : 1) * (2 + audioMetrics.mid * 9);
+        const driftX = Math.sin(time * (0.22 + audioMetrics.mid * 0.12) + index * 1.7) * drift;
+        const driftY = Math.cos(time * (0.18 + audioMetrics.mid * 0.1) + index * 1.2) * drift * 0.72;
+        const driftZ = Math.sin(time * 0.14 + index) * (2 + audioMetrics.mid * 10);
+        const driftRotate = Math.sin(time * 0.16 + index * 0.8) * (0.22 + audioMetrics.mid * 0.7);
+        card.card.style.transform = `translate3d(${(card.x - card.width / 2 + driftX).toFixed(1)}px,${(card.y - card.height / 2 + driftY).toFixed(1)}px,${(card.z + driftZ).toFixed(1)}px) rotateX(${(driftRotate * 0.5).toFixed(2)}deg) rotateY(${driftRotate.toFixed(2)}deg) rotateZ(${(card.rot + driftRotate * 0.18).toFixed(2)}deg)`;
         card.card.style.opacity = this.options.legacyTv && distance > 900 ? '0.72' : '1';
         card.card.style.zIndex = index === focusedIndex ? '20' : '1';
         card.card.style.filter = this.options.legacyTv
@@ -1205,6 +1384,7 @@ export class MemoryReelController {
     const showTitle = shot === count - 1 && local > move + 0.4 && Boolean(this.options.title);
     this.titleEl.classList.toggle('on', showTitle);
     this.progressEl.style.width = `${clamp(time / this.total, 0, 1) * 100}%`;
+    this.lastRenderedShot = shot;
     this.options.onProgress?.(time, this.total);
   }
 }
@@ -1316,6 +1496,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const visualMemories = useMemo(() => memories.filter(isVisualMemory), [memories]);
   const storedStoryMusic = useMemo(readStoredStoryMusic, []);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const musicPanelRef = useRef<HTMLDivElement | null>(null);
   const templatePanelRef = useRef<HTMLDivElement | null>(null);
   const effectsPanelRef = useRef<HTMLDivElement | null>(null);
@@ -1328,6 +1509,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState(false);
   const [audioPlaying, setAudioPlaying] = useState(false);
+  const [audioMuted, setAudioMuted] = useState(false);
   const [progress, setProgress] = useState({ progress: 0, total: 0 });
   const [fullscreen, setFullscreen] = useState(false);
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
@@ -1405,6 +1587,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       event.stopPropagation();
       panel.scrollTop = event.key === 'Home' ? 0 : panel.scrollHeight;
     }
+
   };
 
   const keepFocusedControlVisible = (event: React.FocusEvent<HTMLDivElement>) => {
@@ -1433,6 +1616,24 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const focusPanel = () => firstControl.focus();
     if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(focusPanel);
     else window.setTimeout(focusPanel, 0);
+  }, [effectsOpen, musicOpen, templateOpen]);
+
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return undefined;
+    const headings = Array.from(shell.querySelectorAll<HTMLElement>('.memory-reel-reveal'));
+    if (!headings.length || typeof IntersectionObserver === 'undefined') {
+      headings.forEach(heading => heading.classList.add('is-visible'));
+      return undefined;
+    }
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) observer.unobserve(entry.target);
+        entry.target.classList.toggle('is-visible', entry.isIntersecting);
+      });
+    }, { threshold: 0.16 });
+    headings.forEach(heading => observer.observe(heading));
+    return () => observer.disconnect();
   }, [effectsOpen, musicOpen, templateOpen]);
 
   useEffect(() => {
@@ -2239,9 +2440,16 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     await playStoryAudio(true);
   };
 
+  const toggleMute = () => {
+    const element = audioPlayerRef.current;
+    if (!element) return;
+    element.muted = !element.muted;
+    setAudioMuted(element.muted);
+  };
+
   return (
     <div className={`memory-reel-overlay${fullscreen ? ' is-fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label="Memory story reel">
-      <div className={`memory-reel-shell${fullscreen ? ' is-fullscreen' : ''}${musicOpen || templateOpen || effectsOpen ? ' has-panel-open' : ''}`}>
+      <div ref={shellRef} className={`memory-reel-shell${fullscreen ? ' is-fullscreen' : ''}${musicOpen || templateOpen || effectsOpen ? ' has-panel-open' : ''}`}>
         <div ref={stageRef} className="reel memory-reel-stage" />
         <div className="memory-reel-toolbar">
           <button type="button" onClick={toggleStoryPlayback} disabled={loading}>
@@ -2252,6 +2460,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Music2 size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : driveSongs.length ? `(${driveSongs.length} Drive)` : ''}</button>
           <button type="button" className={templateOpen ? 'is-active' : ''} aria-expanded={templateOpen} onClick={openTemplates}><WandSparkles size={16} /> Template</button>
           {musicQueue.length > 0 && <button type="button" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}><Volume2 size={16} /> {audioPlaying ? 'Stop music' : 'Play music'}</button>}
+          {musicQueue.length > 0 && <button type="button" onClick={toggleMute} aria-pressed={audioMuted} aria-label={audioMuted ? 'Unmute music' : 'Mute music'}>{audioMuted ? <VolumeX size={16} /> : <Volume2 size={16} />} {audioMuted ? 'Unmute' : 'Mute'}</button>}
           <button type="button" className={effectsOpen ? 'is-active' : ''} aria-expanded={effectsOpen} onClick={openEffects}><WandSparkles size={16} /> Effects</button>
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
             <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
@@ -2272,6 +2481,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           onCanPlay={() => setAudioLoading(false)}
           onLoadedMetadata={() => setAudioLoading(false)}
           onPlaying={() => { setAudioLoading(false); setAudioPlaying(true); }}
+          onVolumeChange={() => setAudioMuted(Boolean(audioPlayerRef.current?.muted))}
           onPause={() => {
             setAudioPlaying(false);
             if (!audioPauseGuardRef.current) audioManuallyStoppedRef.current = true;
@@ -2314,7 +2524,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             onWheel={stopPanelScrollPropagation}
             onTouchMove={stopPanelScrollPropagation}
           >
-            <div className="memory-reel-panel-heading">
+            <div className="memory-reel-panel-heading memory-reel-reveal">
               <div>
                 <strong>Story music</strong>
                 <span>{musicQueue.length ? `${musicQueue.length} queued` : 'Choose a song'}</span>
@@ -2389,7 +2599,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             onWheel={stopPanelScrollPropagation}
             onTouchMove={stopPanelScrollPropagation}
           >
-            <div className="memory-reel-template-heading">
+            <div className="memory-reel-template-heading memory-reel-reveal">
               <div><WandSparkles size={16} /><strong>Choose your cinematic look</strong></div>
               <div className="memory-reel-template-heading-actions">
                 <span>{MEMORY_REEL_TEMPLATES.find(item => item.id === template)?.name}</span>
@@ -2425,7 +2635,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             onWheel={stopPanelScrollPropagation}
             onTouchMove={stopPanelScrollPropagation}
           >
-            <div className="memory-reel-template-heading">
+            <div className="memory-reel-template-heading memory-reel-reveal">
               <div><WandSparkles size={16} /><strong>Music-reactive effects</strong></div>
               <div className="memory-reel-template-heading-actions">
                 <span>{MEMORY_REEL_EFFECTS.find(item => item.id === effect)?.name}</span>

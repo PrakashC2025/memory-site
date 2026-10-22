@@ -10250,3 +10250,136 @@ textarea:focus-visible {
   .memory-reel-stage.memory-reel-template-polaroid .card { width: 76% !important; height: 70% !important; }
   .memory-reel-stage.memory-reel-template-filmstrip .card { width: 52vw !important; }
 }
+
+/* Story Mode music layer: canvas dust, parallax depth, beat hits, and gentle
+   letter reveals. These selectors are scoped to the reel stage only. */
+.memory-reel-stage .memory-reel-dust-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.72;
+  mix-blend-mode: screen;
+}
+
+.memory-reel-stage.is-music-playing .memory-reel-dust-canvas {
+  opacity: calc(0.38 + var(--treble-level, 0) * 0.42);
+}
+
+.memory-reel-stage .card {
+  will-change: transform, opacity, filter;
+  transform-style: preserve-3d;
+}
+
+.memory-reel-stage .card .m {
+  transform-origin: center center;
+}
+
+.memory-reel-stage.is-playing .card.is-active .m {
+  animation: memory-reel-ken-burns 9s ease-in-out infinite alternate;
+}
+
+.memory-reel-stage:not(.is-music-playing) .card.is-active .m {
+  animation-play-state: paused;
+}
+
+.memory-reel-stage .card.beat-hit {
+  z-index: 48 !important;
+  filter: brightness(1.08) saturate(1.05) !important;
+  box-shadow: 0 0 calc(28px + var(--beat-glow, 0.2) * 36px) rgba(255, 211, 148, calc(0.2 + var(--beat-glow, 0.2) * 0.32)), 0 22px 54px rgba(0, 0, 0, 0.62);
+}
+
+.memory-reel-stage .card.beat-hit .m {
+  animation: memory-reel-media-beat 420ms cubic-bezier(.22, .8, .24, 1) both;
+}
+
+.memory-reel-stage .card.beat-fly-front {
+  z-index: 46 !important;
+  filter: blur(0) brightness(1.12) saturate(1.08) !important;
+  transition: filter 160ms ease, opacity 160ms ease;
+}
+
+.memory-reel-stage.beat-flash::after {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  content: '';
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 48%, rgba(255, 229, 181, 0.34), transparent 55%);
+  animation: memory-reel-beat-flash 220ms ease-out both;
+}
+
+.memory-reel-stage .title small,
+.memory-reel-stage .title b {
+  display: block;
+}
+
+.memory-reel-stage .title-letter {
+  display: inline-block;
+  opacity: 0;
+  transform: translate3d(0, 0.45em, 0) scale(0.94);
+}
+
+.memory-reel-stage .title.on .title-letter {
+  animation: memory-reel-title-letter 720ms cubic-bezier(.16, 1, .3, 1) forwards;
+  animation-delay: calc(var(--letter-index) * 34ms);
+}
+
+.memory-reel-stage .title.beat-title {
+  filter: brightness(calc(1 + var(--beat-pulse, 0) * 0.4));
+}
+
+.memory-reel-reveal {
+  opacity: 0;
+  transform: translate3d(0, 14px, 0);
+  transition: opacity 420ms ease, transform 520ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.memory-reel-reveal.is-visible {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+@keyframes memory-reel-ken-burns {
+  0% { transform: scale(1.01) translate3d(-0.6%, 0.2%, 0); }
+  100% { transform: scale(1.08) translate3d(0.7%, -0.55%, 0); }
+}
+
+@keyframes memory-reel-media-beat {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+
+@keyframes memory-reel-beat-flash {
+  0% { opacity: 0; transform: scale(0.98); }
+  25% { opacity: 0.9; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.04); }
+}
+
+@keyframes memory-reel-title-letter {
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-reel-stage .memory-reel-dust-canvas,
+  .memory-reel-stage .card.beat-hit,
+  .memory-reel-stage.beat-flash::after {
+    display: none !important;
+  }
+
+  .memory-reel-stage .title-letter,
+  .memory-reel-stage .title.on .title-letter {
+    opacity: 1;
+    transform: none;
+    animation: none !important;
+  }
+
+  .memory-reel-reveal {
+    opacity: 1;
+    transform: none;
+    transition: opacity 180ms ease;
+  }
+}
