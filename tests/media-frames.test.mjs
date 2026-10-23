@@ -71,6 +71,13 @@ test('video loading keeps a usable poster and caches before story reveal', async
   assert.match(reel, /image\.src = item\.src;[\s\S]*loadAuthenticatedDrivePreview/);
   assert.doesNotMatch(reel, /crossOrigin="anonymous"/);
   assert.match(reel, /return AUDIO_MIME_BY_EXTENSION\[extension\] \|\|/);
+  assert.match(reel, /const convertAudioBlobToWav = async/);
+  assert.match(reel, /const convertAudioBlobWithFfmpeg = async/);
+  assert.match(reel, /await ffmpeg\.exec\(\['-i', inputName/);
+  assert.match(reel, /const loadFfmpeg = async/);
+  assert.match(reel, /const encodeAudioBufferAsWav = \(buffer: AudioBuffer\)/);
+  assert.match(reel, /const preparePlayableAudioBlob = async/);
+  assert.match(reel, /await preparePlayableAudioBlob\(sourceBlob, song\)/);
   assert.match(preview, /readCachedDriveMedia\(memory\.driveFileId!/);
   assert.match(preview, /style=\{loaded \? undefined : \{ opacity: 0 \}\}/);
   assert.match(reel, /await writeCachedStoryMedia\(cacheKey, blob/);

@@ -9,6 +9,7 @@ import {
   Lightbulb,
   Loader2,
   RotateCcw,
+  RotateCw,
   Share2,
   Sparkles,
   Trash2,
@@ -41,6 +42,7 @@ interface CapturedPhoto {
   file: File;
   url: string;
   queueId: string;
+  uploadedFile?: DriveMediaFile | null;
 }
 
 interface UploadJob {
@@ -65,6 +67,15 @@ type CameraFilter = keyof typeof CAMERA_FILTERS;
 const fileName = () => `memoriya-${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
 
 const blobToFile = (blob: Blob) => new File([blob], fileName(), { type: 'image/jpeg' });
+
+const canvasToJpegBlob = (canvas: HTMLCanvasElement) => {
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.96);
+  const [header, encoded] = dataUrl.split(',');
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: header.match(/data:([^;]+)/)?.[1] || 'image/jpeg' });
+};
 
 const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onUploaded, onDeleted, onClose }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -91,6 +102,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const [autoEnhance, setAutoEnhance] = useState(false);
   const [previewUrl, setPreviewUrl] = useState('');
   const [capturedPhoto, setCapturedPhoto] = useState<CapturedPhoto | null>(null);
+  const [capturedGallery, setCapturedGallery] = useState<CapturedPhoto[]>([]);
   const [uploadedFile, setUploadedFile] = useState<DriveMediaFile | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -109,6 +121,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const [folderId, setFolderId] = useState(initialFolderId || 'drive-root');
   const [folders, setFolders] = useState<DriveFolderChoice[]>([]);
   const [pendingUploads, setPendingUploads] = useState(0);
+  const capturedGalleryRef = useRef<CapturedPhoto[]>([]);
+  capturedGalleryRef.current = capturedGallery;
 
   useEffect(() => {
     document.body.classList.add('memoriya-camera-active');
@@ -195,6 +209,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
 
   useEffect(() => () => {
     uploadAbortRef.current?.abort();
+    capturedGalleryRef.current.forEach(photo => URL.revokeObjectURL(photo.url));
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     if (originalPreviewUrlRef.current) URL.revokeObjectURL(originalPreviewUrlRef.current);
   }, []);
@@ -282,9 +297,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     const sourceX = (video.videoWidth - sourceWidth) / 2;
     const sourceY = (video.videoHeight - sourceHeight) / 2;
     context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not create the photo.')), 'image/jpeg', 0.96);
-    });
+    return canvasToJpegBlob(canvas);
   };
 
   const updatePendingCount = () => {
@@ -311,6 +324,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       }
       if (controller.signal.aborted) return false;
       if (latestQueueIdRef.current === queueId) setUploadedFile(uploaded);
+      setCapturedGallery(current => current.map(photo => photo.queueId === queueId ? { ...photo, uploadedFile: uploaded } : photo));
+      setCapturedPhoto(current => current?.queueId === queueId ? { ...current, uploadedFile: uploaded } : current);
       if (queueId) await deleteCachedStoryMedia(queueId);
       await writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
       onUploaded(uploaded);
@@ -381,6 +396,19 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     setShowLastShot(true);
   };
 
+  const selectGalleryPhoto = (photo: CapturedPhoto) => {
+    previewUrlRef.current = photo.url;
+    originalPreviewUrlRef.current = '';
+    setCapturedPhoto(photo);
+    setUploadedFile(photo.uploadedFile || null);
+    setPreviewUrl(photo.url);
+    setEditMode(false);
+    setEditRotation(0);
+    setEditCrop('original');
+    setShowLastShot(true);
+    setReviewOpen(true);
+  };
+
   const closeReview = () => {
     setReviewOpen(false);
     setEditMode(false);
@@ -391,7 +419,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     if (!originalPreviewUrlRef.current) originalPreviewUrlRef.current = URL.createObjectURL(capturedPhoto.sourceBlob);
     if (previewUrlRef.current && previewUrlRef.current !== originalPreviewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     previewUrlRef.current = originalPreviewUrlRef.current;
-    setCapturedPhoto(current => current ? { ...current, url: originalPreviewUrlRef.current } : current);
+    const restoredUrl = originalPreviewUrlRef.current;
+    setCapturedPhoto(current => current ? { ...current, url: restoredUrl } : current);
+    setCapturedGallery(current => current.map(photo => photo.queueId === capturedPhoto.queueId ? { ...photo, url: restoredUrl } : photo));
     setPreviewUrl(originalPreviewUrlRef.current);
     setEditFilter('natural');
     setEditRotation(0);
@@ -403,7 +433,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     if (!cameraReady || capturing) return;
     setCapturing(true);
     setError('');
-    setStatus('Capturing high-quality photo…');
+    setStatus('');
     try {
       // Capture the current preview frame first. It is the same negotiated
       // camera resolution shown on the phone and avoids the slow ImageCapture
@@ -416,24 +446,28 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         if (!imageCaptureRef.current) throw frameError;
         rawBlob = await imageCaptureRef.current.takePhoto();
       }
-      const captureFilter = autoEnhance ? 'enhance' : filter;
-      const blob = captureFilter === 'natural' ? rawBlob : await renderPhotoBlob(rawBlob, captureFilter);
+      // Keep the original camera frame for immediate local saving. Looks and
+      // edits remain available in review, while Drive upload runs separately.
+      const blob = rawBlob;
       const localPreviewUrl = URL.createObjectURL(blob);
-      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-      if (originalPreviewUrlRef.current) URL.revokeObjectURL(originalPreviewUrlRef.current);
+      // Keep earlier captures alive in the camera gallery. Only the active
+      // preview URL is replaced here; gallery thumbnails remain usable.
       previewUrlRef.current = localPreviewUrl;
       originalPreviewUrlRef.current = '';
       const localFile = blobToFile(blob);
       const queueId = resumeUpload(localFile);
-      const photo = { sourceBlob: rawBlob, file: localFile, url: localPreviewUrl, queueId };
+      const photo = { sourceBlob: rawBlob, file: localFile, url: localPreviewUrl, queueId, uploadedFile: null };
       setCapturedPhoto(photo);
+      setCapturedGallery(current => [...current, photo]);
       setUploadedFile(null);
       setPreviewUrl(localPreviewUrl);
-      setEditFilter(captureFilter);
+      setEditFilter('natural');
       setEditRotation(0);
       setEditCrop('original');
       setShowLastShot(true);
       setReviewOpen(false);
+      setCapturing(false);
+      setStatus('Captured locally. Uploading to Drive in the background.');
     } catch (captureError) {
       setError(captureError instanceof Error ? captureError.message : 'Photo capture failed.');
       setStatus('Ready to try again.');
@@ -466,8 +500,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       originalPreviewUrlRef.current = '';
       setPreviewUrl('');
       setCapturedPhoto(null);
-      setUploadedFile(null);
-      setReviewOpen(false);
+      const remaining = capturedGallery.filter(photo => photo.queueId !== capturedPhoto.queueId);
+      setCapturedGallery(remaining);
+      const nextPhoto = remaining[remaining.length - 1];
+      if (nextPhoto) {
+        previewUrlRef.current = nextPhoto.url;
+        setCapturedPhoto(nextPhoto);
+        setUploadedFile(nextPhoto.uploadedFile || null);
+        setPreviewUrl(nextPhoto.url);
+      }
+      setReviewOpen(Boolean(nextPhoto));
       setEditMode(false);
       setStatus('Photo deleted. Ready for another memory.');
       setError('');
@@ -507,8 +549,15 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         await removeQueuedUpload(capturedPhoto.queueId);
         nextQueueId = resumeUpload(localFile);
       }
-      const photo = { sourceBlob: capturedPhoto.sourceBlob, file: localFile, url: localPreviewUrl, queueId: nextQueueId };
+      const photo = {
+        sourceBlob: capturedPhoto.sourceBlob,
+        file: localFile,
+        url: localPreviewUrl,
+        queueId: nextQueueId,
+        uploadedFile: nextUploadedFile,
+      };
       setCapturedPhoto(photo);
+      setCapturedGallery(current => current.map(item => item.queueId === capturedPhoto.queueId ? photo : item));
       setUploadedFile(nextUploadedFile);
       setPreviewUrl(localPreviewUrl);
       setFilter(editFilter);
@@ -610,12 +659,31 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
             {previewUrl && <button type="button" onClick={() => setShowLastShot(value => !value)} aria-label={showLastShot ? 'Show live camera' : 'Show captured preview'}>
               <ImageIcon size={17} />
             </button>}
+            {previewUrl && <button type="button" onClick={() => { setEditMode(true); setEditFilter('natural'); setEditCrop('original'); setEditRotation(value => (value + 90) % 360); setReviewOpen(true); }} aria-label="Rotate captured photo">
+              <RotateCw size={17} />
+            </button>}
           </div>
           <div className="memoriya-camera-viewfinder-tools">
             <button type="button" onClick={() => setGridEnabled(value => !value)} className={gridEnabled ? 'is-active' : ''} aria-label="Toggle camera grid"><Grid3X3 size={16} /></button>
             {torchAvailable && <button type="button" onClick={toggleTorch} className={torchEnabled ? 'is-active' : ''} aria-label={torchEnabled ? 'Turn flash off' : 'Turn flash on'}><Lightbulb size={16} /></button>}
           </div>
         </div>
+        {capturedGallery.length > 0 && (
+          <div className="memoriya-camera-gallery" aria-label="Captured photo gallery">
+            {capturedGallery.map((photo, index) => (
+              <button
+                type="button"
+                key={photo.queueId}
+                className={`memoriya-camera-gallery-item${capturedPhoto?.queueId === photo.queueId ? ' is-active' : ''}`}
+                onClick={() => selectGalleryPhoto(photo)}
+                aria-label={`Review captured photo ${index + 1}`}
+              >
+                <img src={photo.url} alt={`Captured memory ${index + 1}`} />
+                <span>{index + 1}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="memoriya-camera-controls">
           <div className="memoriya-camera-control-spacer" aria-hidden="true" />
           <button type="button" className="memoriya-camera-shutter" onClick={() => void capturePhoto()} disabled={!cameraReady || capturing} aria-label="Capture and upload photo">
@@ -650,6 +718,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
             </div>
             <div className="memoriya-camera-review-actions">
               <button type="button" onClick={() => void deletePhoto()} disabled={capturing}><Trash2 size={17} /> Delete</button>
+              <button type="button" onClick={() => { setEditMode(true); setEditFilter('natural'); setEditCrop('original'); setEditRotation(value => (value + 90) % 360); }} disabled={capturing}><RotateCcw size={17} /> Rotate</button>
               <button type="button" onClick={() => { setEditMode(true); setEditFilter('enhance'); setEditRotation(0); setEditCrop('original'); }} disabled={capturing}><Sparkles size={17} /> Enhance</button>
               <button type="button" onClick={() => setEditMode(value => !value)} disabled={capturing}><Edit3 size={17} /> Edit</button>
               <button type="button" onClick={() => void sharePhoto()} disabled={capturing}><Share2 size={17} /> Share</button>

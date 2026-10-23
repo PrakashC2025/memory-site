@@ -1,4 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import ffmpegCoreScript from '@ffmpeg/core?url';
+import ffmpegCoreWasm from '@ffmpeg/core/wasm?url';
 import { HardDrive, Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, VolumeX, WandSparkles, X } from 'lucide-react';
 import { isVisualMemory, type Memory } from '../data/memories';
 import { googleDriveService, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
@@ -188,6 +192,110 @@ const normalizeAudioFile = (file: File) => file.type.startsWith('audio/')
   && file.type === audioMimeType(file.name, file.type)
   ? file
   : new File([file], file.name, { type: audioMimeType(file.name, file.type), lastModified: file.lastModified });
+
+const writeWaveText = (view: DataView, offset: number, value: string) => {
+  Array.from(value).forEach((character, index) => view.setUint8(offset + index, character.charCodeAt(0)));
+};
+
+const encodeAudioBufferAsWav = (buffer: AudioBuffer) => {
+  const channelCount = Math.max(1, buffer.numberOfChannels);
+  const frameCount = buffer.length;
+  const bytesPerSample = 2;
+  const dataLength = frameCount * channelCount * bytesPerSample;
+  const view = new DataView(new ArrayBuffer(44 + dataLength));
+  writeWaveText(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeWaveText(view, 8, 'WAVE');
+  writeWaveText(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channelCount, true);
+  view.setUint32(24, buffer.sampleRate, true);
+  view.setUint32(28, buffer.sampleRate * channelCount * bytesPerSample, true);
+  view.setUint16(32, channelCount * bytesPerSample, true);
+  view.setUint16(34, 16, true);
+  writeWaveText(view, 36, 'data');
+  view.setUint32(40, dataLength, true);
+  const channels = Array.from({ length: channelCount }, (_, channel) => buffer.getChannelData(Math.min(channel, buffer.numberOfChannels - 1)));
+  let offset = 44;
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    for (let channel = 0; channel < channelCount; channel += 1) {
+      const sample = Math.max(-1, Math.min(1, channels[channel][frame] || 0));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += bytesPerSample;
+    }
+  }
+  return new Blob([view], { type: 'audio/wav' });
+};
+
+const convertAudioBlobToWav = async (blob: Blob) => {
+  const contextWindow = window as typeof window & { webkitAudioContext?: typeof AudioContext };
+  const AudioContextConstructor = contextWindow.AudioContext || contextWindow.webkitAudioContext;
+  if (!AudioContextConstructor) throw new Error('This browser has no audio conversion support.');
+  const context = new AudioContextConstructor();
+  try {
+    const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+    return encodeAudioBufferAsWav(decoded);
+  } finally {
+    await context.close().catch(() => undefined);
+  }
+};
+
+const normalizeDriveAudioBlob = (blob: Blob, song: DriveAudioFile) => {
+  const playableType = audioMimeType(song.name, song.mimeType || blob.type);
+  return blob.type === playableType ? blob : new Blob([blob], { type: playableType });
+};
+
+const preparePlayableAudioBlob = async (blob: Blob, song: DriveAudioFile) => {
+  const normalized = normalizeDriveAudioBlob(blob, song);
+  const probe = document.createElement('audio');
+  const extension = song.name.split(/[?#]/)[0].split('.').pop()?.toLowerCase() || '';
+  const nativeFormat = extension === 'mp3' || extension === 'm4a' || extension === 'wav';
+  if (nativeFormat && probe.canPlayType(normalized.type)) return normalized;
+  try {
+    return await convertAudioBlobToWav(normalized);
+  } catch {
+    return convertAudioBlobWithFfmpeg(normalized, song);
+  }
+};
+
+let ffmpegLoadPromise: Promise<FFmpeg> | null = null;
+
+const loadFfmpeg = async () => {
+  if (!ffmpegLoadPromise) {
+    const instance = new FFmpeg();
+    ffmpegLoadPromise = Promise.all([
+      toBlobURL(ffmpegCoreScript, 'text/javascript'),
+      toBlobURL(ffmpegCoreWasm, 'application/wasm'),
+    ]).then(async ([coreURL, wasmURL]) => {
+      await instance.load({ coreURL, wasmURL });
+      return instance;
+    }).catch(error => {
+      ffmpegLoadPromise = null;
+      throw error;
+    });
+  }
+  return ffmpegLoadPromise;
+};
+
+const convertAudioBlobWithFfmpeg = async (blob: Blob, song: DriveAudioFile) => {
+  const ffmpeg = await loadFfmpeg();
+  const extension = song.name.split(/[?#]/)[0].split('.').pop()?.toLowerCase() || 'audio';
+  const inputName = `memoriya-input-${Date.now()}.${extension}`;
+  const outputName = `memoriya-output-${Date.now()}.wav`;
+  try {
+    await ffmpeg.writeFile(inputName, await fetchFile(blob));
+    await ffmpeg.exec(['-i', inputName, '-vn', '-ac', '2', '-ar', '44100', '-c:a', 'pcm_s16le', '-f', 'wav', outputName]);
+    const output = await ffmpeg.readFile(outputName);
+    const bytes = typeof output === 'string' ? new TextEncoder().encode(output) : new Uint8Array(output);
+    const safeBuffer = new Uint8Array(bytes.byteLength);
+    safeBuffer.set(bytes);
+    return new Blob([safeBuffer.buffer], { type: 'audio/wav' });
+  } finally {
+    await ffmpeg.deleteFile(inputName).catch(() => undefined);
+    await ffmpeg.deleteFile(outputName).catch(() => undefined);
+  }
+};
 
 const playAudioWithTimeout = async (element: HTMLAudioElement, timeoutMs = 12000) => {
   let timeoutId: number | undefined;
@@ -1743,6 +1851,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const secondaryDriveSongsRequestRef = useRef(false);
   const driveMusicFolderRef = useRef(driveFolderId || '');
   const audioManuallyStoppedRef = useRef(false);
+  const failedMusicIdsRef = useRef(new Set<string>());
   musicQueueRef.current = musicQueue;
   loopEnabledRef.current = loopEnabled;
   const audioPauseGuardRef = useRef(false);
@@ -2215,11 +2324,6 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     }
   };
 
-  const normalizeDriveAudioBlob = (blob: Blob, song: DriveAudioFile) => {
-    const playableType = audioMimeType(song.name, song.mimeType || blob.type);
-    return blob.type === playableType ? blob : new Blob([blob], { type: playableType });
-  };
-
   const driveAudioCacheKey = (song: DriveAudioFile) =>
     `drive-audio-${song.id}-${song.modifiedTime || 'current'}`;
 
@@ -2227,14 +2331,14 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(song.id)}?alt=media&supportsAllDrives=true&access_token=${encodeURIComponent(token)}`;
 
   const warmDriveAudioCache = async (song: DriveAudioFile, cacheKey: string, token: string) => {
-    if (await readCachedStoryMedia(cacheKey)) return;
     try {
-      const result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id));
-      const playableBlob = normalizeDriveAudioBlob(result.blob, song);
+      const cached = await readCachedStoryMedia(cacheKey);
+      const sourceBlob = cached || (await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id))).blob;
+      const playableBlob = await preparePlayableAudioBlob(sourceBlob, song);
+      if (cached && playableBlob === cached) return;
       await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
     } catch {
-      // The queue already has a direct authenticated source. Cache warming is
-      // best-effort so a slow Drive download can never block queue insertion.
+      // Cache warming is best-effort; playback retries conversion on demand.
     }
   };
 
@@ -2258,9 +2362,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
     const createSource = async (token: string) => {
       const cached = await readCachedStoryMedia(cacheKey);
-      const blob = cached || await withMediaFetch(() => googleDriveService.downloadMediaFile(token, song.id));
-      const playableBlob = normalizeDriveAudioBlob(blob, song);
-      if (!cached) void writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
+      const sourceBlob = cached || await withMediaFetch(() => googleDriveService.downloadMediaFile(token, song.id));
+      const playableBlob = await preparePlayableAudioBlob(sourceBlob, song);
+      if (!cached || playableBlob !== cached) await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
       const objectUrl = URL.createObjectURL(playableBlob);
       resolvedDriveAudioSourcesRef.current.set(cacheKey, objectUrl);
       audioObjectUrlsRef.current.push(objectUrl);
@@ -2313,6 +2417,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const playQueuedMusic = async (index: number) => {
     const track = musicQueue[index];
     if (!track) return;
+    failedMusicIdsRef.current.delete(track.id);
     audioManuallyStoppedRef.current = false;
     setCurrentMusic(track.id);
     setMusicName(track.label);
@@ -2613,6 +2718,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const sourceTrack = musicQueue.find(track => track.id === currentMusicIdRef.current) || musicQueue[0];
     const source = sourceTrack?.src;
     if (!element || !source || audioManuallyStoppedRef.current) return false;
+    failedMusicIdsRef.current.delete(sourceTrack.id);
     setCurrentMusic(sourceTrack.id);
     setAudioLoading(true);
     if (fromUserGesture) void controllerRef.current?.resumeAudioAnalysis().catch(() => undefined);
@@ -2658,6 +2764,11 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           ? 'Google Drive authorization expired. Tap Reconnect Drive, then play the queued song again.'
           : 'Drive audio could not be downloaded for playback. Check the file format and try again.')
         : 'Tap Play music once to allow audio on this device.');
+      const decoderFailure = error instanceof Error && /decode|conversion|not supported|not_supported|cannot play/i.test(error.message);
+      if (decoderFailure && sourceTrack && musicQueue.length > 1) {
+        failedMusicIdsRef.current.add(sourceTrack.id);
+        void advanceMusic();
+      }
       return false;
     } finally {
       setAudioLoading(false);
@@ -2684,9 +2795,17 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     if (!currentQueue.length || !element) return;
     const currentIndex = currentQueue.findIndex(track => track.id === currentMusicIdRef.current);
     const activeIndex = currentIndex >= 0 ? currentIndex : 0;
-    const nextIndex = activeIndex + 1 < currentQueue.length
+    let nextIndex = activeIndex + 1 < currentQueue.length
       ? activeIndex + 1
       : loopEnabledRef.current ? 0 : -1;
+    if (nextIndex >= 0 && currentQueue.length > 1) {
+      const firstCandidate = nextIndex;
+      do {
+        if (!failedMusicIdsRef.current.has(currentQueue[nextIndex].id)) break;
+        nextIndex = (nextIndex + 1) % currentQueue.length;
+      } while (nextIndex !== firstCandidate);
+      if (failedMusicIdsRef.current.has(currentQueue[nextIndex].id)) nextIndex = -1;
+    }
     if (nextIndex < 0) {
       setAudioPlaying(false);
       return;
@@ -2710,9 +2829,13 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       audioPauseGuardRef.current = false;
       await playAudioWithTimeout(element);
       setAudioPlaying(true);
-    } catch {
+    } catch (error) {
       audioPauseGuardRef.current = false;
       setAudioPlaying(false);
+      if (error instanceof Error && /decode|conversion|not supported|not_supported|cannot play/i.test(error.message) && currentQueue.length > 1) {
+        failedMusicIdsRef.current.add(nextTrack.id);
+        void advanceMusic();
+      }
     } finally {
       setAudioLoading(false);
     }
