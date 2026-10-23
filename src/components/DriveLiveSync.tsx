@@ -5,12 +5,12 @@ import {
   acquireDriveSyncLock,
   DRIVE_ACCESS_TOKEN_UPDATED_EVENT,
   readDriveAccessToken,
-  readDriveChangePageToken,
+  readDriveAuthRequired,
   readDriveFolderId,
   readDriveMemories,
-  removeDriveMemories,
   releaseDriveSyncLock,
-  saveDriveChangePageToken,
+  saveDriveAccessToken,
+  saveDriveAuthRequired,
   saveDriveMemories,
 } from '../services/driveLibrary';
 import { cacheDriveMediaFiles, deleteCachedDriveMedia } from '../services/driveCache';
@@ -23,75 +23,97 @@ const isVisualMedia = (file: DriveMediaFile) =>
 const DriveLiveSync: React.FC = () => {
   useEffect(() => {
     let active = true;
-    const driveAuthRequiredRef = { current: false };
+    const driveAuthRequiredRef = { current: readDriveAuthRequired() };
+    let syncNow: (() => void) | null = null;
     const onTokenUpdated = (event: Event) => {
-      if ((event as CustomEvent<string>).detail) driveAuthRequiredRef.current = false;
+      if ((event as CustomEvent<string>).detail) {
+        driveAuthRequiredRef.current = false;
+        syncNow?.();
+      }
     };
     window.addEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
 
+    const reconcileFolderSnapshot = async (accessToken: string, folderId: string) => {
+      // The Drive changes feed can occasionally lag, omit a usable file
+      // payload, or reject an old cursor. A fresh metadata-only folder snapshot
+      // keeps additions and deletions live without downloading the
+      // media before it is needed.
+      const snapshotFiles = await googleDriveService.listAllMedia(accessToken, folderId);
+      const snapshotVisualFiles = snapshotFiles.filter(file => isVisualMedia(file) && !file.trashed);
+      const current = readDriveMemories();
+      const currentByDriveId = new Map(
+        current.filter(memory => memory.driveFileId).map(memory => [memory.driveFileId as string, memory]),
+      );
+      const imported = snapshotVisualFiles
+        .map(file => googleDriveService.toMemory(file, accessToken))
+        .filter(memory => {
+          const existing = memory.driveFileId ? currentByDriveId.get(memory.driveFileId) : undefined;
+          if (!existing) return true;
+          return existing.title !== memory.title ||
+            existing.date !== memory.date ||
+            existing.type !== memory.type ||
+            existing.mimeType !== memory.mimeType ||
+            existing.thumbnail !== memory.thumbnail;
+        });
+      const importedIds = new Set(imported.map(memory => memory.driveFileId).filter(Boolean));
+      const snapshotIds = new Set(snapshotVisualFiles.map(file => file.id));
+      const removed = new Set(current
+        .filter(memory => memory.driveFileId && !snapshotIds.has(memory.driveFileId))
+        .map(memory => memory.driveFileId as string));
+      const filesToCache = snapshotVisualFiles.filter(file => {
+        const existing = currentByDriveId.get(file.id);
+        return !existing || importedIds.has(file.id);
+      });
+      return { imported, removed, filesToCache };
+    };
+
     const sync = async () => {
-      if (!active || driveAuthRequiredRef.current || !acquireDriveSyncLock()) return;
-      const accessToken = readDriveAccessToken();
+      if (!active || driveAuthRequiredRef.current || readDriveAuthRequired() || !acquireDriveSyncLock()) return;
+      let accessToken = readDriveAccessToken();
       if (!accessToken) {
         releaseDriveSyncLock();
         return;
       }
       const folderId = readDriveFolderId();
       try {
-        let changePageToken = readDriveChangePageToken();
-        if (!changePageToken) {
-          const startPageToken = await googleDriveService.getStartPageToken(accessToken);
-          const files = await googleDriveService.listAllMedia(accessToken, folderId);
-          if (!active) return;
-          const imported = files.filter(file => isVisualMedia(file) && !file.trashed)
-            .map(file => googleDriveService.toMemory(file, accessToken));
-          const next = mergeDriveMemories(readDriveMemories(), imported);
-          saveDriveMemories(next, accessToken, folderId);
-          void cacheDriveMediaFiles(files, accessToken);
-          saveDriveChangePageToken(startPageToken);
-          return;
+        let result: Awaited<ReturnType<typeof reconcileFolderSnapshot>>;
+        try {
+          result = await reconcileFolderSnapshot(accessToken, folderId);
+        } catch (error) {
+          if (!isDriveAuthorizationError(error)) throw error;
+          // Access tokens expire while the TV/story screen stays open. Try a
+          // prompt-free GIS refresh before giving up on live synchronization.
+          accessToken = await googleDriveService.refreshAccessToken(undefined, true);
+          saveDriveAccessToken(accessToken);
+          driveAuthRequiredRef.current = false;
+          saveDriveAuthRequired(false);
+          result = await reconcileFolderSnapshot(accessToken, folderId);
         }
-
-        const changedFiles: DriveMediaFile[] = [];
-        const removedIds: string[] = [];
-        let nextStartPageToken = '';
-        do {
-          const page = await googleDriveService.listChanges(accessToken, changePageToken);
-          if (!active) return;
-          page.changes.forEach(change => {
-            if (change.removed || !change.file) removedIds.push(change.fileId);
-            else changedFiles.push(change.file);
-          });
-          changePageToken = page.nextPageToken || '';
-          nextStartPageToken = page.newStartPageToken || nextStartPageToken;
-        } while (changePageToken && active);
+        const { imported, removed, filesToCache } = result;
         if (!active) return;
-
-        const inFolder = (file: DriveMediaFile) => !folderId || !file.parents || file.parents.includes(folderId);
-        const removed = new Set([
-          ...removedIds,
-          ...changedFiles.filter(file => !isVisualMedia(file) || !inFolder(file) || file.trashed).map(file => file.id),
-        ]);
-        const imported = changedFiles.filter(file => isVisualMedia(file) && inFolder(file) && !file.trashed)
-          .map(file => googleDriveService.toMemory(file, accessToken));
         const next = mergeDriveMemories(readDriveMemories(), imported, removed);
         if (removed.size) {
-          removeDriveMemories(removed);
           void Promise.all(Array.from(removed).flatMap(id => [deleteCachedDriveMedia(id), deleteCachedStoryMedia(id)]));
         }
-        if (imported.length) void cacheDriveMediaFiles(changedFiles.filter(file => isVisualMedia(file) && inFolder(file)), accessToken);
+        const cachePromise = filesToCache.length
+          ? cacheDriveMediaFiles(filesToCache, accessToken)
+          : Promise.resolve();
         if (removed.size || imported.length) saveDriveMemories(next, accessToken, folderId);
-        const nextToken = nextStartPageToken || readDriveChangePageToken();
-        saveDriveChangePageToken(nextToken);
-      } catch (error) {
-        if (error instanceof Error && /Drive scan failed \(4\d\d\)/i.test(error.message)) {
-          clearDriveChangePageToken();
+        if (filesToCache.length) {
+          // The first event makes the new metadata visible immediately. The
+          // second event swaps the new item to its local blob after the
+          // background download finishes, so Story Mode never gets stuck on a
+          // missing preview or waits for a manual refresh.
+          void cachePromise.then(() => {
+            if (active && readDriveFolderId() === folderId && readDriveAccessToken() === accessToken && (removed.size || imported.length)) {
+              saveDriveMemories(readDriveMemories(), accessToken, folderId);
+            }
+          });
         }
+      } catch (error) {
         if (isDriveAuthorizationError(error)) {
           driveAuthRequiredRef.current = true;
-          // A changes cursor is scoped to the authorization session that
-          // created it. Drop it with the token so the next reconnect starts
-          // with a fresh Drive snapshot instead of retrying a stale cursor.
+          saveDriveAuthRequired(true);
           clearDriveChangePageToken();
         }
       } finally {
@@ -99,11 +121,24 @@ const DriveLiveSync: React.FC = () => {
       }
     };
 
+    syncNow = () => void sync();
+    const onFocus = () => syncNow?.();
+    const onOnline = () => syncNow?.();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') syncNow?.();
+    };
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     void sync();
-    const interval = window.setInterval(() => void sync(), 10000);
+    const interval = window.setInterval(() => void sync(), 5000);
     return () => {
       active = false;
       window.clearInterval(interval);
+      syncNow = null;
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
     };
   }, []);

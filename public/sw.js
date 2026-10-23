@@ -1,5 +1,12 @@
 const CACHE_NAME = "memoriya-runtime-v5";
-const LEGACY_TV_BROWSER = /Android\s+\d[^)]*(?:sdk_google_atv|google_atv|android\s*tv|smart[- ]?tv|hbbtv)|GoogleTV|AFT[BSM]|BRAVIA|SHIELD/i.test(self.navigator.userAgent || "");
+const LEGACY_TV_BROWSER = (() => {
+  const userAgent = self.navigator.userAgent || "";
+  const android = userAgent.match(/Android\s+(\d+)/i);
+  const chrome = userAgent.match(/(?:Chrome|Chromium)\/(\d+)/i);
+  const oldNonMobileAndroid = android && Number(android[1]) <= 9 && !/Mobile/i.test(userAgent);
+  const oldChromiumTv = chrome && Number(chrome[1]) <= 66 && !/Mobile/i.test(userAgent);
+  return Boolean(oldNonMobileAndroid || oldChromiumTv || /Geestar|Geestart|GoBrowser|Go Browser/i.test(userAgent));
+})();
 
 self.addEventListener("install", event => {
   event.waitUntil(self.skipWaiting());

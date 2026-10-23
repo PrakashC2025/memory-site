@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, VolumeX, WandSparkles, X } from 'lucide-react';
+import { HardDrive, Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, VolumeX, WandSparkles, X } from 'lucide-react';
 import { isVisualMemory, type Memory } from '../data/memories';
 import { googleDriveService, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
-import { saveDriveAccessToken } from '../services/driveLibrary';
+import { readDriveAuthRequired, saveDriveAccessToken, saveDriveAuthRequired } from '../services/driveLibrary';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
 import { readCachedDriveMedia } from '../services/driveCache';
 import { readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 import { withMediaFetch } from '../utils/mediaQueue';
 import { isLegacyTvBrowser } from '../utils/legacyBrowser';
+import { getMediaFrameKind, getMediaFrameSize } from '../utils/mediaFrames';
 
 export interface MemoryReelTitle {
   line?: string;
@@ -16,6 +17,7 @@ export interface MemoryReelTitle {
 
 export type MemoryReelTemplate =
   | 'orbit'
+  | 'polaroid-collage'
   | 'cinema'
   | 'filmstrip'
   | 'polaroid'
@@ -33,10 +35,17 @@ export type MemoryReelEffect =
   | 'waves'
   | 'cinematic'
   | 'stardust'
-  | 'neon';
+  | 'neon'
+  | 'aurora'
+  | 'prism'
+  | 'ember'
+  | 'ocean'
+  | 'rose'
+  | 'galaxy';
 
 export const MEMORY_REEL_TEMPLATES: Array<{ id: MemoryReelTemplate; name: string; description: string }> = [
   { id: 'orbit', name: 'Cinematic Camera Motion', description: 'The original camera-wall journey with depth, movement, and living frames.' },
+  { id: 'polaroid-collage', name: 'Polaroid Celebration', description: 'Warm cream paper, floating polaroids, and a family-photo collage around the hero.' },
   { id: 'cinema', name: 'Wide Cinema', description: 'A full-frame director cut with a slow, elegant Ken Burns drift.' },
   { id: 'filmstrip', name: 'Filmstrip Journey', description: 'A living horizontal reel that keeps nearby moments in view.' },
   { id: 'polaroid', name: 'Polaroid Afterglow', description: 'Warm stacked prints that feel like a memory journal.' },
@@ -56,6 +65,12 @@ export const MEMORY_REEL_EFFECTS: Array<{ id: MemoryReelEffect; name: string; de
   { id: 'cinematic', name: 'Cinematic film', description: 'Lens bloom, grain, and elegant beat flashes.' },
   { id: 'stardust', name: 'Stardust', description: 'Slow floating stars with a soft musical pulse.' },
   { id: 'neon', name: 'Neon pulse', description: 'Modern spectrum glow for energetic tracks.' },
+  { id: 'aurora', name: 'Aurora memory', description: 'Silky northern lights that rise and breathe with the song.' },
+  { id: 'prism', name: 'Prism light', description: 'Rainbow lens refractions that sparkle on every beat.' },
+  { id: 'ember', name: 'Ember glow', description: 'Warm floating embers for intimate, heartfelt memories.' },
+  { id: 'ocean', name: 'Ocean tide', description: 'Deep blue tides and soft bubbles that follow the rhythm.' },
+  { id: 'rose', name: 'Rose gold', description: 'Elegant rose-gold bloom with a gentle album-film feel.' },
+  { id: 'galaxy', name: 'Galaxy bloom', description: 'A deep-space color bloom with musical orbiting light.' },
 ];
 
 interface ReelSource {
@@ -108,9 +123,11 @@ interface LoadedMedia {
   node: HTMLImageElement | HTMLVideoElement;
   video?: HTMLVideoElement;
   aspect: number;
+  id?: string;
 }
 
 interface ReelCard {
+  id: string;
   card: HTMLDivElement;
   x: number;
   y: number;
@@ -131,35 +148,25 @@ interface DustParticle {
   phase: number;
 }
 
-const getMediaFrameSize = (aspect: number) => {
-  // Fit the complete source inside a generous frame without forcing every
-  // portrait into a landscape card. The frame is then scaled by the camera
-  // path, so this remains readable on phones, desktops, and TVs.
-  const safeAspect = clamp(Number.isFinite(aspect) && aspect > 0 ? aspect : 1.5, 0.3, 3.2);
-  const maxWidth = 560;
-  const maxHeight = 440;
-  let width = maxWidth;
-  let height = width / safeAspect;
-  if (height > maxHeight) {
-    height = maxHeight;
-    width = height * safeAspect;
-  }
-  return { width: Math.round(width), height: Math.round(height) };
-};
-
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const ease = (value: number) => value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2;
 const escapeHtml = (value: string) => String(value).replace(/[&<>\"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[character] || character));
 
 const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
+  '3gp': 'audio/3gpp',
+  '3gpp': 'audio/3gpp',
   aac: 'audio/aac',
   aif: 'audio/aiff',
   aiff: 'audio/aiff',
   amr: 'audio/amr',
+  caf: 'audio/x-caf',
   flac: 'audio/flac',
   m4a: 'audio/mp4',
   mka: 'audio/x-matroska',
+  mid: 'audio/midi',
+  midi: 'audio/midi',
+  mp2: 'audio/mpeg',
   mp3: 'audio/mpeg',
   oga: 'audio/ogg',
   ogg: 'audio/ogg',
@@ -170,17 +177,31 @@ const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
 };
 
 const audioMimeType = (name: string, fallback = '') => {
-  if (fallback.startsWith('audio/')) return fallback;
   const extension = name.split(/[?#]/)[0].split('.').pop()?.toLowerCase() || '';
-  return AUDIO_MIME_BY_EXTENSION[extension] || fallback || 'audio/mpeg';
+  return AUDIO_MIME_BY_EXTENSION[extension] || (fallback.startsWith('audio/') ? fallback : fallback || 'audio/mpeg');
 };
 
 const isAudioFile = (file: File) => file.type.startsWith('audio/')
   || Boolean(AUDIO_MIME_BY_EXTENSION[file.name.split('.').pop()?.toLowerCase() || '']);
 
 const normalizeAudioFile = (file: File) => file.type.startsWith('audio/')
+  && file.type === audioMimeType(file.name, file.type)
   ? file
-  : new File([file], file.name, { type: audioMimeType(file.name), lastModified: file.lastModified });
+  : new File([file], file.name, { type: audioMimeType(file.name, file.type), lastModified: file.lastModified });
+
+const playAudioWithTimeout = async (element: HTMLAudioElement, timeoutMs = 12000) => {
+  let timeoutId: number | undefined;
+  try {
+    await Promise.race([
+      element.play(),
+      new Promise<never>((_, reject) => {
+        timeoutId = window.setTimeout(() => reject(new Error('Audio playback timed out.')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  }
+};
 
 /**
  * The camera-wall controller ported from the supplied memoriya-reel.html.
@@ -235,10 +256,7 @@ export class MemoryReelController {
   private bassHistory: Array<{ time: number; value: number }> = [];
   private bassHistoryTotal = 0;
   private lastBeatAt = -Infinity;
-  private beatCount = 0;
   private lastRenderedShot = 0;
-  private beatFrontIndex = -1;
-  private beatFrontStarted = -Infinity;
   private parallaxX = 0;
   private parallaxY = 0;
   private pointerHandler?: (event: PointerEvent) => void;
@@ -250,13 +268,14 @@ export class MemoryReelController {
   private lastStoryPlaying = false;
   private lastAudioActive = false;
   private objectUrls = new Set<string>();
+  private loadedMedia = new Map<string, LoadedMedia>();
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
     this.options = {
-      // Give every loaded photo a complete six-second focus before the
+      // Give every loaded photo a complete six-and-a-half-second focus before the
       // camera starts its transition to the next frame.
-      hold: 6,
+      hold: 6.6,
       move: 1.2,
       loop: false,
       reducedMotion: false,
@@ -348,11 +367,13 @@ export class MemoryReelController {
   }
 
   async setItems(items: ReelSource[], preserveProgress = false) {
+    const uniqueItems = Array.from(new Map(
+      items.map(item => [item.driveFileId || item.id || item.src, item]),
+    ).values());
     const generation = ++this.loadGeneration;
     const wasPlaying = !this.paused;
     const previousElapsed = this.elapsed;
-    const keepCurrentWall = preserveProgress && this.cards.length > 0 && items.length > 0;
-    const previousObjectUrls = keepCurrentWall ? new Set(this.objectUrls) : undefined;
+    const keepCurrentWall = preserveProgress && this.cards.length > 0 && uniqueItems.length > 0;
     // A live Drive update is loaded beside the current wall. Do not pause the
     // story/audio or clear the stage while the replacement images arrive.
     if (!keepCurrentWall) {
@@ -360,9 +381,24 @@ export class MemoryReelController {
       this.revokeObjectUrls();
       this.world.innerHTML = '';
       this.cards = [];
+      this.loadedMedia.clear();
+    } else {
+      this.removeMissingMedia(new Set(uniqueItems.map(item => item.id)));
     }
-    if (!items.length) {
+    if (!uniqueItems.length) {
       this.options.onProgress?.(0, 0);
+      return;
+    }
+
+    const pendingItems = keepCurrentWall
+      ? uniqueItems.filter(item => !this.loadedMedia.has(item.id))
+      : uniqueItems;
+    let liveInsertIndex = keepCurrentWall
+      ? Math.min(this.cards.length, Math.max(0, this.lastRenderedShot + 3))
+      : this.cards.length;
+    if (!pendingItems.length) {
+      this.recalculateTotal();
+      this.render(this.elapsed);
       return;
     }
 
@@ -370,33 +406,47 @@ export class MemoryReelController {
     let resolveReady: () => void = () => undefined;
     const readyPromise = new Promise<void>(resolve => { resolveReady = resolve; });
     const loaded: LoadedMedia[] = [];
-    const reveal = (media: LoadedMedia) => {
+    const reveal = (item: ReelSource, media: LoadedMedia) => {
       if (this.destroyed || generation !== this.loadGeneration) {
         this.releaseObjectUrl(media.node instanceof HTMLImageElement ? media.node.src : '');
         return;
       }
-      loaded.push(media);
-      if (!keepCurrentWall) this.rebuildWall(loaded, preserveProgress || loaded.length > 1, previousElapsed, wasPlaying);
+      const resolvedMedia = { ...media, id: item.id };
+      this.loadedMedia.set(item.id, resolvedMedia);
+      if (keepCurrentWall) {
+        this.appendMediaCard(resolvedMedia, liveInsertIndex);
+        liveInsertIndex += 1;
+      }
+      else {
+        loaded.push(resolvedMedia);
+        // Build the first frame immediately, then append late downloads. A
+        // full wall rebuild here reshuffles the active card every time a
+        // thumbnail finishes and makes the story appear to skip suddenly.
+        if (loaded.length === 1) this.rebuildWall(loaded, preserveProgress, previousElapsed, wasPlaying);
+        else this.appendMediaCard(resolvedMedia);
+      }
       if (!ready) {
         ready = true;
         resolveReady();
       }
     };
 
-    void Promise.all(items.map(async item => {
-      const media = await this.load(item);
-      if (media) reveal(media);
-    })).then(() => {
+    let nextItemIndex = 0;
+    const workerCount = Math.min(8, pendingItems.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (nextItemIndex < pendingItems.length) {
+        const item = pendingItems[nextItemIndex];
+        nextItemIndex += 1;
+        const media = await this.load(item);
+        if (media) reveal(item, media);
+      }
+    });
+    void Promise.all(workers).then(() => {
       if (generation !== this.loadGeneration) return;
-      if (keepCurrentWall && loaded.length) {
-        // Swap the complete wall once, preserving the current story clock.
-        this.rebuildWall(loaded, true, previousElapsed, wasPlaying);
-        previousObjectUrls?.forEach(url => {
-          if (this.objectUrls.has(url)) {
-            this.objectUrls.delete(url);
-            URL.revokeObjectURL(url);
-          }
-        });
+      if (keepCurrentWall) {
+        this.recalculateTotal();
+        this.render(this.elapsed);
+        if (wasPlaying) this.play();
       }
       if (!ready) {
         ready = true;
@@ -411,8 +461,8 @@ export class MemoryReelController {
     const rows = Math.max(1, Math.ceil(loaded.length / columns));
     // Keep neighboring cards inside the 16:9 viewport so the focused frame
     // is surrounded by real memories instead of empty black space.
-    const sx = 620;
-    const sy = 460;
+    const sx = 640;
+    const sy = 500;
     let seed = 7;
     const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
@@ -426,21 +476,24 @@ export class MemoryReelController {
       // can breathe without forcing it into a landscape crop.
       const { width, height } = getMediaFrameSize(media.aspect);
       const card = document.createElement('div');
-      const aspectClass = media.aspect < 0.9 ? ' media-portrait' : media.aspect > 1.15 ? ' media-landscape' : ' media-square';
-      card.className = `card${aspectClass}${random() < 0.16 ? ' frame' : ''}`;
+      const frameKind = getMediaFrameKind(media.aspect);
+      card.className = `card media-${frameKind} frame frame-${frameKind}`;
       card.style.setProperty('--media-aspect', String(media.aspect));
       card.style.width = `${width}px`;
       card.style.height = `${height}px`;
       card.appendChild(media.node);
-      const x = (column - (columns - 1) / 2) * sx + (random() - 0.5) * 120;
-      const y = (row - (rows - 1) / 2) * sy + (random() - 0.5) * 100;
+      // Use a calm, balanced grid with only a small organic offset. The
+      // cards stay distributed around the hero instead of collapsing into a
+      // single pile when portrait and landscape sizes are mixed.
+      const x = (column - (columns - 1) / 2) * sx + (random() - 0.5) * 40;
+      const y = (row - (rows - 1) / 2) * sy + (random() - 0.5) * 30;
       // Keep cards on one plane. A large depth spread makes a nearby card
       // grow over the focused card and hide part of it.
       const z = 0;
-      const rot = (random() - 0.5) * 24;
+      const rot = (random() - 0.5) * 14;
       card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
       card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
-      return { card, x, y, z, rot, width, height, video: media.video } satisfies ReelCard;
+      return { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video } satisfies ReelCard;
     });
 
     // Shuffle camera targets without changing the spacing of the photo wall.
@@ -454,25 +507,97 @@ export class MemoryReelController {
     });
     this.lastLayoutShot = -1;
 
-    this.total = this.cards.reduce((total, card, index) => (
-      total + this.cardHold(card) + (index < this.cards.length - 1 ? this.options.move : 0)
-    ), 0) + 2.6;
+    this.recalculateTotal();
     this.elapsed = preserveProgress ? Math.min(previousElapsed, this.total) : 0;
     this.resize();
     this.render(this.elapsed);
     if (wasPlaying) this.play();
   }
 
+  private appendMediaCard(media: LoadedMedia, insertIndex = this.cards.length) {
+    if (this.cards.some(card => card.id === media.id)) return;
+    const index = this.cards.length;
+    const columns = Math.max(3, Math.ceil(Math.sqrt((index + 1) * 1.25)));
+    const rows = Math.max(1, Math.ceil((index + 1) / columns));
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    const { width, height } = getMediaFrameSize(media.aspect);
+    const card = document.createElement('div');
+    const frameKind = getMediaFrameKind(media.aspect);
+    card.className = `card media-${frameKind} frame frame-${frameKind}`;
+    card.style.setProperty('--media-aspect', String(media.aspect));
+    card.style.width = `${width}px`;
+    card.style.height = `${height}px`;
+    card.appendChild(media.node);
+    const x = (column - (columns - 1) / 2) * 640 + ((index * 17) % 40) - 20;
+    const y = (row - (rows - 1) / 2) * 500 + ((index * 13) % 30) - 15;
+    const z = 0;
+    const rot = ((index * 11) % 14) - 7;
+    card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
+    card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
+    this.world.appendChild(card);
+    this.cards.splice(Math.min(insertIndex, this.cards.length), 0, { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video });
+    this.recalculateTotal();
+    this.lastLayoutShot = -1;
+    this.render(this.elapsed);
+  }
+
+  private removeMissingMedia(keepIds: Set<string>) {
+    const activeCard = this.cards[this.shotIndexAt(this.elapsed)];
+    const activeId = activeCard?.id || '';
+    const activeOffset = activeCard ? this.elapsed - this.shotStartAt(this.shotIndexAt(this.elapsed)) : 0;
+    for (const [id, media] of this.loadedMedia) {
+      if (keepIds.has(id)) continue;
+      const card = this.cards.find(current => current.id === id);
+      card?.video?.pause();
+      card?.card.remove();
+      this.cards = this.cards.filter(current => current.id !== id);
+      const source = media.node instanceof HTMLVideoElement ? media.node.currentSrc || media.node.src : media.node.src;
+      this.releaseObjectUrl(source);
+      this.loadedMedia.delete(id);
+    }
+    this.recalculateTotal();
+    if (activeId) {
+      const nextIndex = this.cards.findIndex(card => card.id === activeId);
+      if (nextIndex >= 0) this.elapsed = Math.min(this.total, this.shotStartAt(nextIndex) + activeOffset);
+    }
+    this.lastLayoutShot = -1;
+    this.render(this.elapsed);
+  }
+
+  private shotIndexAt(time: number) {
+    let remaining = Math.max(0, time);
+    for (let index = 0; index < this.cards.length; index += 1) {
+      const step = this.cardHold(this.cards[index]) + this.options.move;
+      if (remaining < step || index === this.cards.length - 1) return index;
+      remaining -= step;
+    }
+    return 0;
+  }
+
+  private shotStartAt(index: number) {
+    return this.cards.slice(0, index).reduce((total, card) => total + this.cardHold(card) + this.options.move, 0);
+  }
+
+  private recalculateTotal() {
+    this.total = this.cards.reduce((total, card, index) => (
+      total + this.cardHold(card) + (index < this.cards.length - 1 ? this.options.move : 0)
+    ), 0) + (this.cards.length ? 2.6 : 0);
+    this.elapsed = Math.min(this.elapsed, this.total);
+  }
+
   private load(item: ReelSource): Promise<LoadedMedia | null> {
     return new Promise(resolve => {
       const isVideo = item.type === 'video' || /\.(mp4|mov|webm|m4v|avi|mkv)(\?|$)/i.test(item.src);
       let finished = false;
+      let finishedWithMedia = false;
       let attemptedFallback = false;
       let attemptedAuthenticated = false;
       let timer = 0;
       const finish = (value: LoadedMedia | null) => {
         if (finished) return;
         finished = true;
+        finishedWithMedia = Boolean(value);
         window.clearTimeout(timer);
         resolve(value);
       };
@@ -483,7 +608,12 @@ export class MemoryReelController {
         video.defaultMuted = true;
         video.volume = 0;
         video.className = 'm';
-        const finishVideo = () => finish({ node: video, video, aspect: video.videoWidth / video.videoHeight || 1.6 });
+        const finishVideo = () => {
+          // Metadata alone can produce a black frame on older TV Chromium.
+          // Reveal the card only after a decodable video frame is available.
+          if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+          finish({ node: video, video, aspect: video.videoWidth / video.videoHeight || 1.6 });
+        };
         const finishVideoPoster = () => {
           if (!item.poster) {
             finish(null);
@@ -498,8 +628,8 @@ export class MemoryReelController {
         // Some older TV decoders never fire metadata/error for a codec they
         // cannot decode. Fall back to the poster instead of hanging a story.
         timer = window.setTimeout(() => finishVideoPoster(), 8000);
-        video.onloadedmetadata = finishVideo;
         video.onloadeddata = finishVideo;
+        video.oncanplay = finishVideo;
         video.onerror = () => {
           if (item.driveFileId && item.authToken && !attemptedAuthenticated) {
             attemptedAuthenticated = true;
@@ -521,22 +651,28 @@ export class MemoryReelController {
           }
           finishVideoPoster();
         };
-        if (item.driveFileId && item.authToken) {
-          attemptedAuthenticated = true;
-          void this.loadAuthenticatedDriveImage(item)
-            .then(objectUrl => {
-              if (!objectUrl) {
-                finishVideoPoster();
+        if (item.driveFileId) {
+          // Start with the lightweight Drive source/poster. A full local
+          // original, when cached, replaces it in the background instead of
+          // delaying the first visible frame behind an auth/download request.
+          if (!readDriveAuthRequired() && item.src) {
+            video.src = item.src;
+            video.load();
+          }
+          void this.loadAuthenticatedDrivePreview(item)
+            .then(result => {
+              if (!result.objectUrl) {
+                if (readDriveAuthRequired()) finishVideoPoster();
                 return;
               }
               if (finished) {
-                this.releaseObjectUrl(objectUrl);
+                this.releaseObjectUrl(result.objectUrl);
                 return;
               }
-              video.src = objectUrl;
+              video.src = result.objectUrl;
               video.load();
             })
-            .catch(() => finishVideoPoster());
+            .catch(() => undefined);
         } else {
           video.src = item.src;
         }
@@ -601,14 +737,18 @@ export class MemoryReelController {
           }
           finish(null);
         };
-        if (item.driveFileId && item.authToken && item.src) {
-          // Never assign Drive's short-lived lh3 URL directly to an image.
-          // Fetch it with the current token and use a local object URL so a
-          // 401/403 cannot create a retry loop or a blank card.
+        if (item.driveFileId && item.src) {
+          // Paint Drive's lightweight thumbnail immediately. IndexedDB lookup
+          // and the sharper cached original must never delay the first frame.
+          if (!readDriveAuthRequired()) image.src = item.src;
           void this.loadAuthenticatedDrivePreview(item)
             .then(result => {
               if (!result.objectUrl) {
-                finish(null);
+                if (readDriveAuthRequired()) finish(null);
+                return;
+              }
+              if (finished && !finishedWithMedia) {
+                this.releaseObjectUrl(result.objectUrl);
                 return;
               }
               previewObjectUrl = result.objectUrl;
@@ -616,25 +756,14 @@ export class MemoryReelController {
               if (result.full) drivePromotionStarted = true;
               image.src = result.objectUrl;
             })
-            .catch(() => {
-              void this.loadAuthenticatedDriveImage(item)
-                .then(objectUrl => {
-                  if (!objectUrl) {
-                    finish(null);
-                    return;
-                  }
-                  previewResolvedFull = true;
-                  drivePromotionStarted = true;
-                  image.src = objectUrl;
-                })
-                .catch(() => finish(null));
-            });
-        } else if (item.driveFileId && item.authToken) {
-          attemptedAuthenticated = true;
+            .catch(() => undefined);
+        } else if (item.driveFileId) {
+          attemptedAuthenticated = Boolean(item.authToken);
           void this.loadAuthenticatedDriveImage(item)
             .then(objectUrl => {
               if (!objectUrl) {
-                finish(null);
+                if (item.src) image.src = item.src;
+                else finish(null);
                 return;
               }
               if (finished) {
@@ -645,7 +774,7 @@ export class MemoryReelController {
             })
             .catch(() => finish(null));
         } else {
-          image.src = item.src;
+          if (!readDriveAuthRequired()) image.src = item.src;
         }
         timer = window.setTimeout(() => finish(null), 12000);
       }
@@ -653,54 +782,47 @@ export class MemoryReelController {
   }
 
   private async loadAuthenticatedDriveImage(item: ReelSource) {
-    if (!item.driveFileId || !item.authToken) return '';
+    if (!item.driveFileId) return '';
     const cacheKey = item.driveFileId;
-    const driveCached = await readCachedDriveMedia(item.driveFileId);
-    const cached = driveCached?.blob || await readCachedStoryMedia(cacheKey);
-    const result = cached
-      ? { blob: cached, accessToken: item.authToken }
-      : await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(item.authToken!, item.driveFileId!));
+    const [driveCached, storyCached] = await Promise.all([
+      readCachedDriveMedia(item.driveFileId),
+      readCachedStoryMedia(cacheKey),
+    ]);
+    const cached = driveCached?.blob || storyCached;
+    if (cached) {
+      const objectUrl = URL.createObjectURL(cached);
+      this.objectUrls.add(objectUrl);
+      return objectUrl;
+    }
+    if (!item.authToken || readDriveAuthRequired()) return '';
+    let result: Awaited<ReturnType<typeof googleDriveService.downloadMediaFileWithReconnect>>;
+    try {
+      result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(item.authToken!, item.driveFileId!));
+    } catch (error) {
+      if (isDriveAuthorizationError(error)) saveDriveAuthRequired(true);
+      throw error;
+    }
     if (result.accessToken !== item.authToken) saveDriveAccessToken(result.accessToken);
     const blob = result.blob;
-    if (!cached) void writeCachedStoryMedia(cacheKey, blob, item.type === 'video' ? 'video/mp4' : blob.type);
+    if (!cached) await writeCachedStoryMedia(cacheKey, blob, item.type === 'video' ? 'video/mp4' : blob.type);
     const objectUrl = URL.createObjectURL(blob);
     this.objectUrls.add(objectUrl);
     return objectUrl;
   }
 
   private async loadAuthenticatedDrivePreview(item: ReelSource): Promise<{ objectUrl: string; full: boolean }> {
-    if (!item.driveFileId || !item.authToken) return { objectUrl: '', full: false };
-    const driveCached = await readCachedDriveMedia(item.driveFileId);
-    const cached = driveCached?.blob || await readCachedStoryMedia(item.driveFileId);
+    if (!item.driveFileId) return { objectUrl: '', full: false };
+    const [driveCached, storyCached] = await Promise.all([
+      readCachedDriveMedia(item.driveFileId),
+      readCachedStoryMedia(item.driveFileId),
+    ]);
+    const cached = driveCached?.blob || storyCached;
     if (cached) {
       const objectUrl = URL.createObjectURL(cached);
       this.objectUrls.add(objectUrl);
       return { objectUrl, full: true };
     }
-    if (!item.src) return { objectUrl: await this.loadAuthenticatedDriveImage(item), full: true };
-    // Drive's lh3/thumbnail links are short-lived and frequently return 401
-    // or 403 after a refresh. Do not request them again; use the authenticated
-    // Drive media endpoint and cache the resulting object URL instead.
-    if (/lh\d+\.googleusercontent\.com|drive\.google\.com\/thumbnail/i.test(item.src)) {
-      return { objectUrl: await this.loadAuthenticatedDriveImage(item), full: true };
-    }
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 8000);
-    try {
-      const response = await fetch(item.src, {
-        headers: { Authorization: `Bearer ${item.authToken}` },
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`Drive preview returned ${response.status}.`);
-      const blob = await response.blob();
-      if (!blob.size) throw new Error('Drive preview was empty.');
-      const objectUrl = URL.createObjectURL(blob);
-      this.objectUrls.add(objectUrl);
-      const full = /\/drive\/v3\/files\//i.test(item.src);
-      return { objectUrl, full };
-    } finally {
-      window.clearTimeout(timeout);
-    }
+    return { objectUrl: '', full: false };
   }
 
   private resize() {
@@ -782,7 +904,7 @@ export class MemoryReelController {
       this.audioContext ||= new AudioContextConstructor();
       const analyser = this.audioContext.createAnalyser();
       analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.82;
+      analyser.smoothingTimeConstant = 0.72;
       const source = this.audioContext.createMediaElementSource(sourceAudio);
       source.connect(analyser);
       analyser.connect(this.audioContext.destination);
@@ -830,23 +952,23 @@ export class MemoryReelController {
       const mid = averageBand(150, 2000);
       const treble = averageBand(2000, Math.max(2001, (this.audioContext?.sampleRate || 44100) / 2));
       const rawLevel = bass * 0.52 + mid * 0.32 + treble * 0.16;
-      this.smoothedBass = lerp(this.smoothedBass, bass, 0.15);
-      this.smoothedMid = lerp(this.smoothedMid, mid, 0.15);
-      this.smoothedTreble = lerp(this.smoothedTreble, treble, 0.15);
-      this.smoothedLevel = lerp(this.smoothedLevel, rawLevel, 0.15);
-      const now = performance.now();
+       this.smoothedBass = lerp(this.smoothedBass, bass, 0.24);
+       this.smoothedMid = lerp(this.smoothedMid, mid, 0.22);
+       this.smoothedTreble = lerp(this.smoothedTreble, treble, 0.22);
+       this.smoothedLevel = lerp(this.smoothedLevel, rawLevel, 0.24);
+       const now = performance.now();
       this.bassHistory.push({ time: now, value: bass });
       this.bassHistoryTotal += bass;
-      while (this.bassHistory.length && now - this.bassHistory[0].time > 1500) this.bassHistoryTotal -= this.bassHistory.shift()!.value;
-      const average = this.bassHistoryTotal / Math.max(1, this.bassHistory.length);
-      this.previousBass = bass;
-      if (bass > Math.max(0.18, average * 1.3) && now - this.lastBeatAt >= 250) {
+       while (this.bassHistory.length && now - this.bassHistory[0].time > 1100) this.bassHistoryTotal -= this.bassHistory.shift()!.value;
+       const average = this.bassHistoryTotal / Math.max(1, this.bassHistory.length);
+       const bassRise = bass - this.previousBass;
+       this.previousBass = bass;
+       if (bass > Math.max(0.12, average * 1.14) && bassRise > 0.012 && now - this.lastBeatAt >= 160) {
         this.lastBeatAt = now;
-        this.beatCount += 1;
         this.beatPulse = 1;
-        this.handleBeat(now);
+        this.handleBeat();
       } else {
-        this.beatPulse *= 0.84;
+         this.beatPulse *= 0.88;
       }
     } else {
       const fallbackClock = analysisAudio?.currentTime || time;
@@ -879,7 +1001,7 @@ export class MemoryReelController {
     };
   }
 
-  private handleBeat(now: number) {
+  private handleBeat() {
     if (this.options.reducedMotion || this.options.effect === 'off') return;
     const current = this.cards[this.lastRenderedShot];
     if (current) {
@@ -891,11 +1013,6 @@ export class MemoryReelController {
     requestAnimationFrame(() => this.titleEl.classList.add('beat-title'));
     this.el.classList.add('beat-flash');
     window.setTimeout(() => this.el.classList.remove('beat-flash'), 220);
-    if (this.beatCount % 4 === 0 && this.cards.length > 1) {
-      this.beatFrontIndex = (this.lastRenderedShot + 1) % this.cards.length;
-      this.beatFrontStarted = now;
-      this.cards[this.beatFrontIndex]?.card.classList.add('beat-fly-front');
-    }
   }
 
   private renderDust(metrics: { treble: number; beat: number }, playing: boolean) {
@@ -1137,6 +1254,7 @@ export class MemoryReelController {
     this.analysisAudio = undefined;
     this.world.innerHTML = '';
     this.cards = [];
+    this.loadedMedia.clear();
     this.revokeObjectUrls();
   }
 
@@ -1165,7 +1283,6 @@ export class MemoryReelController {
     if (!count) return;
     const audioMetrics = this.readAudioMetrics(time);
     const audioLevel = audioMetrics.level;
-    const audioScale = 1 + audioLevel * 0.035;
     if (!this.options.legacyTv) this.ambient.style.opacity = (0.68 + audioLevel * 0.16).toFixed(3);
     // Keep the empty space alive with a gentle music pulse. Beat and frequency
     // bands are smoothed so visuals breathe with the track instead of twitching.
@@ -1226,12 +1343,19 @@ export class MemoryReelController {
       this.lastLayoutShot = shot;
       this.el.style.setProperty('--reel-active', String(shot));
       this.cards.forEach((card, index) => {
+        const relative = index - shot;
         card.card.classList.toggle('is-active', index === shot);
+         card.card.classList.toggle('is-neighbor', Math.abs(relative) > 0 && Math.abs(relative) <= 2);
         card.card.style.setProperty('--reel-index', String(index));
         card.card.style.setProperty('--reel-offset', `${(index - shot) * 34}vw`);
         card.card.style.setProperty('--reel-angle', `${((index % 5) - 2) * 3}deg`);
         card.card.style.setProperty('--reel-depth', `${Math.min(Math.abs(index - shot) * 18, 120)}px`);
-      });
+        card.card.style.setProperty('--reel-collage-x', `${relative * 30}vw`);
+        card.card.style.setProperty('--reel-collage-y', `${relative % 2 === 0 ? 11 : -8}vh`);
+         card.card.style.setProperty('--reel-collage-rotate', `${relative * 5}deg`);
+       });
+       const activeCard = this.cards[shot]?.card;
+       if (activeCard && activeCard.parentElement === this.world) this.world.appendChild(activeCard);
     }
 
     if (shot === 0 && local < shotHold) {
@@ -1263,6 +1387,7 @@ export class MemoryReelController {
       const usesTemplateLayout = template !== 'orbit';
       const restingOpacity: Record<MemoryReelTemplate, number> = {
         orbit: 0,
+        'polaroid-collage': 0.18,
         cinema: 0,
         filmstrip: 0.24,
         polaroid: 0.2,
@@ -1273,7 +1398,7 @@ export class MemoryReelController {
         scrapbook: 0.62,
         'neon-grid': 0.62,
       };
-      this.world.style.transform = usesTemplateLayout ? 'none' : `scale(${this.scale * audioScale})`;
+      this.world.style.transform = usesTemplateLayout ? 'none' : `scale(${this.scale})`;
       const driftAmount = this.options.reducedMotion ? 0 : 1;
       const legacyCameraX = lerp(from.x, to.x, progress) + Math.sin(time * 0.22 + shot * 0.8) * 14 * driftAmount;
       const legacyCameraY = lerp(from.y, to.y, progress) + Math.cos(time * 0.18 + shot * 0.6) * 9 * driftAmount;
@@ -1321,7 +1446,7 @@ export class MemoryReelController {
       }
     } else if (this.options.reducedMotion) {
       const visibleShot = shot > 0 && local < move && progress < 0.5 ? shot - 1 : shot;
-      this.world.style.transform = `scale(${this.scale * audioScale}) translate3d(0,0,0)`;
+      this.world.style.transform = `scale(${this.scale}) translate3d(0,0,0)`;
       this.cards.forEach((card, index) => {
         // Important inline values win over template-specific CSS rules on old
         // WebViews, keeping exactly one readable frame visible at a time.
@@ -1341,23 +1466,10 @@ export class MemoryReelController {
         z: lerp(from.z, to.z, progress),
         rot: lerp(from.rot, to.rot, progress),
       };
-      const beatAge = performance.now() - this.beatFrontStarted;
-      const beatFrontActive = this.beatFrontIndex >= 0 && beatAge >= 0 && beatAge < 900;
-      if (beatFrontActive) {
-        const frontTarget = this.target(this.beatFrontIndex);
-        const flyProgress = clamp(beatAge / 900, 0, 1);
-        const spring = 1 - Math.pow(1 - flyProgress, 3);
-        camera = {
-          x: lerp(camera.x, frontTarget.x, spring),
-          y: lerp(camera.y, frontTarget.y, spring),
-          z: lerp(camera.z, frontTarget.z, spring),
-          rot: lerp(camera.rot, frontTarget.rot, spring),
-        };
-      } else if (this.beatFrontIndex >= 0 && beatAge >= 900) {
-        this.cards[this.beatFrontIndex]?.card.classList.remove('beat-fly-front');
-        this.beatFrontIndex = -1;
-      }
       const push = 100 + clamp(holdProgress, 0, 1) * 180 - dip * 360;
+      // Keep the camera close enough that the gentle zoom never clips the
+      // active frame, regardless of portrait or landscape orientation.
+      const cameraPush = Math.min(push, 130);
       const sway = Math.sin(time * 0.7) * 3 * (1 - dip);
       // Keep the same camera targets and pacing on TV, but avoid the costly
       // rotateY/rotateZ/depth stack that makes older WebViews hitch. The
@@ -1367,27 +1479,32 @@ export class MemoryReelController {
       const parallax = this.options.legacyTv ? '' : ` translate3d(${(-this.parallaxX * 16).toFixed(1)}px,${(-this.parallaxY * 12).toFixed(1)}px,0)`;
       this.world.style.transform = this.options.legacyTv
         ? `scale(${this.scale * tvZoom}) translate3d(${-camera.x}px,${-camera.y}px,0)`
-        : `scale(${this.scale * audioScale}) translate3d(0,0,${push}px) rotateY(${-6 + sway + this.parallaxX * 1.4}deg) rotateX(${this.parallaxY * -1.1}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${(-camera.x + this.parallaxX * 16).toFixed(1)}px,${(-camera.y + this.parallaxY * 12).toFixed(1)}px,${-camera.z}px)${parallax}`;
+        : `scale(${this.scale}) translate3d(0,0,${cameraPush}px) rotateY(${-6 + sway + this.parallaxX * 1.4}deg) rotateX(${this.parallaxY * -1.1}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${(-camera.x + this.parallaxX * 16).toFixed(1)}px,${(-camera.y + this.parallaxY * 12).toFixed(1)}px,${-camera.z}px)${parallax}`;
       const flyBlur = dip * 5;
       let focusedIndex = 0;
       let focusedDistance = Number.POSITIVE_INFINITY;
       this.cards.forEach((card, index) => {
+        const isActive = index === shot;
         const distance = Math.hypot(card.x - camera.x, card.y - camera.y);
         if (distance < focusedDistance) {
           focusedDistance = distance;
           focusedIndex = index;
         }
-        const blur = this.options.legacyTv ? 0 : clamp((distance - 360) / 100, 0, 5) + (distance > 360 ? flyBlur * 0.65 : 0);
+        const blur = this.options.legacyTv || isActive
+          ? 0
+          : clamp((distance - 220) / 100, 1.4, 5) + (distance > 360 ? flyBlur * 0.65 : 0);
         const near = distance < 200;
-        const drift = this.options.reducedMotion ? 0 : (index === focusedIndex ? 0.45 : 1) * (2 + audioMetrics.mid * 9);
-        const driftX = Math.sin(time * (0.22 + audioMetrics.mid * 0.12) + index * 1.7) * drift;
-        const driftY = Math.cos(time * (0.18 + audioMetrics.mid * 0.1) + index * 1.2) * drift * 0.72;
-        const driftZ = Math.sin(time * 0.14 + index) * (2 + audioMetrics.mid * 10);
-        const driftRotate = Math.sin(time * 0.16 + index * 0.8) * (0.22 + audioMetrics.mid * 0.7);
-        card.card.style.transform = `translate3d(${(card.x - card.width / 2 + driftX).toFixed(1)}px,${(card.y - card.height / 2 + driftY).toFixed(1)}px,${(card.z + driftZ).toFixed(1)}px) rotateX(${(driftRotate * 0.5).toFixed(2)}deg) rotateY(${driftRotate.toFixed(2)}deg) rotateZ(${(card.rot + driftRotate * 0.18).toFixed(2)}deg)`;
+        const drift = this.options.reducedMotion ? 0 : (index === focusedIndex ? 0.9 : 2.2);
+        const driftX = Math.sin(time * 0.22 + index * 1.7) * drift;
+         const driftY = Math.cos(time * 0.18 + index * 1.2) * drift * 0.72;
+         const driftZ = Math.sin(time * 0.14 + index) * 2.5;
+         const driftRotate = Math.sin(time * 0.16 + index * 0.8) * 0.28;
+         const heroScale = isActive ? 1.035 : 1;
+         const depthBias = this.options.template === 'orbit' ? (isActive ? 180 : -380) : 0;
+         card.card.style.transform = `translate3d(${(card.x - card.width / 2 + driftX).toFixed(1)}px,${(card.y - card.height / 2 + driftY).toFixed(1)}px,${(card.z + driftZ + depthBias).toFixed(1)}px) rotateX(${(driftRotate * 0.5).toFixed(2)}deg) rotateY(${driftRotate.toFixed(2)}deg) rotateZ(${(card.rot + driftRotate * 0.18).toFixed(2)}deg) scale(${heroScale})`;
         card.card.style.opacity = this.options.legacyTv && distance > 900 ? '0.72' : '1';
-        card.card.style.zIndex = index === focusedIndex ? '20' : '1';
-        card.card.style.filter = this.options.legacyTv
+         card.card.style.zIndex = isActive ? '50' : index === focusedIndex ? '8' : '1';
+        card.card.style.filter = isActive || this.options.legacyTv
           ? ''
           : (blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : '') + (near ? '' : ' brightness(.9)');
         if (card.video) {
@@ -1397,7 +1514,7 @@ export class MemoryReelController {
         }
       });
       this.cards.forEach((card, index) => {
-        card.card.style.zIndex = index === focusedIndex ? '20' : '1';
+         card.card.style.zIndex = index === shot ? '50' : index === focusedIndex ? '8' : '1';
       });
       const focusedMedia = this.cards[focusedIndex]?.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
       const ambientSource = focusedMedia?.currentSrc || focusedMedia?.getAttribute('src') || '';
@@ -1421,20 +1538,23 @@ const isVideoMemory = (memory: Memory) => memory.type === 'video' || Boolean(mem
 const resolveReelSources = async (memories: Memory[], signal: AbortSignal, driveAccessToken?: string) => {
   const sources = memories.flatMap(memory => {
     const video = isVideoMemory(memory);
-    const driveBacked = Boolean(memory.driveFileId && (memory.authToken || driveAccessToken));
+    const driveBacked = Boolean(memory.driveFileId);
+    const driveMediaUrl = driveBacked && driveAccessToken
+      ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(memory.driveFileId!)}?alt=media&access_token=${encodeURIComponent(driveAccessToken)}`
+      : memory.url;
     // Drive thumbnails are safe, fast first paint. Originals are fetched by
     // the controller after the thumbnail is visible.
-    const preview = video ? memory.url || memory.thumbnail : memory.thumbnail || memory.url;
+    const preview = video ? driveMediaUrl || memory.thumbnail : memory.thumbnail || driveMediaUrl;
     if (!preview && !driveBacked) return [];
     return [{
       id: memory.id,
       src: preview,
-      fallbackSrc: undefined,
+      fallbackSrc: !video && driveMediaUrl && driveMediaUrl !== preview ? driveMediaUrl : undefined,
       driveFileId: memory.driveFileId,
-      authToken: memory.authToken || driveAccessToken,
+      authToken: driveAccessToken || memory.authToken,
       rotation: memory.orientation,
       type: video ? 'video' : 'image',
-      poster: video && !driveBacked ? memory.thumbnail : undefined,
+      poster: video ? memory.thumbnail : undefined,
       label: memory.title,
     } satisfies ReelSource];
   });
@@ -1449,6 +1569,7 @@ interface MusicQueueItem {
   source?: 'local' | 'online' | 'drive';
   driveFileId?: string;
   cacheKey?: string;
+  driveAccount?: 'primary' | 'secondary';
 }
 
 const STORY_MUSIC_STORAGE_KEY = 'memoriya-story-music-v1';
@@ -1457,21 +1578,27 @@ const STORY_MUSIC_STORAGE_KEY = 'memoriya-story-music-v1';
 // opens with the requested camera journey on every device.
 const STORY_TEMPLATE_STORAGE_KEY = 'memoriya-story-template-v3';
 const STORY_EFFECT_STORAGE_KEY = 'memoriya-story-effect-v1';
+const STORY_TITLE_STORAGE_KEY = 'memoriya-story-title-v1';
 
 interface StoredStoryMusic {
   driveSongs: DriveAudioFile[];
+  secondaryDriveSongs: DriveAudioFile[];
   driveSongsLoaded: boolean;
+  driveFolderId?: string;
   queue: Array<Omit<MusicQueueItem, 'src'>>;
 }
 
-const readStoredStoryMusic = (): StoredStoryMusic | null => {
+const readStoredStoryMusic = (driveFolderId = ''): StoredStoryMusic | null => {
   try {
     const raw = window.localStorage.getItem(STORY_MUSIC_STORAGE_KEY);
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<StoredStoryMusic>;
+    if (value.driveFolderId !== undefined && value.driveFolderId !== driveFolderId) return null;
     return {
       driveSongs: Array.isArray(value.driveSongs) ? value.driveSongs : [],
+      secondaryDriveSongs: Array.isArray(value.secondaryDriveSongs) ? value.secondaryDriveSongs : [],
       driveSongsLoaded: Boolean(value.driveSongsLoaded),
+      driveFolderId: value.driveFolderId || driveFolderId,
       queue: Array.isArray(value.queue) ? value.queue.filter(track => track && track.id && track.label) : [],
     };
   } catch {
@@ -1484,6 +1611,35 @@ const writeStoredStoryMusic = (value: StoredStoryMusic) => {
     window.localStorage.setItem(STORY_MUSIC_STORAGE_KEY, JSON.stringify(value));
   } catch {
     // Local storage is optional; the current Story Mode session still works.
+  }
+};
+
+interface StoredStoryTitle extends MemoryReelTitle {
+  driveFolderId: string;
+}
+
+const readStoredStoryTitle = (driveFolderId: string, fallback?: MemoryReelTitle): MemoryReelTitle | undefined => {
+  try {
+    const raw = window.localStorage.getItem(STORY_TITLE_STORAGE_KEY);
+    if (!raw) return fallback;
+    const value = JSON.parse(raw) as Partial<StoredStoryTitle>;
+    if ((value.driveFolderId || '') !== driveFolderId) return fallback;
+    if (!value.line?.trim() && !value.big?.trim()) return fallback;
+    return { line: value.line || '', big: value.big || '' };
+  } catch {
+    return fallback;
+  }
+};
+
+const writeStoredStoryTitle = (title: MemoryReelTitle, driveFolderId: string) => {
+  try {
+    window.localStorage.setItem(STORY_TITLE_STORAGE_KEY, JSON.stringify({
+      driveFolderId,
+      line: title.line || '',
+      big: title.big || '',
+    } satisfies StoredStoryTitle));
+  } catch {
+    // Local storage is optional; the current Story Mode title still works.
   }
 };
 
@@ -1510,6 +1666,11 @@ const buildDriveAudioUrl = (song: DriveAudioFile, token: string) =>
 
 const FULLSCREEN_CONTROLS_HIDE_DELAY = 3600;
 
+const shouldStartCinemaView = () => {
+  if (typeof window === 'undefined') return false;
+  return isLegacyTvBrowser() || (window.innerWidth <= 900 && window.innerWidth > window.innerHeight);
+};
+
 type LegacyFullscreenDocument = Document & {
   webkitFullscreenElement?: Element | null;
   webkitExitFullscreen?: () => void | Promise<void>;
@@ -1521,7 +1682,11 @@ type LegacyFullscreenElement = HTMLElement & {
 
 const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, template: initialTemplate = 'orbit', autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onDriveReconnect, onClose }) => {
   const visualMemories = useMemo(() => memories.filter(isVisualMemory), [memories]);
-  const storedStoryMusic = useMemo(readStoredStoryMusic, []);
+  const storedStoryMusic = useMemo(() => readStoredStoryMusic(driveFolderId || ''), [driveFolderId]);
+  const storedStoryTitle = useMemo(
+    () => readStoredStoryTitle(driveFolderId || '', title),
+    [driveFolderId, title?.big, title?.line],
+  );
   const stageRef = useRef<HTMLDivElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const musicPanelRef = useRef<HTMLDivElement | null>(null);
@@ -1531,6 +1696,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const audioObjectUrlsRef = useRef<string[]>([]);
   const driveAccessTokenRef = useRef(driveAccessToken || '');
+  const secondaryDriveAccessTokenRef = useRef('');
   const resolvedDriveAudioSourcesRef = useRef(new Map<string, string>());
   const [resolvedSources, setResolvedSources] = useState<ReelSource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1538,10 +1704,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   const [progress, setProgress] = useState({ progress: 0, total: 0 });
-  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(shouldStartCinemaView);
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
-  const [titleDraft, setTitleDraft] = useState<MemoryReelTitle>({ line: title?.line || '', big: title?.big || '' });
-  const [activeTitle, setActiveTitle] = useState<MemoryReelTitle | undefined>(title);
+  const [titleDraft, setTitleDraft] = useState<MemoryReelTitle>({ line: storedStoryTitle?.line || '', big: storedStoryTitle?.big || '' });
+  const [activeTitle, setActiveTitle] = useState<MemoryReelTitle | undefined>(storedStoryTitle);
   const [musicOpen, setMusicOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [effectsOpen, setEffectsOpen] = useState(false);
@@ -1551,15 +1717,21 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [musicResults, setMusicResults] = useState<OpenSourceMusicTrack[]>([]);
   const [musicLoading, setMusicLoading] = useState(false);
   const [driveSongs, setDriveSongs] = useState<DriveAudioFile[]>(() => storedStoryMusic?.driveSongs || []);
+  const [secondaryDriveSongs, setSecondaryDriveSongs] = useState<DriveAudioFile[]>(() => storedStoryMusic?.secondaryDriveSongs || []);
   const [driveSongsLoaded, setDriveSongsLoaded] = useState(() => Boolean(storedStoryMusic?.driveSongsLoaded));
   const [driveSongsLoading, setDriveSongsLoading] = useState(false);
+  const [secondaryDriveSongsLoading, setSecondaryDriveSongsLoading] = useState(false);
   const [driveUploadLoading, setDriveUploadLoading] = useState(false);
   const [musicError, setMusicError] = useState('');
   const [audioLoading, setAudioLoading] = useState(false);
   const [trackLoadingId, setTrackLoadingId] = useState('');
   const [musicName, setMusicName] = useState('');
   const [musicQueue, setMusicQueue] = useState<MusicQueueItem[]>(() => audio ? [{ id: 'initial-audio', src: audio, label: 'Background music' }] : []);
+  const [currentMusicId, setCurrentMusicId] = useState('');
   const [loopEnabled, setLoopEnabled] = useState(loop);
+  const musicQueueRef = useRef<MusicQueueItem[]>([]);
+  const currentMusicIdRef = useRef('');
+  const loopEnabledRef = useRef(loop);
   const reducedMotion = usePrefersReducedMotion();
   const legacyTvMode = useMemo(isLegacyTvBrowser, []);
   const moreRequestedRef = useRef(false);
@@ -1568,10 +1740,30 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const moreConfigRef = useRef({ hasMore, loadingMore, onNeedMore });
   const fullscreenControlsTimerRef = useRef<number | null>(null);
   const driveSongsRequestRef = useRef(false);
+  const secondaryDriveSongsRequestRef = useRef(false);
+  const driveMusicFolderRef = useRef(driveFolderId || '');
   const audioManuallyStoppedRef = useRef(false);
+  musicQueueRef.current = musicQueue;
+  loopEnabledRef.current = loopEnabled;
   const audioPauseGuardRef = useRef(false);
   const musicHydratedRef = useRef(false);
   moreConfigRef.current = { hasMore, loadingMore, onNeedMore };
+  const allDriveSongs = useMemo(() => [...driveSongs, ...secondaryDriveSongs], [driveSongs, secondaryDriveSongs]);
+
+  const setCurrentMusic = (id: string) => {
+    currentMusicIdRef.current = id;
+    setCurrentMusicId(id);
+  };
+
+  useEffect(() => {
+    const nextFolder = driveFolderId || '';
+    if (driveMusicFolderRef.current === nextFolder) return;
+    driveMusicFolderRef.current = nextFolder;
+    setDriveSongs([]);
+    setDriveSongsLoaded(false);
+    setMusicQueue(current => current.filter(track => track.source !== 'drive'));
+    setMusicName('');
+  }, [driveFolderId]);
 
   useEffect(() => {
     // Story Mode owns the viewport. Without this lock, an older WebView can
@@ -1692,7 +1884,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           let blob = await readCachedStoryMedia(savedTrack.cacheKey);
           let directDriveSource = '';
           if (!blob && savedTrack.driveFileId && driveAccessToken) {
-            const song = stored.driveSongs.find(item => item.id === savedTrack.driveFileId);
+            const song = [...stored.driveSongs, ...stored.secondaryDriveSongs].find(item => item.id === savedTrack.driveFileId);
             if (song) {
               // Restore the queue immediately even when IndexedDB is cold. The
               // direct Drive source can play now and the cache can warm later.
@@ -1724,10 +1916,12 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     if (!musicHydratedRef.current) return;
     writeStoredStoryMusic({
       driveSongs,
+      secondaryDriveSongs,
       driveSongsLoaded,
+      driveFolderId: driveFolderId || '',
       queue: musicQueue.map(({ src: _src, ...track }) => track),
     });
-  }, [driveSongs, driveSongsLoaded, musicQueue]);
+  }, [driveFolderId, driveSongs, secondaryDriveSongs, driveSongsLoaded, musicQueue]);
 
   // Drive access tokens and object URLs can change while the same media set
   // is playing. They must not rebuild the reel or restart its clock.
@@ -1736,13 +1930,15 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     memory.type,
     memory.mimeType || '',
     memory.date,
-    memory.driveFileId ? '' : memory.url,
+    memory.driveFileId
+      ? (memory.url?.startsWith('blob:') || memory.thumbnail?.startsWith('blob:') ? 'cached-local' : '')
+      : memory.url,
   ].join(':')).join('|');
 
   useEffect(() => {
-    setTitleDraft({ line: title?.line || '', big: title?.big || '' });
-    setActiveTitle(title);
-  }, [title?.line, title?.big]);
+    setTitleDraft({ line: storedStoryTitle?.line || '', big: storedStoryTitle?.big || '' });
+    setActiveTitle(storedStoryTitle);
+  }, [storedStoryTitle]);
 
   useEffect(() => {
     if (sourceSignatureRef.current === sourceSignature) return;
@@ -1850,7 +2046,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     // owns only the visual timeline so it cannot reset or pause music while a
     // Drive/local blob is loading.
     const element = audioPlayerRef.current;
-    const source = sources[0] || '';
+    const activeTrack = musicQueue.find(track => track.id === currentMusicIdRef.current) || musicQueue[0];
+    const source = activeTrack?.src || sources[0] || '';
     if (element && element.src !== source) {
       audioPauseGuardRef.current = true;
       element.pause();
@@ -1873,7 +2070,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   useEffect(() => {
     if (!playing || !musicQueue.length || audioManuallyStoppedRef.current) return;
     const element = audioPlayerRef.current;
-    const source = musicQueue[0].src;
+    const activeTrack = musicQueue.find(track => track.id === currentMusicIdRef.current) || musicQueue[0];
+    const source = activeTrack.src;
     if (!element || !source) return;
     if (element.src !== source) {
       audioPauseGuardRef.current = true;
@@ -1882,7 +2080,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       element.load();
       audioPauseGuardRef.current = false;
     }
-    void element.play()
+    void playAudioWithTimeout(element)
       .then(() => setAudioPlaying(true))
       .catch(() => setAudioPlaying(false));
   }, [playing, musicQueue]);
@@ -2031,7 +2229,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const warmDriveAudioCache = async (song: DriveAudioFile, cacheKey: string, token: string) => {
     if (await readCachedStoryMedia(cacheKey)) return;
     try {
-      const result = await googleDriveService.downloadMediaFileWithReconnect(token, song.id);
+      const result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id));
       const playableBlob = normalizeDriveAudioBlob(result.blob, song);
       await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
     } catch {
@@ -2052,7 +2250,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
   const prepareDriveTrackForPlayback = async (track: MusicQueueItem, allowRefresh = false) => {
     if (track.source !== 'drive' || !track.driveFileId) return track.src;
-    const song = driveSongs.find(item => item.id === track.driveFileId);
+    const song = allDriveSongs.find(item => item.id === track.driveFileId);
     if (!song) return track.src;
     const cacheKey = track.cacheKey || driveAudioCacheKey(song);
     const rememberedSource = resolvedDriveAudioSourcesRef.current.get(cacheKey);
@@ -2060,7 +2258,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
     const createSource = async (token: string) => {
       const cached = await readCachedStoryMedia(cacheKey);
-      const blob = cached || await googleDriveService.downloadMediaFile(token, song.id);
+      const blob = cached || await withMediaFetch(() => googleDriveService.downloadMediaFile(token, song.id));
       const playableBlob = normalizeDriveAudioBlob(blob, song);
       if (!cached) void writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
       const objectUrl = URL.createObjectURL(playableBlob);
@@ -2069,13 +2267,23 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       return objectUrl;
     };
 
-    let token = driveAccessTokenRef.current || driveAccessToken;
-    if (!token) throw new Error('Connect Google Drive before playing this song.');
+    let token = track.driveAccount === 'secondary'
+      ? secondaryDriveAccessTokenRef.current
+      : driveAccessTokenRef.current || driveAccessToken;
+    const cached = await readCachedStoryMedia(cacheKey);
+    if (!token && !cached) throw new Error('This song is not cached on this device. Reconnect Google Drive once to download it.');
     try {
-      return await createSource(token);
+      return await createSource(token || '');
     } catch (error) {
       if (!allowRefresh || !isDriveAuthorizationError(error)) throw error;
-      token = await reconnectDriveForPlayback();
+      if (track.driveAccount === 'secondary') {
+        const connection = await googleDriveService.connect(undefined, 'select_account');
+        token = connection.accessToken || '';
+        if (!token) throw new Error('The second Google Drive account did not return an access token.');
+        secondaryDriveAccessTokenRef.current = token;
+      } else {
+        token = await reconnectDriveForPlayback();
+      }
       return createSource(token);
     }
   };
@@ -2106,8 +2314,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const track = musicQueue[index];
     if (!track) return;
     audioManuallyStoppedRef.current = false;
+    setCurrentMusic(track.id);
     setMusicName(track.label);
-    setMusicQueue(current => index === 0 ? current : [track, ...current.filter(item => item.id !== track.id)]);
     const element = audioPlayerRef.current;
     if (!element) return;
     setAudioLoading(true);
@@ -2128,7 +2336,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         }
         audioPauseGuardRef.current = false;
         try {
-          await element.play();
+          await playAudioWithTimeout(element);
           setAudioPlaying(true);
           setMusicError('');
           return;
@@ -2144,7 +2352,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         element.load();
       }
       audioPauseGuardRef.current = false;
-      await element.play();
+      await playAudioWithTimeout(element);
       setAudioPlaying(true);
       setMusicError('');
     } catch (error) {
@@ -2182,6 +2390,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     audioPauseGuardRef.current = false;
     setAudioPlaying(false);
     const removed = musicQueue[index];
+    if (removed?.id === currentMusicIdRef.current) setCurrentMusic('');
     if (removed?.src.startsWith('blob:')) {
       URL.revokeObjectURL(removed.src);
       audioObjectUrlsRef.current = audioObjectUrlsRef.current.filter(url => url !== removed.src);
@@ -2206,13 +2415,18 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       // expired, renew it here before giving up with a 403 message.
       let token = initialToken;
       try {
-        setDriveSongs(await googleDriveService.listAudioFiles(token));
+        const songs = await googleDriveService.listAudioFiles(token, driveFolderId);
+        setDriveSongs(songs);
+        setDriveSongsLoaded(true);
+        await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), token)));
       } catch (error) {
         if (!isDriveAuthorizationError(error)) throw error;
         token = await reconnectDriveForPlayback();
-        setDriveSongs(await googleDriveService.listAudioFiles(token));
+        const songs = await googleDriveService.listAudioFiles(token, driveFolderId);
+        setDriveSongs(songs);
+        setDriveSongsLoaded(true);
+        await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), token)));
       }
-      setDriveSongsLoaded(true);
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'Drive songs could not be loaded.');
     } finally {
@@ -2221,16 +2435,59 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     }
   };
 
-  useEffect(() => {
-    if (!driveAccessToken) {
-      setDriveSongs([]);
-      setDriveSongsLoaded(false);
+  const connectAdditionalMusicDrive = async () => {
+    if (secondaryDriveSongsRequestRef.current) return;
+    secondaryDriveSongsRequestRef.current = true;
+    setSecondaryDriveSongsLoading(true);
+    setMusicError('');
+    try {
+      // Select the account again so music can come from another Gmail Drive
+      // without replacing the Drive used for photos and live synchronization.
+      const connection = await googleDriveService.connect(undefined, 'select_account');
+      const token = connection.accessToken;
+      if (!token) throw new Error('The second Google Drive account did not return an access token.');
+      secondaryDriveAccessTokenRef.current = token;
+      const songs = await googleDriveService.listAudioFiles(token, '');
+      setSecondaryDriveSongs(songs);
+      await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), token)));
+      setMusicName(songs.length ? `${songs.length} songs from the second Drive` : 'No audio files found in the second Drive');
+    } catch (error) {
+      setMusicError(error instanceof Error ? error.message : 'The second Google Drive could not be connected.');
+    } finally {
+      setSecondaryDriveSongsLoading(false);
+      secondaryDriveSongsRequestRef.current = false;
     }
-  }, [driveAccessToken]);
+  };
+
+  useEffect(() => {
+    if (!driveAccessToken || !driveSongsLoaded) return undefined;
+    let active = true;
+    const syncDriveSongs = async () => {
+      if (driveSongsRequestRef.current) return;
+      driveSongsRequestRef.current = true;
+      try {
+        const songs = await googleDriveService.listAudioFiles(driveAccessTokenRef.current || driveAccessToken, driveFolderId);
+        if (!active) return;
+        setDriveSongs(songs);
+        await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), driveAccessTokenRef.current || driveAccessToken)));
+      } catch {
+        // Keep the last song list and cached playback available while offline.
+      } finally {
+        driveSongsRequestRef.current = false;
+      }
+    };
+    const interval = window.setInterval(() => void syncDriveSongs(), 10000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [driveAccessToken, driveFolderId, driveSongsLoaded]);
 
   const chooseDriveSong = (song: DriveAudioFile) => {
-    const token = driveAccessTokenRef.current || driveAccessToken;
-    if (!token) return;
+    const isSecondaryDriveSong = secondaryDriveSongs.some(item => item.id === song.id);
+    const token = isSecondaryDriveSong
+      ? secondaryDriveAccessTokenRef.current
+      : driveAccessTokenRef.current || driveAccessToken;
     const trackId = `drive-audio-${song.id}`;
     const existingTrack = musicQueue.find(item => item.driveFileId === song.id || item.id === trackId);
     if (existingTrack) {
@@ -2251,11 +2508,12 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     // TV, while the IndexedDB cache warms without blocking the UI.
     const selectedTrack = {
       id: trackId,
-      src: driveAudioUrl(song, token),
+      src: token ? driveAudioUrl(song, token) : '',
       label: song.name,
       source: 'drive',
       driveFileId: song.id,
       cacheKey,
+      driveAccount: isSecondaryDriveSong ? 'secondary' : 'primary',
     } satisfies MusicQueueItem;
     audioManuallyStoppedRef.current = true;
     audioPauseGuardRef.current = true;
@@ -2264,7 +2522,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setAudioPlaying(false);
     setMusicName(song.name);
     setMusicQueue(current => [selectedTrack, ...current.filter(item => item.driveFileId !== song.id && item.id !== trackId)]);
-    void warmDriveAudioCache(song, cacheKey, token);
+    if (token) void warmDriveAudioCache(song, cacheKey, token);
   };
 
   const uploadSongsToDrive = async (files: FileList | File[]) => {
@@ -2282,7 +2540,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       for (const file of nextFiles) {
         let uploaded: DriveAudioFile;
         try {
-          uploaded = await googleDriveService.uploadMedia(token, file);
+          uploaded = await googleDriveService.uploadMedia(token, file, driveFolderId);
         } catch (error) {
           throw error;
         }
@@ -2324,7 +2582,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   };
 
   const applyTitle = () => {
-    setActiveTitle({ line: titleDraft.line?.trim() || '', big: titleDraft.big?.trim() || '' });
+    const nextTitle = { line: titleDraft.line?.trim() || '', big: titleDraft.big?.trim() || '' };
+    setActiveTitle(nextTitle);
+    writeStoredStoryTitle(nextTitle, driveFolderId || '');
   };
 
   const openMusic = () => {
@@ -2350,9 +2610,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
   const playStoryAudio = async (fromUserGesture = false) => {
     const element = audioPlayerRef.current;
-    const sourceTrack = musicQueue[0];
+    const sourceTrack = musicQueue.find(track => track.id === currentMusicIdRef.current) || musicQueue[0];
     const source = sourceTrack?.src;
     if (!element || !source || audioManuallyStoppedRef.current) return false;
+    setCurrentMusic(sourceTrack.id);
     setAudioLoading(true);
     if (fromUserGesture) void controllerRef.current?.resumeAudioAnalysis().catch(() => undefined);
     try {
@@ -2368,7 +2629,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         }
         audioPauseGuardRef.current = false;
         try {
-          await element.play();
+          await playAudioWithTimeout(element);
           setAudioPlaying(true);
           setMusicError('');
           return true;
@@ -2385,7 +2646,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         element.load();
         audioPauseGuardRef.current = false;
       }
-      await element.play();
+      await playAudioWithTimeout(element);
       setAudioPlaying(true);
       setMusicError('');
       return true;
@@ -2418,23 +2679,25 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   };
 
   const advanceMusic = async () => {
-    const currentQueue = musicQueue;
+    const currentQueue = musicQueueRef.current;
     const element = audioPlayerRef.current;
     if (!currentQueue.length || !element) return;
-    if (currentQueue.length === 1 && !loopEnabled) {
+    const currentIndex = currentQueue.findIndex(track => track.id === currentMusicIdRef.current);
+    const activeIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = activeIndex + 1 < currentQueue.length
+      ? activeIndex + 1
+      : loopEnabledRef.current ? 0 : -1;
+    if (nextIndex < 0) {
       setAudioPlaying(false);
       return;
     }
 
-    const nextQueue = loopEnabled
-      ? [...currentQueue.slice(1), currentQueue[0]]
-      : currentQueue.slice(1);
-    const nextTrack = nextQueue[0];
+    const nextTrack = currentQueue[nextIndex];
     if (!nextTrack) {
       setAudioPlaying(false);
       return;
     }
-    setMusicQueue(nextQueue);
+    setCurrentMusic(nextTrack.id);
     setMusicName(nextTrack.label);
     audioManuallyStoppedRef.current = false;
     setAudioLoading(true);
@@ -2445,7 +2708,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       element.src = source;
       element.load();
       audioPauseGuardRef.current = false;
-      await element.play();
+      await playAudioWithTimeout(element);
       setAudioPlaying(true);
     } catch {
       audioPauseGuardRef.current = false;
@@ -2484,7 +2747,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           </button>
           <button type="button" onClick={() => controllerRef.current?.restart()} disabled={loading}><RotateCcw size={16} /> Replay</button>
           <button type="button" onClick={toggleFullscreen}><>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</> {fullscreen ? 'Exit' : 'Fullscreen'}</button>
-          <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Music2 size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : driveSongs.length ? `(${driveSongs.length} Drive)` : ''}</button>
+          <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Music2 size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : allDriveSongs.length ? `(${allDriveSongs.length} Drive)` : ''}</button>
           <button type="button" className={templateOpen ? 'is-active' : ''} aria-expanded={templateOpen} onClick={openTemplates}><WandSparkles size={16} /> Template</button>
           {musicQueue.length > 0 && <button type="button" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}><Volume2 size={16} /> {audioPlaying ? 'Stop music' : 'Play music'}</button>}
           {musicQueue.length > 0 && <button type="button" onClick={toggleMute} aria-pressed={audioMuted} aria-label={audioMuted ? 'Unmute music' : 'Mute music'}>{audioMuted ? <VolumeX size={16} /> : <Volume2 size={16} />} {audioMuted ? 'Unmute' : 'Mute'}</button>}
@@ -2499,7 +2762,6 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           ref={audioPlayerRef}
           className={`memory-reel-audio-player${musicOpen && musicQueue.length ? ' is-visible' : ''}`}
           controls
-          crossOrigin="anonymous"
           playsInline
           preload="metadata"
           aria-label="Story music player"
@@ -2518,8 +2780,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             setAudioLoading(false);
             setAudioPlaying(false);
             setMusicError(musicQueue[0]?.source === 'drive'
-              ? 'Drive audio could not play. Tap Reconnect Drive, then select the queued song again.'
-              : 'This audio file was downloaded, but this browser or TV cannot decode its format. MP3, M4A/AAC, WAV, OGG, and Opus are the most compatible choices.');
+              ? 'This Drive song is cached, but this browser or TV cannot decode its format. MP3 or AAC/M4A works on the widest range of phones and TVs.'
+              : 'This audio file was downloaded, but this browser or TV cannot decode its format. MP3 or AAC/M4A works on the widest range of phones and TVs.');
           }}
         />
         <div
@@ -2571,8 +2833,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               <label className="memory-reel-upload"><Upload size={15} /> Add local songs<input type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.opus,.wav,.flac,.aiff,.aif,.mka,.webm,.amr,.wma" multiple onChange={event => { chooseMusicFiles(event.target.files || []); event.currentTarget.value = ''; }} /></label>
               <label className="memory-reel-upload memory-reel-drive-upload"><Upload size={15} /> {driveUploadLoading ? 'Uploading...' : 'Upload songs to Drive'}<input type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.opus,.wav,.flac,.aiff,.aif,.mka,.webm,.amr,.wma" multiple disabled={driveUploadLoading || !driveAccessToken} onChange={event => { void uploadSongsToDrive(event.target.files || []); event.currentTarget.value = ''; }} /></label>
               {driveAccessToken && <button type="button" onClick={() => void loadDriveSongs()} disabled={driveSongsLoading}><Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : 'Load Drive songs'}</button>}
+              <button type="button" onClick={() => void connectAdditionalMusicDrive()} disabled={secondaryDriveSongsLoading}><HardDrive size={15} /> {secondaryDriveSongsLoading ? 'Connecting second Drive...' : 'Add music from another Drive'}</button>
             </div>
-            <p className="memory-reel-music-note">Only photos and videos appear in the story. Songs are used as the audio queue. Drive is checked only when you press “Load Drive songs”.</p>
+            <p className="memory-reel-music-note">Drive songs download locally for offline playback. The second Drive option asks you to choose another Gmail account and is used only for Story Mode music.</p>
             {musicError && <div className="memory-reel-music-error" role="alert">
               <p>{musicError}</p>
               {onDriveReconnect && /authorization expired|access was denied|reconnect(?: google)? drive|drive audio could not play/i.test(musicError) && <button type="button" onClick={() => void onDriveReconnect()}>Reconnect Drive</button>}
@@ -2580,32 +2843,35 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             {musicName && <p className="memory-reel-current-music">Now selected: {musicName}</p>}
             {musicQueue.length > 0 && (
               <div className="memory-reel-queue">
-                {musicQueue.map((track, index) => (
-                  <div className="memory-reel-queue-item" key={track.id}>
-                    <button type="button" className="memory-reel-queue-select" onClick={() => void playQueuedMusic(index)} aria-label={`Play ${track.label}`}><b>{index + 1}.</b> {track.label}</button>
+                {musicQueue.map((track, index) => {
+                  const isCurrent = currentMusicId === track.id;
+                  return (
+                  <div className={`memory-reel-queue-item${isCurrent ? ' is-current' : ''}`} key={track.id}>
+                    <button type="button" className="memory-reel-queue-select" onClick={() => void playQueuedMusic(index)} aria-current={isCurrent ? 'true' : undefined} aria-label={`Play ${track.label}`}><b>{index + 1}.</b> {track.label}{isCurrent && <span className="memory-reel-current-track">Playing</span>}</button>
                     <div>
                       <button type="button" onClick={() => moveMusic(index, -1)} disabled={index === 0} aria-label="Move song earlier">↑</button>
                       <button type="button" onClick={() => moveMusic(index, 1)} disabled={index === musicQueue.length - 1} aria-label="Move song later">↓</button>
                       <button type="button" onClick={() => removeMusic(index)} aria-label="Remove song">×</button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
-            {!musicQueue.length && !driveSongs.length && !musicResults.length && !musicError && (
+            {!musicQueue.length && !allDriveSongs.length && !musicResults.length && !musicError && (
               <p className="memory-reel-music-note">No song selected yet. Add a local song, search free music, or load songs from Drive.</p>
             )}
-            {driveSongs.length > 0 && (
+            {allDriveSongs.length > 0 && (
               <div className="memory-reel-drive-songs">
                 <div className="memory-reel-music-heading">Songs stored in Drive</div>
-                {driveSongs.map(song => (
+                {allDriveSongs.map(song => (
                   <button type="button" className="memory-reel-track" key={song.id} onClick={() => chooseDriveSong(song)}>
                     <strong>{musicQueue.some(track => track.driveFileId === song.id) ? '✓ Queued · ' : ''}{song.name}</strong>
                   </button>
                 ))}
               </div>
             )}
-            {driveAccessToken && driveSongsLoaded && !driveSongs.length && !musicError && (
+            {driveAccessToken && driveSongsLoaded && !allDriveSongs.length && !musicError && (
               <p className="memory-reel-music-note">No supported audio files were found in Drive. Upload an MP3, M4A, WAV, OGG, FLAC, AAC, or similar file, then press “Load Drive songs” again.</p>
             )}
             {musicResults.map(track => (

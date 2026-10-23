@@ -1,11 +1,22 @@
 /* Small, dependency-free fallbacks for older Android TV Chromium builds. */
 
+export const isLegacyTvUserAgent = (userAgent: string) => {
+  const androidVersion = userAgent.match(/Android\s+(\d+)/i)?.[1];
+  const chromeVersion = userAgent.match(/(?:Chrome|Chromium)\/(\d+)/i)?.[1];
+  const oldNonMobileAndroid = Boolean(androidVersion && Number(androidVersion) <= 9 && !/Mobile/i.test(userAgent));
+  const oldChromiumTv = Boolean(chromeVersion && Number(chromeVersion) <= 66 && !/Mobile/i.test(userAgent));
+  // Do not classify modern Android TV or Google TV as legacy: those devices
+  // should keep the full effects and visual treatment. Only old Android TV
+  // WebViews, old Chromium builds, and known store-browser UAs use the safe
+  // compatibility surface.
+  return oldNonMobileAndroid
+    || oldChromiumTv
+    || /(?:geestar|geestart|gobrowser|go browser)/i.test(userAgent);
+};
+
 export const isLegacyTvBrowser = () => {
   const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent || '';
-  // The Android TV emulator and several real TVs identify themselves as
-  // `sdk_google_atv` without including the words "Android TV". Keep mobile
-  // Android WebViews out of this path unless they advertise a TV platform.
-  return /(?:Android\s+\d[^)]*(?:sdk_google_atv|google_atv|android\s*tv|smart[- ]?tv|hbbtv|\bTV\b)|GoogleTV|AFT[BSM]|BRAVIA|SHIELD)/i.test(userAgent);
+  return isLegacyTvUserAgent(userAgent);
 };
 
 export const installLegacyBrowserSupport = () => {
@@ -13,6 +24,7 @@ export const installLegacyBrowserSupport = () => {
     queueMicrotask?: (callback: VoidFunction) => void;
     IntersectionObserver?: typeof IntersectionObserver;
     ResizeObserver?: typeof ResizeObserver;
+    AbortController?: typeof AbortController;
   };
 
   // Tailwind v4 emits its utilities inside @layer blocks. Chromium 66 (used
@@ -28,6 +40,31 @@ export const installLegacyBrowserSupport = () => {
     Object.defineProperty(browserWindow, 'queueMicrotask', {
       configurable: true,
       value: (callback: VoidFunction) => Promise.resolve().then(callback),
+    });
+  }
+
+  if (!browserWindow.AbortController) {
+    class LegacyAbortController {
+      signal = {
+        aborted: false,
+        listeners: [] as Array<() => void>,
+        addEventListener: (_type: string, listener: () => void) => {
+          this.signal.listeners.push(listener);
+        },
+        removeEventListener: (_type: string, listener: () => void) => {
+          this.signal.listeners = this.signal.listeners.filter(item => item !== listener);
+        },
+      };
+
+      abort() {
+        if (this.signal.aborted) return;
+        this.signal.aborted = true;
+        this.signal.listeners.slice().forEach(listener => listener());
+      }
+    }
+    Object.defineProperty(browserWindow, 'AbortController', {
+      configurable: true,
+      value: LegacyAbortController,
     });
   }
 

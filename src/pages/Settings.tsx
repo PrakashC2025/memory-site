@@ -39,7 +39,7 @@ const Settings: React.FC = () => {
   };
 
   return (
-    <div className="mx-auto min-h-screen max-w-4xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
+    <div className="settings-page mx-auto min-h-screen max-w-4xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
       <PageHero
         kicker="Settings"
         Icon={Sparkles}

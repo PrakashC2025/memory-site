@@ -24,10 +24,10 @@ import DriveMediaPreview from '../components/DriveMediaPreview';
 import DriveCameraCapture from '../components/DriveCameraCapture';
 import MemoryLightbox from '../components/MemoryLightbox';
 import MemoryReel from '../components/MemoryReel';
-import { isVisualMemory, type Memory } from '../data/memories';
-import { acquireDriveSyncLock, clearDriveChangePageToken, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_SESSION_KEY, readDriveAccessToken, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
+import { getMemoryAspect, isVisualMemory, type Memory } from '../data/memories';
+import { acquireDriveSyncLock, clearDriveChangePageToken, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_SESSION_KEY, readDriveAccessToken, readDriveAuthRequired, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveAuthRequired, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
 import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile, type DriveConnectionState, type DriveFolder, type DriveMediaFile } from '../services/googleDriveService';
-import { cacheDriveMediaFiles, deleteCachedDriveMedia } from '../services/driveCache';
+import { cacheDriveMediaFiles, deleteCachedDriveMedia, warmDriveFolderCache } from '../services/driveCache';
 import { deleteCachedStoryMedia } from '../services/storyMediaCache';
 import { autoEventLabel, buildDirectorPlan, type DirectorPlan } from '../services/directorPlan';
 
@@ -119,7 +119,7 @@ const Memoriya: React.FC = () => {
   const folderRequestRef = useRef(0);
   const driveSyncBusyRef = useRef(false);
   const driveChangePageTokenRef = useRef(driveChangePageToken);
-  const driveAuthRequiredRef = useRef(false);
+  const driveAuthRequiredRef = useRef(readDriveAuthRequired());
   const loaderRef = useRef<HTMLDivElement | null>(null);
   const localObjectUrlsRef = useRef<string[]>([]);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -205,7 +205,11 @@ const Memoriya: React.FC = () => {
   useEffect(() => {
     const onTokenUpdated = (event: Event) => {
       const token = (event as CustomEvent<string>).detail;
-      if (!token) return;
+      if (!token) {
+        driveAuthRequiredRef.current = true;
+        setAccessToken('');
+        return;
+      }
       driveAuthRequiredRef.current = false;
       setAccessToken(token);
       setMemories(current => current.map(memory => memory.driveFileId
@@ -232,7 +236,7 @@ const Memoriya: React.FC = () => {
     if (!accessToken) return;
     let active = true;
     const syncLatestDriveMedia = async () => {
-      if (!active || driveAuthRequiredRef.current || driveSyncBusyRef.current || !acquireDriveSyncLock()) return;
+      if (!active || driveAuthRequiredRef.current || readDriveAuthRequired() || driveSyncBusyRef.current || !acquireDriveSyncLock()) return;
       driveSyncBusyRef.current = true;
       try {
         const isMedia = (file: DriveMediaFile) => isVisualDriveFile(file);
@@ -323,6 +327,7 @@ const Memoriya: React.FC = () => {
         // poller until the user explicitly reconnects from the Drive button.
         if (isDriveAuthorizationError(syncError)) {
           driveAuthRequiredRef.current = true;
+          saveDriveAuthRequired(true);
           // A changes cursor belongs to the previous authorized Drive
           // session. Never retry it after a 401/403; the next explicit
           // reconnect must establish a fresh cursor and folder snapshot.
@@ -448,6 +453,9 @@ const Memoriya: React.FC = () => {
       setDriveFolders(availableFolders);
       const page = await googleDriveService.listMediaPage(token, '', driveFolderId);
       const added = appendDriveFiles(page.files, token);
+      // Keep downloading the complete selected folder in the background so
+      // Story Mode can open from local media immediately later.
+      void warmDriveFolderCache(token, driveFolderId).catch(() => undefined);
       setNextPageToken(page.nextPageToken || '');
       setImportCount(count => count + added);
       setMessage(added
@@ -501,6 +509,7 @@ const Memoriya: React.FC = () => {
         const next = [...localMemories, ...imported]
           .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         setSelected(currentSelected => currentSelected?.driveFileId ? next[0] || null : currentSelected);
+        saveDriveMemories(next.filter(memory => memory.driveFileId), activeToken, folderId);
         return next;
       });
       setNextPageToken(page.nextPageToken || '');
@@ -1142,12 +1151,27 @@ const StoryStage = memo<{
 
 StoryStage.displayName = 'StoryStage';
 
-const OptimizedImage = memo<{ memory: Memory; width: number; eager?: boolean }>(({ memory, eager }) => (
-  <span className="memoriya-image-wrap is-loaded">
-    <DriveMediaPreview memory={memory} eager={eager} />
-    {memory.type === 'video' && <span className="memoriya-video-chip"><Play size={13} /> Video</span>}
-  </span>
-));
+const OptimizedImage = memo<{ memory: Memory; width: number; eager?: boolean }>(({ memory, eager }) => {
+  const [aspect, setAspect] = useState(() => getMemoryAspect(memory));
+
+  useEffect(() => {
+    setAspect(getMemoryAspect(memory));
+  }, [memory.height, memory.id, memory.orientation, memory.width]);
+
+  return (
+    <span className="memoriya-image-wrap is-loaded" style={{ '--media-aspect': String(aspect) } as React.CSSProperties}>
+      <DriveMediaPreview
+        memory={memory}
+        eager={eager}
+        onDimensions={({ width, height }) => {
+          const nextAspect = getMemoryAspect({ ...memory, width, height });
+          setAspect(current => Math.abs(current - nextAspect) < 0.01 ? current : nextAspect);
+        }}
+      />
+      {memory.type === 'video' && <span className="memoriya-video-chip"><Play size={13} /> Video</span>}
+    </span>
+  );
+});
 
 OptimizedImage.displayName = 'OptimizedImage';
 

@@ -7,6 +7,7 @@
     "dev": "vite",
     "realtime": "node server/realtime-server.js",
     "build": "vite build",
+    "test": "node --test tests/compatibility.test.mjs tests/colors.test.mjs tests/media-frames.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

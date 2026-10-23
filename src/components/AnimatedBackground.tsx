@@ -31,8 +31,11 @@ const AnimatedBackground: React.FC = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
+    const matchMedia = typeof window.matchMedia === 'function'
+      ? window.matchMedia.bind(window)
+      : () => ({ matches: false });
+    const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const coarsePointer = matchMedia('(pointer: coarse)').matches;
     const lowMemory = 'deviceMemory' in navigator && Number(navigator.deviceMemory) <= 4;
     if (reduceMotion || coarsePointer || lowMemory || window.innerWidth < 820) {
       const ctx = canvas.getContext('2d');

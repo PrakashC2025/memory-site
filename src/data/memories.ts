@@ -11,6 +11,8 @@ export interface Memory {
   authToken?: string;
   driveFileId?: string;
   orientation?: number;
+  width?: number;
+  height?: number;
   mimeType?: string;
   location?: string;
   emotion?: 'joy' | 'nostalgia' | 'love' | 'adventure' | 'friendship' | 'celebration' | 'farewell';
@@ -19,6 +21,15 @@ export interface Memory {
   note?: string;
   event?: string;
 }
+
+export const getMemoryAspect = (memory: Pick<Memory, 'width' | 'height' | 'orientation'>, fallback = 1) => {
+  const safeWidth = Number(memory.width);
+  const safeHeight = Number(memory.height);
+  if (!Number.isFinite(safeWidth) || !Number.isFinite(safeHeight) || safeWidth <= 0 || safeHeight <= 0) return fallback;
+  const rawAspect = safeWidth / safeHeight;
+  const quarterTurn = Math.round((memory.orientation || 0) / 90) % 2 !== 0;
+  return quarterTurn ? 1 / rawAspect : rawAspect;
+};
 
 const AUDIO_FILE_EXTENSION = /\.(mp3|m4a|aac|ogg|oga|wav|flac|opus|webm|aiff|aif|amr|mka|wma)$/i;
 

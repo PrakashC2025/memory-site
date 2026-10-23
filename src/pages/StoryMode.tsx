@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
 import { isVisualMemory, type Memory } from '../data/memories';
-import { acquireDriveSyncLock, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, clearDriveChangePageToken, readDriveAccessToken, readDriveChangePageToken, readDriveFolderId, readDriveFolders, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
-import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile, type DriveMediaFile } from '../services/googleDriveService';
+import { acquireDriveSyncLock, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, clearDriveChangePageToken, readDriveAccessToken, readDriveAuthRequired, readDriveFolderId, readDriveFolders, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveAuthRequired, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
+import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, cacheDriveMemories, deleteCachedDriveMedia, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
 import { deleteCachedStoryMedia } from '../services/storyMediaCache';
 
@@ -25,7 +25,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const folderChangedRef = useRef(false);
   const objectUrlsRef = useRef<string[]>([]);
   const driveObjectUrlsRef = useRef<string[]>([]);
-  const driveAuthRequiredRef = useRef(false);
+  const cacheHydrationGenerationRef = useRef(0);
+  const knownDriveMemoriesRef = useRef<Memory[]>([]);
+  const driveAuthRequiredRef = useRef(readDriveAuthRequired());
   const storyMemories = localMemories.length ? localMemories : driveMemories;
 
   useEffect(() => {
@@ -39,7 +41,10 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   useEffect(() => {
     const onTokenUpdated = (event: Event) => {
       const token = (event as CustomEvent<string>).detail;
-      if (!token) return;
+      if (!token) {
+        driveAuthRequiredRef.current = true;
+        return;
+      }
       driveAuthRequiredRef.current = false;
       setDriveAccessToken(token);
       setDriveMemories(current => current.map(memory => memory.driveFileId
@@ -51,10 +56,16 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   }, []);
 
   useEffect(() => {
-    const onMemoriesUpdated = async () => {
-      if (localMemories.length) return;
-      const next = readDriveMemories().filter(memory => isVisualMemory(memory) && (!selectedFolderId || memory.driveFileId));
-      const hydrated = await hydrateCachedDriveMemories(next);
+      const onMemoriesUpdated = async () => {
+        if (localMemories.length) return;
+        const generation = ++cacheHydrationGenerationRef.current;
+        const next = readDriveMemories().filter(memory => isVisualMemory(memory) && (!selectedFolderId || memory.driveFileId));
+        knownDriveMemoriesRef.current = next;
+        const hydrated = await hydrateCachedDriveMemories(next);
+      if (generation !== cacheHydrationGenerationRef.current) {
+        releaseCachedObjectUrls(hydrated.objectUrls);
+        return;
+      }
       releaseCachedObjectUrls(driveObjectUrlsRef.current);
       driveObjectUrlsRef.current = hydrated.objectUrls;
       setDriveMemories(hydrated.memories);
@@ -83,11 +94,13 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     const folderId = selectedFolderId;
     let active = true;
     let known = seed.filter(isVisualMemory);
+    knownDriveMemoriesRef.current = known;
     let syncBusy = false;
 
     const applyCached = async (next: Memory[]) => {
+      const generation = ++cacheHydrationGenerationRef.current;
       const result = await hydrateCachedDriveMemories(next);
-      if (!active) {
+      if (!active || generation !== cacheHydrationGenerationRef.current) {
         releaseCachedObjectUrls(result.objectUrls);
         return;
       }
@@ -97,10 +110,11 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     };
 
     void applyCached(known);
-    if (token) void cacheDriveMemories(known, token).then(() => applyCached(known));
+    if (token) void cacheDriveMemories(known, token).then(() => applyCached(knownDriveMemoriesRef.current));
 
     const syncDrive = async () => {
-      if (driveAuthRequiredRef.current || syncBusy || !acquireDriveSyncLock()) return;
+      if (driveAuthRequiredRef.current || readDriveAuthRequired() || syncBusy || !acquireDriveSyncLock()) return;
+      known = knownDriveMemoriesRef.current;
       token = readDriveAccessToken() || token;
       if (!token) {
         releaseDriveSyncLock();
@@ -109,48 +123,53 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       syncBusy = true;
       setDriveError('');
       try {
-        const savedChangeToken = readDriveChangePageToken();
-        if (savedChangeToken) {
-          let changePageToken = savedChangeToken;
-          const changedFiles: DriveMediaFile[] = [];
-          const removedFileIds: string[] = [];
-          let newStartPageToken = '';
-          do {
-            const page = await googleDriveService.listChanges(token, changePageToken);
-            if (!active) return;
-            page.changes.forEach(change => {
-              if (change.removed || !change.file) removedFileIds.push(change.fileId);
-              else changedFiles.push(change.file);
-            });
-            changePageToken = page.nextPageToken || '';
-            newStartPageToken = page.newStartPageToken || newStartPageToken;
-          } while (changePageToken && active);
-          if (!active) return;
+        let files: Awaited<ReturnType<typeof googleDriveService.listAllMedia>>;
+        try {
+          files = await googleDriveService.listAllMedia(token, folderId);
+        } catch (listError) {
+          if (!isDriveAuthorizationError(listError)) throw listError;
+          token = await googleDriveService.refreshAccessToken(undefined, true);
+          saveDriveAccessToken(token);
+          driveAuthRequiredRef.current = false;
+          saveDriveAuthRequired(false);
+          files = await googleDriveService.listAllMedia(token, folderId);
+        }
+        if (!active) return;
+        const visualFiles = files.filter(file => isVisualDriveFile(file) && !file.trashed);
+        const knownByDriveId = new Map(
+          known.filter(memory => memory.driveFileId).map(memory => [memory.driveFileId as string, memory]),
+        );
+        const imported = visualFiles
+          .map(file => googleDriveService.toMemory(file, token))
+          .filter(memory => {
+            const existing = memory.driveFileId ? knownByDriveId.get(memory.driveFileId) : undefined;
+            if (!existing) return true;
+            return existing.title !== memory.title || existing.date !== memory.date || existing.type !== memory.type || existing.mimeType !== memory.mimeType || existing.thumbnail !== memory.thumbnail;
+          });
+        const importedById = new Map(imported.map(memory => [memory.driveFileId, memory]));
+        const visibleIds = new Set(visualFiles.map(file => file.id));
+        const removed = new Set(known
+          .filter(memory => memory.driveFileId && !visibleIds.has(memory.driveFileId))
+          .map(memory => memory.driveFileId as string));
+        known = known.filter(memory => !memory.driveFileId || !removed.has(memory.driveFileId));
+        known = known.map(memory => memory.driveFileId && importedById.get(memory.driveFileId)
+          ? importedById.get(memory.driveFileId)!
+          : memory);
+        const knownIds = new Set(known.map(memory => memory.driveFileId || memory.id));
+        known = [...known, ...imported.filter(memory => !knownIds.has(memory.driveFileId || memory.id))]
+          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        knownDriveMemoriesRef.current = known;
 
-          const isMedia = (file: DriveMediaFile) => isVisualDriveFile(file);
-          const inFolder = (file: DriveMediaFile) => !folderId || !file.parents || file.parents.includes(folderId);
-          const removed = new Set([
-            ...removedFileIds,
-            ...changedFiles.filter(file => !isMedia(file) || !inFolder(file) || file.trashed).map(file => file.id),
-          ]);
-          const imported = changedFiles.filter(file => isMedia(file) && inFolder(file) && !file.trashed)
-            .map(file => googleDriveService.toMemory(file, token));
-          const importedById = new Map(imported.map(memory => [memory.driveFileId, memory]));
-          known = known.filter(memory => !memory.driveFileId || !removed.has(memory.driveFileId));
-          known = known.map(memory => memory.driveFileId && importedById.get(memory.driveFileId)
-            ? importedById.get(memory.driveFileId)!
-            : memory);
-          const knownIds = new Set(known.map(memory => memory.driveFileId || memory.id));
-          known = [...known, ...imported.filter(memory => !knownIds.has(memory.driveFileId || memory.id))]
-            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-          if (removed.size) {
-            removeDriveMemories(removed);
-            void Promise.all(Array.from(removed).flatMap(id => [deleteCachedDriveMedia(id), deleteCachedStoryMedia(id)]));
-          }
-          if (imported.length) {
-            void cacheDriveMediaFiles(changedFiles.filter(file => isMedia(file) && inFolder(file)), token);
-          }
+        if (removed.size) {
+          removeDriveMemories(removed);
+          void Promise.all(Array.from(removed).flatMap(id => [deleteCachedDriveMedia(id), deleteCachedStoryMedia(id)]));
+        }
+        if (imported.length) {
+          const importedIds = new Set(imported.map(memory => memory.driveFileId).filter(Boolean));
+          void cacheDriveMediaFiles(visualFiles.filter(file => importedIds.has(file.id)), token)
+            .then(() => applyCached(knownDriveMemoriesRef.current));
+        }
+        if (removed.size || imported.length) {
           saveDriveMemories(known, token, folderId);
           setDriveMemories(current => {
             const currentById = new Map(current.map(memory => [memory.driveFileId || memory.id, memory]));
@@ -158,64 +177,15 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
             removed.forEach(id => currentById.delete(id));
             return Array.from(currentById.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
           });
-          const nextToken = newStartPageToken || savedChangeToken;
-          saveDriveChangePageToken(nextToken);
-          if (imported.length) void applyCached(known);
-          return;
+          void applyCached(known);
         }
-
-        const startPageToken = await googleDriveService.getStartPageToken(token);
-        let pageToken = '';
-        const seenIds = new Set<string>();
-        do {
-          const page = await googleDriveService.listMediaPage(token, pageToken, folderId);
-          if (!active) return;
-          page.files.forEach(file => seenIds.add(`drive-${file.id}`));
-          const knownIds = new Set(known.map(memory => memory.id));
-          const newFiles = page.files.filter(file => !knownIds.has(`drive-${file.id}`));
-          if (newFiles.length) {
-            // Append new media without replacing the active reel. Existing
-            // photos keep their order and new uploads wait for their turn.
-            const newMemories = newFiles.map(file => googleDriveService.toMemory(file, token));
-            known = [...known, ...newMemories];
-            saveDriveMemories(known, token, folderId);
-            setDriveMemories(current => [...current, ...newMemories]);
-            void cacheDriveMediaFiles(newFiles, token).then(async () => {
-              const cached = await hydrateCachedDriveMemories(newMemories);
-              if (!active || !cached.objectUrls.length) {
-                if (!active) releaseCachedObjectUrls(cached.objectUrls);
-                return;
-              }
-              driveObjectUrlsRef.current.push(...cached.objectUrls);
-              const cachedById = new Map(cached.memories.map(memory => [memory.id, memory]));
-              setDriveMemories(current => current.map(memory => cachedById.get(memory.id) || memory));
-            });
-          } else {
-            // Refresh the local cache silently when Drive has not changed.
-            void cacheDriveMediaFiles(page.files, token);
-          }
-          pageToken = page.nextPageToken || '';
-        } while (pageToken && active);
-        if (!active) return;
-        const removedIds = new Set(known.filter(memory => memory.driveFileId && !seenIds.has(memory.id)).map(memory => memory.id));
-        if (removedIds.size) {
-          const removedDriveFileIds = known
-            .filter(memory => removedIds.has(memory.id) && memory.driveFileId)
-            .map(memory => memory.driveFileId as string);
-          known = known.filter(memory => !removedIds.has(memory.id));
-          removeDriveMemories(removedDriveFileIds);
-          void Promise.all(removedDriveFileIds.flatMap(id => [deleteCachedDriveMedia(id), deleteCachedStoryMedia(id)]));
-          saveDriveMemories(known, token, folderId);
-          setDriveMemories(current => current.filter(memory => !removedIds.has(memory.id)));
-        }
-        saveDriveMemories(known, token, folderId);
-        saveDriveChangePageToken(startPageToken);
       } catch (syncError) {
         if (syncError instanceof Error && /Drive scan failed \(4\d\d\)/i.test(syncError.message)) {
           clearDriveChangePageToken();
         }
         if (isDriveAuthorizationError(syncError)) {
           driveAuthRequiredRef.current = true;
+          saveDriveAuthRequired(true);
           // The saved changes cursor is tied to the expired authorization
           // session. Clear it so reconnecting performs a clean folder scan.
           clearDriveChangePageToken();
@@ -230,11 +200,24 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       }
     };
 
+    const retryDrive = () => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+      void syncDrive();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') retryDrive();
+    };
+    window.addEventListener('online', retryDrive);
+    window.addEventListener('focus', retryDrive);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     void syncDrive();
-    const interval = window.setInterval(() => void syncDrive(), 10000);
+    const interval = window.setInterval(retryDrive, 5000);
     return () => {
       active = false;
       window.clearInterval(interval);
+      window.removeEventListener('online', retryDrive);
+      window.removeEventListener('focus', retryDrive);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [driveAccessToken, selectedFolderId]);
 

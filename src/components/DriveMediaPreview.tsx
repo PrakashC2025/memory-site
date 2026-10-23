@@ -12,9 +12,10 @@ interface Props {
   alt?: string;
   className?: string;
   eager?: boolean;
+  onDimensions?: (dimensions: { width: number; height: number }) => void;
 }
 
-const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager }) => {
+const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager, onDimensions }) => {
   const imageCandidates = useMemo(() => buildImageCandidates(memory), [memory]);
   const objectUrlRef = useRef('');
   const [imageIndex, setImageIndex] = useState(0);
@@ -24,6 +25,8 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   const [fallbackLoading, setFallbackLoading] = useState(false);
   const [videoActive, setVideoActive] = useState(Boolean(eager));
   const authAttemptedRef = useRef(false);
+  const cacheHydrationAttemptedRef = useRef(false);
+  const cacheHydrationTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
@@ -35,11 +38,41 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     setFallbackLoading(false);
     setVideoActive(Boolean(eager));
     authAttemptedRef.current = false;
+    cacheHydrationAttemptedRef.current = false;
+    if (cacheHydrationTimerRef.current) window.clearTimeout(cacheHydrationTimerRef.current);
     return () => {
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
       objectUrlRef.current = '';
     };
   }, [memory.id, memory.thumbnail, memory.url]);
+
+  useEffect(() => {
+    if (!memory.driveFileId || blobSrc || cacheHydrationAttemptedRef.current) return undefined;
+    let cancelled = false;
+    let attempt = 0;
+    cacheHydrationAttemptedRef.current = true;
+    const hydrateCachedMedia = async () => {
+      const driveCached = await readCachedDriveMedia(memory.driveFileId!);
+      const cached = driveCached?.blob || await readCachedStoryMedia(getStoryMediaCacheKey(memory));
+      if (cancelled) return;
+      if (!cached) {
+        if (attempt < 3) {
+          attempt += 1;
+          cacheHydrationTimerRef.current = window.setTimeout(() => void hydrateCachedMedia(), attempt * 1500);
+        }
+        return;
+      }
+      const objectUrl = URL.createObjectURL(cached);
+      objectUrlRef.current = objectUrl;
+      setBlobSrc(objectUrl);
+      setFailed(false);
+    };
+    void hydrateCachedMedia();
+    return () => {
+      cancelled = true;
+      if (cacheHydrationTimerRef.current) window.clearTimeout(cacheHydrationTimerRef.current);
+    };
+  }, [blobSrc, memory.driveFileId, memory.id, memory.thumbnail, memory.url]);
 
   useEffect(() => {
     const canUseDriveMedia = Boolean(memory.authToken && memory.driveFileId);
@@ -66,7 +99,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
         if (result.accessToken !== memory.authToken) saveDriveAccessToken(result.accessToken);
         const blob = result.blob;
         if (cancelled) return;
-        if (!cached) void writeCachedStoryMedia(cacheKey, blob, memory.mimeType || blob.type);
+        if (!cached) await writeCachedStoryMedia(cacheKey, blob, memory.mimeType || blob.type);
         const objectUrl = URL.createObjectURL(blob);
         objectUrlRef.current = objectUrl;
         setBlobSrc(objectUrl);
@@ -85,7 +118,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   }, [blobSrc, eager, failed, fallbackLoading, imageCandidates.length, memory.authToken, memory.driveFileId, memory.id, memory.mimeType, memory.type, videoActive]);
 
   const src = memory.type === 'video'
-    ? blobSrc || ''
+    ? blobSrc || (!memory.driveFileId ? memory.url : '')
     : blobSrc || imageCandidates[imageIndex] || '';
 
   const tryNextImage = () => {
@@ -101,22 +134,45 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     setFailed(true);
   };
 
+  const handleImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    setLoaded(true);
+    const image = event.currentTarget;
+    if (image.naturalWidth && image.naturalHeight) onDimensions?.({ width: image.naturalWidth, height: image.naturalHeight });
+  };
+
+  const handleVideoLoaded = (event: React.SyntheticEvent<HTMLVideoElement>) => {
+    setLoaded(true);
+    const video = event.currentTarget;
+    if (video.videoWidth && video.videoHeight) onDimensions?.({ width: video.videoWidth, height: video.videoHeight });
+  };
+
   return (
     <span className="drive-media-preview-wrap">
       {memory.type === 'video' && !failed && src && (videoActive || !memory.thumbnail) ? (
-        <video
-          src={src}
-          className={`${className} drive-media-preview`}
-          muted
-          playsInline
-          autoPlay={videoActive}
-          loop
-          preload={videoActive ? 'metadata' : 'none'}
-          poster={memory.driveFileId ? undefined : memory.thumbnail || undefined}
-          onLoadedData={() => setLoaded(true)}
-          onError={handleVideoError}
-          style={loaded ? undefined : { opacity: 0.48 }}
-        />
+        <>
+          {!loaded && memory.thumbnail && (
+            <img
+              src={memory.thumbnail}
+              alt={alt ?? memory.title}
+              className="drive-preview-video-underlay"
+              aria-hidden="true"
+              onError={event => { event.currentTarget.style.display = 'none'; }}
+            />
+          )}
+          <video
+            src={src}
+            className={`${className} drive-media-preview`}
+            muted
+            playsInline
+            autoPlay={videoActive}
+            loop
+            preload="metadata"
+            poster={memory.thumbnail || undefined}
+            onLoadedData={handleVideoLoaded}
+            onError={handleVideoError}
+            style={loaded ? undefined : { opacity: 0 }}
+          />
+        </>
       ) : memory.type !== 'video' && !failed && src ? (
         <img
           src={src}
@@ -125,9 +181,9 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           loading={eager ? 'eager' : 'lazy'}
           decoding="async"
           referrerPolicy="no-referrer"
-          onLoad={() => setLoaded(true)}
+          onLoad={handleImageLoad}
           onError={tryNextImage}
-          style={loaded ? undefined : { opacity: 0.48 }}
+          style={loaded ? undefined : { opacity: 0 }}
         />
       ) : memory.type === 'video' && !videoActive ? (
         <span
@@ -145,6 +201,8 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
               className={`${className} drive-media-preview`}
               loading={eager ? 'eager' : 'lazy'}
               decoding="async"
+              onLoad={handleImageLoad}
+              style={loaded ? undefined : { opacity: 0 }}
               onError={() => {
                 setFailed(true);
                 setVideoActive(true);
@@ -161,16 +219,15 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
         </span>
       ) : fallbackLoading && memory.type === 'video' && memory.thumbnail ? (
         <span className={`drive-preview-fallback ${className} drive-media-preview`}>
-          <img src={memory.thumbnail} alt={alt ?? memory.title} className="drive-preview-loading-poster" />
-          <span className="drive-preview-loading-label">
-            <span className="drive-preview-spinner" aria-hidden="true" />
-            <small>Opening video…</small>
-          </span>
+          <Play size={24} />
+          <strong>{memory.title}</strong>
+          <small>Video preview will appear when ready</small>
         </span>
       ) : fallbackLoading ? (
         <span className={`drive-preview-fallback ${className} drive-media-preview`}>
-          <span className="drive-preview-spinner" aria-hidden="true" />
-          <small>Loading original from Drive…</small>
+          <Image size={24} />
+          <strong>{memory.title}</strong>
+          <small>Preview will appear when ready</small>
         </span>
       ) : (
         <span className={`drive-preview-fallback ${className} drive-media-preview`}>

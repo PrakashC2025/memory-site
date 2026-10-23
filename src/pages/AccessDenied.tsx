@@ -12,7 +12,7 @@ const AccessDenied: React.FC<Props> = ({ email, onTryAnother }) => {
   const { config } = useTheme();
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4 py-10">
+    <div className="access-page flex min-h-screen items-center justify-center px-4 py-10">
       <motion.section
         initial={{ opacity: 0, y: 24, scale: 0.96 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}

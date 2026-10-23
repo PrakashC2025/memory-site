@@ -3,7 +3,8 @@ import { motion } from 'framer-motion';
 import { Check, Cloud, FolderOpen, Upload } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { googleDriveService, isDriveAuthorizationError, type DriveConnectionState } from '../services/googleDriveService';
-import { DRIVE_ACCESS_TOKEN_UPDATED_EVENT, readDriveAccessToken, readDriveMemories, saveDriveMemories } from '../services/driveLibrary';
+import { DRIVE_ACCESS_TOKEN_UPDATED_EVENT, readDriveAccessToken, readDriveFolderId, readDriveMemories, saveDriveMemories } from '../services/driveLibrary';
+import { warmDriveFolderCache } from '../services/driveCache';
 
 const emptyState: DriveConnectionState = {
   connected: false,
@@ -54,6 +55,7 @@ const DriveConnectPanel: React.FC = () => {
         saveDriveMemories(readDriveMemories().map(memory => memory.driveFileId
           ? { ...memory, authToken: next.accessToken }
           : memory), next.accessToken);
+        void warmDriveFolderCache(next.accessToken, readDriveFolderId()).catch(() => undefined);
       }
       setState(next);
     } catch (err) {
@@ -80,22 +82,23 @@ const DriveConnectPanel: React.FC = () => {
     setUploading(true);
     setState(current => ({ ...current, error: undefined, message: 'Uploading media to Google Drive...' }));
     try {
+      const folderId = readDriveFolderId();
       const uploaded = [];
       for (const file of nextFiles) {
         try {
-          uploaded.push(await googleDriveService.uploadMedia(accessToken, file));
+          uploaded.push(await googleDriveService.uploadMedia(accessToken, file, folderId));
         } catch (uploadError) {
           if (!isDriveAuthorizationError(uploadError)) throw uploadError;
           accessToken = await googleDriveService.refreshAccessToken();
           saveDriveMemories(readDriveMemories().map(memory => memory.driveFileId
             ? { ...memory, authToken: accessToken }
             : memory), accessToken);
-          uploaded.push(await googleDriveService.uploadMedia(accessToken, file));
+          uploaded.push(await googleDriveService.uploadMedia(accessToken, file, folderId));
         }
       }
       const currentMemories = readDriveMemories();
       const importedMemories = uploaded.map(file => googleDriveService.toMemory(file, accessToken));
-      saveDriveMemories([...currentMemories, ...importedMemories], accessToken);
+      saveDriveMemories([...currentMemories, ...importedMemories], accessToken, folderId);
       setState(current => ({
         ...current,
         connected: true,

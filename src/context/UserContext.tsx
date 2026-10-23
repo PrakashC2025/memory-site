@@ -3,6 +3,7 @@ import type { User } from '../data/memories';
 import { authService, isFirebaseConfigured } from '../services/firebaseService';
 import { clearDriveSession, saveDriveAccessToken } from '../services/driveLibrary';
 import { googleDriveService } from '../services/googleDriveService';
+import { isLegacyTvBrowser } from '../utils/legacyBrowser';
 
 const IDLE_TIMEOUT_MS = 60 * 60 * 1000;
 
@@ -46,7 +47,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     accessLevel: 'owner',
     memorySpaceId: 'local-demo',
   });
-  const [authLoading, setAuthLoading] = useState(isFirebaseConfigured);
+  const [authLoading, setAuthLoading] = useState(() => isFirebaseConfigured && !isLegacyTvBrowser());
   const [authError, setAuthError] = useState('');
   const [isMusicOn, setMusicOn] = useState(false);
   const [currentTrack, setCurrentTrack] = useState(0);
@@ -82,19 +83,23 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     let unsubscribe: () => void = () => {};
+    let cancelled = false;
     try {
       if (!isFirebaseConfigured) {
         setAuthLoading(false);
         return unsubscribe;
       }
-      unsubscribe = authService.onChange(firebaseUser => {
+      void authService.onChange(firebaseUser => {
         const nextUser = firebaseUser ? mapFirebaseUser(firebaseUser) : null;
         setUser(nextUser);
         setAuthLoading(false);
-        if (!nextUser) {
-          clearDriveSession();
-          return;
-        }
+        if (!nextUser) clearDriveSession();
+      }).then(nextUnsubscribe => {
+        if (cancelled) nextUnsubscribe();
+        else unsubscribe = nextUnsubscribe;
+      }).catch(error => {
+        setAuthError(error instanceof Error ? error.message : 'Firebase authentication failed to initialize.');
+        setAuthLoading(false);
       });
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Firebase authentication failed to initialize.');
@@ -106,6 +111,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, 3500);
 
     return () => {
+      cancelled = true;
       window.clearTimeout(fallback);
       unsubscribe();
     };

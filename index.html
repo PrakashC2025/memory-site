@@ -22,7 +22,11 @@
       // the first paint. sdk_google_atv is used by the Android 9 TV image.
       (function () {
         var ua = navigator.userAgent || '';
-        if (/(?:Android\s+\d[^)]*(?:sdk_google_atv|google_atv|android\s*tv|smart[- ]?tv|hbbtv|\bTV\b)|GoogleTV|AFT[BSM]|BRAVIA|SHIELD)/i.test(ua)) {
+        var android = ua.match(/Android\s+(\d+)/i);
+        var chrome = ua.match(/(?:Chrome|Chromium)\/(\d+)/i);
+        var oldNonMobileAndroid = android && Number(android[1]) <= 9 && !/Mobile/i.test(ua);
+        var oldChromiumTv = chrome && Number(chrome[1]) <= 66 && !/Mobile/i.test(ua);
+        if (oldNonMobileAndroid || oldChromiumTv || /(?:Geestar|Geestart|GoBrowser|Go Browser)/i.test(ua)) {
           document.documentElement.className += ' legacy-tv-browser';
         }
       }());

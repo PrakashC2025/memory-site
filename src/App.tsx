@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState } from 'react';
+import React, { Suspense, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import AppErrorBoundary from './components/AppErrorBoundary';
 import AnimatedBackground from './components/AnimatedBackground';
@@ -10,14 +10,13 @@ import { isLegacyTvBrowser } from './utils/legacyBrowser';
 import { ThemeProvider } from './context/ThemeContext';
 import { UserProvider, useUser } from './context/UserContext';
 import Login from './pages/Login';
-
-const Dashboard = lazy(() => import('./pages/Dashboard'));
-const EventExplorer = lazy(() => import('./pages/EventExplorer'));
-const Memoriya = lazy(() => import('./pages/Memoriya'));
-const MemoryTree = lazy(() => import('./pages/MemoryTree'));
-const Settings = lazy(() => import('./pages/Settings'));
-const StoryMode = lazy(() => import('./pages/StoryMode'));
-const Timeline = lazy(() => import('./pages/Timeline'));
+import Dashboard from './pages/Dashboard';
+import EventExplorer from './pages/EventExplorer';
+import Memoriya from './pages/Memoriya';
+import MemoryTree from './pages/MemoryTree';
+import Settings from './pages/Settings';
+import StoryMode from './pages/StoryMode';
+import Timeline from './pages/Timeline';
 
 type Page = 'dashboard' | 'memoriya' | 'tree' | 'timeline' | 'events' | 'story' | 'settings';
 

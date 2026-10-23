@@ -4,7 +4,6 @@ import {
   Check,
   Crop,
   Edit3,
-  FlipHorizontal,
   Grid3X3,
   Image as ImageIcon,
   Lightbulb,
@@ -86,6 +85,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const uploadWorkerRunningRef = useRef(false);
   const uploadInFlightRef = useRef(false);
   const latestQueueIdRef = useRef('');
+  const processUploadQueueRef = useRef<(() => void) | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [filter, setFilter] = useState<CameraFilter>('natural');
   const [autoEnhance, setAutoEnhance] = useState(false);
@@ -199,6 +199,21 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     if (originalPreviewUrlRef.current) URL.revokeObjectURL(originalPreviewUrlRef.current);
   }, []);
 
+  useEffect(() => {
+    const resumeWhenOnline = () => {
+      if (navigator.onLine) processUploadQueueRef.current?.();
+    };
+    const pauseWhenOffline = () => uploadAbortRef.current?.abort();
+    window.addEventListener('online', resumeWhenOnline);
+    window.addEventListener('offline', pauseWhenOffline);
+    const retryTimer = window.setInterval(resumeWhenOnline, 5000);
+    return () => {
+      window.removeEventListener('online', resumeWhenOnline);
+      window.removeEventListener('offline', pauseWhenOffline);
+      window.clearInterval(retryTimer);
+    };
+  }, []);
+
   const renderPhotoBlob = async (blob: Blob, nextFilter: CameraFilter, rotation = 0, crop: CameraCrop = 'original') => {
     if (nextFilter === 'natural' && rotation % 360 === 0 && crop === 'original') return blob;
     const bitmap = await createImageBitmap(blob);
@@ -273,11 +288,11 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   };
 
   const updatePendingCount = () => {
-    setPendingUploads(uploadQueueRef.current.length + (uploadWorkerRunningRef.current ? 1 : 0));
+    setPendingUploads(uploadQueueRef.current.length);
   };
 
-  const startUpload = async (file: File, queueId = '') => {
-    if (uploadInFlightRef.current) return;
+  const startUpload = async (file: File, queueId = ''): Promise<boolean> => {
+    if (uploadInFlightRef.current) return false;
     const controller = new AbortController();
     uploadAbortRef.current = controller;
     uploadInFlightRef.current = true;
@@ -294,19 +309,23 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         saveDriveAccessToken(token);
         uploaded = await googleDriveService.uploadMedia(token, file, folderId, controller.signal);
       }
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return false;
       if (latestQueueIdRef.current === queueId) setUploadedFile(uploaded);
       if (queueId) await deleteCachedStoryMedia(queueId);
       await writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
       onUploaded(uploaded);
       setStatus('Photo saved locally and synced to Drive.');
+      return true;
     } catch (uploadError) {
       if (controller.signal.aborted) {
-        setStatus('Upload paused. The photo remains safe locally.');
+        setStatus(navigator.onLine ? 'Upload paused. The photo remains safe locally.' : 'Offline — upload queued safely until internet returns.');
+      } else if (!navigator.onLine || uploadError instanceof TypeError || /network|offline|taking too long|failed to fetch/i.test(uploadError instanceof Error ? uploadError.message : '')) {
+        setStatus('Offline — upload queued safely until internet returns.');
       } else {
         setError(uploadError instanceof Error ? `Drive upload failed: ${uploadError.message}` : 'Drive upload failed.');
-        setStatus('Photo is safe locally. Drive upload failed.');
+        setStatus('Photo is safe locally. Upload will retry automatically.');
       }
+      return false;
     } finally {
       uploadInFlightRef.current = false;
       uploadAbortRef.current = null;
@@ -320,10 +339,13 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     updatePendingCount();
     try {
       while (uploadQueueRef.current.length) {
-        const job = uploadQueueRef.current.shift();
+        const job = uploadQueueRef.current[0];
         if (!job) break;
         updatePendingCount();
-        await startUpload(job.file, job.id);
+        const uploaded = await startUpload(job.file, job.id);
+        if (!uploaded) break;
+        uploadQueueRef.current.shift();
+        updatePendingCount();
       }
     } finally {
       uploadWorkerRunningRef.current = false;
@@ -340,6 +362,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     void processUploadQueue();
     return id;
   };
+
+  processUploadQueueRef.current = () => { void processUploadQueue(); };
 
   const removeQueuedUpload = async (queueId: string) => {
     uploadQueueRef.current = uploadQueueRef.current.filter(job => job.id !== queueId);
@@ -381,11 +405,19 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     setError('');
     setStatus('Capturing high-quality photo…');
     try {
-      const rawBlob = imageCaptureRef.current && hardwareZoomRef.current
-        ? await imageCaptureRef.current.takePhoto().catch(() => captureFromVideo())
-        : await captureFromVideo();
+      // Capture the current preview frame first. It is the same negotiated
+      // camera resolution shown on the phone and avoids the slow ImageCapture
+      // still-photo path used by some TV/WebView browsers. ImageCapture stays
+      // as a fallback for browsers that cannot expose a video frame yet.
+      let rawBlob: Blob;
+      try {
+        rawBlob = await captureFromVideo();
+      } catch (frameError) {
+        if (!imageCaptureRef.current) throw frameError;
+        rawBlob = await imageCaptureRef.current.takePhoto();
+      }
       const captureFilter = autoEnhance ? 'enhance' : filter;
-      const blob = await renderPhotoBlob(rawBlob, captureFilter);
+      const blob = captureFilter === 'natural' ? rawBlob : await renderPhotoBlob(rawBlob, captureFilter);
       const localPreviewUrl = URL.createObjectURL(blob);
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
       if (originalPreviewUrlRef.current) URL.revokeObjectURL(originalPreviewUrlRef.current);
@@ -571,16 +603,21 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
             </button>
           )}
           {gridEnabled && <div className="memoriya-camera-grid" aria-hidden="true" />}
+          <div className="memoriya-camera-corner-tools">
+            <button type="button" onClick={() => setFacingMode(value => value === 'environment' ? 'user' : 'environment')} aria-label="Switch camera">
+              <RotateCcw size={18} />
+            </button>
+            {previewUrl && <button type="button" onClick={() => setShowLastShot(value => !value)} aria-label={showLastShot ? 'Show live camera' : 'Show captured preview'}>
+              <ImageIcon size={17} />
+            </button>}
+          </div>
           <div className="memoriya-camera-viewfinder-tools">
             <button type="button" onClick={() => setGridEnabled(value => !value)} className={gridEnabled ? 'is-active' : ''} aria-label="Toggle camera grid"><Grid3X3 size={16} /></button>
             {torchAvailable && <button type="button" onClick={toggleTorch} className={torchEnabled ? 'is-active' : ''} aria-label={torchEnabled ? 'Turn flash off' : 'Turn flash on'}><Lightbulb size={16} /></button>}
           </div>
         </div>
         <div className="memoriya-camera-controls">
-          <div className="memoriya-camera-flip-stack">
-            <button type="button" onClick={() => setFacingMode(value => value === 'environment' ? 'user' : 'environment')}><FlipHorizontal size={17} /> Flip</button>
-            {previewUrl && <button type="button" className="memoriya-camera-preview-toggle" onClick={() => setShowLastShot(value => !value)}><ImageIcon size={16} /> {showLastShot ? 'Live' : 'Preview'}</button>}
-          </div>
+          <div className="memoriya-camera-control-spacer" aria-hidden="true" />
           <button type="button" className="memoriya-camera-shutter" onClick={() => void capturePhoto()} disabled={!cameraReady || capturing} aria-label="Capture and upload photo">
             {capturing ? <Loader2 className="memoriya-spin-icon" size={22} /> : <Camera size={22} />}
           </button>

@@ -1,0 +1,177 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import test from 'node:test';
+import ts from 'typescript';
+
+const root = process.cwd();
+
+const readProjectFile = fileName => readFile(path.join(root, fileName), 'utf8');
+
+const loadMediaFrames = async () => {
+  const source = await readProjectFile('src/utils/mediaFrames.ts');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2015,
+    },
+  }).outputText;
+  return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
+};
+
+test('media frames match portrait, square, landscape, and rotated source dimensions', async () => {
+  const { getMediaFrameKind, getMediaFrameSize, normalizeMediaAspect } = await loadMediaFrames();
+
+  assert.equal(getMediaFrameKind(normalizeMediaAspect(1080, 1920)), 'portrait');
+  assert.equal(getMediaFrameKind(normalizeMediaAspect(1200, 1200)), 'square');
+  assert.equal(getMediaFrameKind(normalizeMediaAspect(1920, 1080)), 'landscape');
+  assert.equal(getMediaFrameKind(normalizeMediaAspect(1080, 1920, 90)), 'landscape');
+
+  const portraitFrame = getMediaFrameSize(normalizeMediaAspect(1080, 1920));
+  const landscapeFrame = getMediaFrameSize(normalizeMediaAspect(1920, 1080));
+  assert.ok(portraitFrame.height > portraitFrame.width);
+  assert.ok(landscapeFrame.width > landscapeFrame.height);
+});
+
+test('video loading keeps a usable poster and caches before story reveal', async () => {
+  const preview = await readProjectFile('src/components/DriveMediaPreview.tsx');
+  const reel = await readProjectFile('src/components/MemoryReel.tsx');
+  const story = await readProjectFile('src/pages/StoryMode.tsx');
+  const service = await readProjectFile('src/services/googleDriveService.ts');
+  const css = await readProjectFile('src/index.css');
+  const camera = await readProjectFile('src/components/DriveCameraCapture.tsx');
+
+  assert.match(preview, /!memory\.driveFileId \? memory\.url : ''/);
+  assert.match(preview, /drive-preview-video-underlay/);
+  assert.match(preview, /onLoadedData=\{handleVideoLoaded\}/);
+  assert.match(reel, /playAudioWithTimeout/);
+  assert.match(reel, /const workerCount = Math\.min\(8, pendingItems\.length\)/);
+  assert.match(reel, /\| 'polaroid-collage'/);
+  assert.match(reel, /id: 'polaroid-collage', name: 'Polaroid Celebration'/);
+  assert.match(reel, /--reel-collage-x/);
+  assert.match(reel, /const workers = Array\.from\(\{ length: workerCount \}/);
+  assert.match(reel, /if \(keepCurrentWall\) \{[\s\S]*appendMediaCard\(resolvedMedia, liveInsertIndex\)/);
+  assert.match(reel, /item\.driveFileId \|\| item\.id \|\| item\.src/);
+  assert.match(reel, /let liveInsertIndex = keepCurrentWall/);
+  assert.match(reel, /appendMediaCard\(resolvedMedia, liveInsertIndex\)/);
+  assert.match(reel, /const cameraPush = Math\.min\(push, 130\)/);
+  assert.match(reel, /const heroScale = isActive \? 1\.035 : 1/);
+  assert.match(reel, /video\.readyState < 2/);
+  assert.doesNotMatch(reel, /video\.onloadedmetadata = finishVideo/);
+  assert.match(css, /memory-reel-template-polaroid-collage \.card\.media-portrait[\s\S]*height: min\(80%, 440px\)/);
+  assert.match(css, /card\.media-portrait[\s\S]*height: min\(80%, 440px\)/);
+  assert.match(reel, /this\.removeMissingMedia\(new Set\(uniqueItems\.map\(item => item\.id\)\)\)/);
+  assert.match(reel, /if \(wasPlaying\) this\.play\(\);/);
+  assert.match(reel, /this\.lastLayoutShot = -1;[\s\S]*this\.render\(this\.elapsed\);/);
+  assert.match(reel, /if \(!item\.driveFileId\) return ''/);
+  assert.match(reel, /if \(cached\) \{[\s\S]*URL\.createObjectURL\(cached\)/);
+  assert.match(reel, /const driveBacked = Boolean\(memory\.driveFileId\)/);
+  assert.match(reel, /memory\.url\?\.startsWith\('blob:'\) \|\| memory\.thumbnail\?\.startsWith\('blob:'\)/);
+  assert.match(reel, /return \{ objectUrl: '', full: false \};/);
+  assert.match(reel, /image\.src = item\.src;[\s\S]*loadAuthenticatedDrivePreview/);
+  assert.doesNotMatch(reel, /crossOrigin="anonymous"/);
+  assert.match(reel, /return AUDIO_MIME_BY_EXTENSION\[extension\] \|\|/);
+  assert.match(preview, /readCachedDriveMedia\(memory\.driveFileId!/);
+  assert.match(preview, /style=\{loaded \? undefined : \{ opacity: 0 \}\}/);
+  assert.match(reel, /await writeCachedStoryMedia\(cacheKey, blob/);
+  assert.match(service, /width: dimensions\?\.width/);
+  assert.match(service, /height: dimensions\?\.height/);
+  assert.match(css, /\.memoriya-album-wall > article \{[\s\S]*align-self: start;/);
+  assert.match(css, /\.memoriya-album-wall > article > button:first-child \{[\s\S]*height: fit-content;/);
+  assert.match(css, /\.memoriya-album-wall \.memoriya-image-wrap \{[\s\S]*aspect-ratio: var\(--media-aspect, 1\) !important;/);
+  assert.match(css, /\.memory-reel-stage \.memory-reel-dust-canvas \{[\s\S]*z-index: 0;/);
+  assert.match(css, /\.memory-reel-stage\.beat-flash::after \{[\s\S]*z-index: 0;/);
+  assert.match(css, /\.memory-reel-stage \.card\.is-active > \.m \{[\s\S]*filter: none !important;/);
+  assert.match(css, /\.memory-reel-stage\.memory-reel-template-orbit \.card\.is-active > \.m \{[\s\S]*width: 100% !important;[\s\S]*height: 100% !important;/);
+  assert.match(css, /\.memory-reel-stage\.memory-reel-template-orbit \.card\.is-active \{[\s\S]*z-index: 50 !important;/);
+  assert.match(css, /\.memory-reel-stage\.memory-reel-template-orbit \.card\.beat-fly-front \{[\s\S]*z-index: 12 !important;/);
+  assert.match(reel, /const depthBias = this\.options\.template === 'orbit' \? \(isActive \? 180 : -380\) : 0/);
+  assert.match(reel, /const activeCard = this\.cards\[shot\]\?\.card;/);
+  assert.match(story, /knownDriveMemoriesRef/);
+  assert.match(story, /known = knownDriveMemoriesRef\.current;/);
+  const liveSync = await readProjectFile('src/components/DriveLiveSync.tsx');
+  assert.match(liveSync, /metadata-only folder snapshot/);
+  assert.match(liveSync, /reconcileFolderSnapshot/);
+  assert.match(liveSync, /listAllMedia\(accessToken, folderId\)/);
+  assert.match(liveSync, /const snapshotIds = new Set\(snapshotVisualFiles\.map\(file => file\.id\)\)/);
+  assert.match(liveSync, /removed = new Set\(current[\s\S]*snapshotIds\.has/);
+  assert.match(liveSync, /cachePromise\.then/);
+  assert.match(liveSync, /readDriveFolderId\(\) === folderId/);
+  assert.match(story, /cacheDriveMediaFiles\(visualFiles[\s\S]*applyCached\(knownDriveMemoriesRef\.current\)/);
+  assert.match(liveSync, /addEventListener\('focus'/);
+  assert.match(liveSync, /addEventListener\('online'/);
+  assert.match(liveSync, /setInterval\(\(\) => void sync\(\), 5000\)/);
+  assert.match(liveSync, /refreshAccessToken\(undefined, true\)/);
+  assert.match(story, /files = await googleDriveService\.listAllMedia\(token, folderId\)/);
+  assert.match(story, /refreshAccessToken\(undefined, true\)/);
+  assert.match(story, /window\.addEventListener\('online', retryDrive\)/);
+  assert.match(story, /window\.setInterval\(retryDrive, 5000\)/);
+  assert.doesNotMatch(story, /googleDriveService\.listChanges\(/);
+  assert.match(reel, /const musicQueueRef = useRef<MusicQueueItem\[\]>\(\[\]\)/);
+  assert.match(reel, /const loopEnabledRef = useRef\(loop\)/);
+  assert.match(reel, /const currentQueue = musicQueueRef\.current/);
+  assert.match(reel, /loopEnabledRef\.current/);
+  assert.match(reel, /const currentMusicIdRef = useRef\(''\)/);
+  assert.match(reel, /const currentIndex = currentQueue\.findIndex/);
+  assert.match(reel, /const activeTrack = musicQueue\.find\(track => track\.id === currentMusicIdRef\.current\)/);
+  assert.match(reel, /setCurrentMusic\(nextTrack\.id\)/);
+  assert.doesNotMatch(reel, /setMusicQueue\(current => index === 0 \? current : \[track/);
+  assert.match(reel, /aria-current=\{isCurrent \? 'true' : undefined\}/);
+  assert.match(css, /\.memory-reel-queue-item\.is-current/);
+  assert.match(css, /\.memory-reel-stage\.memory-reel-template-polaroid-collage \.card\.is-active/);
+  assert.match(css, /\.memory-reel-stage\.memory-reel-template-polaroid-collage \.card\.is-neighbor/);
+  assert.match(reel, /const isActive = index === shot;/);
+  assert.match(reel, /const blur = this\.options\.legacyTv \|\| isActive/);
+  assert.match(reel, /clamp\(\(distance - 220\) \/ 100, 1\.4, 5\)/);
+  assert.match(service, /'=s1280'/);
+  assert.match(css, /Templates 01 and 02 are[\s\S]*excluded/);
+  assert.match(css, /\.memory-reel-stage\.memory-reel-template-cinema[\s\S]*--album-accent/);
+  assert.match(css, /\.ambient-effects\.effect-natural::before/);
+  assert.match(css, /\.ambient-effects\.effect-birthday \.effect-confetti/);
+  assert.match(css, /\.ambient-effects\.effect-cinematic \.effect-film-grain/);
+  assert.match(css, /@keyframes memory-reel-album-image-drift/);
+  assert.match(css, /\.memory-reel-stage\.memory-reel-template-cinema \.card\.is-active/);
+  assert.match(css, /\.memory-reel-stage\.memory-reel-template-filmstrip \.card\.is-active/);
+  assert.match(css, /\.memory-reel-stage\.memory-reel-template-neon-grid \.card\.is-active::after/);
+  assert.match(css, /@keyframes memory-reel-cinema-push/);
+  assert.match(css, /@keyframes memory-reel-ken-burns[\s\S]*scale\(1\.035\)/);
+  assert.match(css, /@keyframes memory-reel-filmstrip-travel/);
+  assert.match(css, /@keyframes memory-reel-super8-projector/);
+  assert.match(css, /var\(--beat-pulse, 0\)/);
+  assert.match(css, /@keyframes memory-reel-premium-rings/);
+  assert.match(css, /@keyframes memory-reel-lens-sweep/);
+  assert.match(css, /\.memory-reel-stage\.is-music-playing \.effect-rings/);
+  assert.match(reel, /smoothingTimeConstant = 0\.72/);
+  assert.match(reel, /bassRise > 0\.012/);
+  assert.match(reel, /now - this\.lastBeatAt >= 160/);
+  assert.match(reel, /id: 'aurora', name: 'Aurora memory'/);
+  assert.match(reel, /id: 'prism', name: 'Prism light'/);
+  assert.match(reel, /id: 'ember', name: 'Ember glow'/);
+  assert.match(reel, /id: 'ocean', name: 'Ocean tide'/);
+  assert.match(reel, /id: 'rose', name: 'Rose gold'/);
+  assert.match(reel, /id: 'galaxy', name: 'Galaxy bloom'/);
+  assert.doesNotMatch(reel, /beatFrontIndex|beatFrontStarted|audioScale/);
+  assert.match(reel, /const driftRotate = Math\.sin\(time \* 0\.16 \+ index \* 0\.8\) \* 0\.28/);
+  assert.match(css, /\.ambient-effects\.effect-aurora::before/);
+  assert.match(css, /\.ambient-effects\.effect-prism::before/);
+  assert.match(css, /\.ambient-effects\.effect-ember::before/);
+  assert.match(css, /\.ambient-effects\.effect-ocean::before/);
+  assert.match(css, /\.ambient-effects\.effect-rose::before/);
+  assert.match(css, /\.ambient-effects\.effect-galaxy::before/);
+  assert.match(reel, /const STORY_TITLE_STORAGE_KEY = 'memoriya-story-title-v1'/);
+  assert.match(reel, /readStoredStoryTitle/);
+  assert.match(reel, /writeStoredStoryTitle\(nextTitle, driveFolderId \|\| ''\)/);
+  assert.match(reel, /if \(loaded\.length === 1\) this\.rebuildWall\(loaded, preserveProgress, previousElapsed, wasPlaying\);/);
+  assert.match(reel, /else this\.appendMediaCard\(resolvedMedia\);/);
+  assert.match(reel, /const activeId = activeCard\?\.id \|\| ''/);
+  assert.match(camera, /rawBlob = await captureFromVideo\(\)/);
+  assert.match(camera, /memoriya-camera-corner-tools/);
+  assert.doesNotMatch(camera, />Flip</);
+  assert.match(camera, /window\.addEventListener\('online', resumeWhenOnline\)/);
+  assert.match(camera, /const job = uploadQueueRef\.current\[0\]/);
+  assert.match(camera, /if \(!uploaded\) break/);
+  assert.match(reel, /connectAdditionalMusicDrive/);
+  assert.match(reel, /googleDriveService\.connect\(undefined, 'select_account'\)/);
+  assert.match(reel, /secondaryDriveSongs/);
+  assert.match(reel, /Add music from another Drive/);
+});

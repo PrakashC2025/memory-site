@@ -61,6 +61,7 @@ export interface DriveAudioFile {
   id: string;
   name: string;
   mimeType: string;
+  parents?: string[];
   createdTime?: string;
   modifiedTime?: string;
 }
@@ -78,6 +79,15 @@ export const isDriveAuthorizationError = (error: unknown) =>
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
 const GOOGLE_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 const DRIVE_REQUEST_TIMEOUT_MS = 20000;
+const invalidDriveTokens = new Set<string>();
+
+const markDriveTokenInvalid = (accessToken: string) => {
+  if (!accessToken) return;
+  invalidDriveTokens.add(accessToken);
+  if (invalidDriveTokens.size > 4) invalidDriveTokens.delete(invalidDriveTokens.values().next().value as string);
+};
+
+const isDriveTokenInvalid = (accessToken: string) => invalidDriveTokens.has(accessToken);
 
 type GoogleTokenResponse = {
   access_token?: string;
@@ -134,6 +144,9 @@ const loadScript = (src: string) =>
   });
 
 const fetchDriveJson = async <T,>(url: string, accessToken: string): Promise<T> => {
+  if (isDriveTokenInvalid(accessToken)) {
+    throw new Error('Google Drive authorization expired or access was denied. Reconnect Google Drive and try again.');
+  }
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
   try {
@@ -143,6 +156,7 @@ const fetchDriveJson = async <T,>(url: string, accessToken: string): Promise<T> 
     });
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
+        markDriveTokenInvalid(accessToken);
         throw new Error('Google Drive authorization expired or access was denied. Reconnect Google Drive and try again.');
       }
       throw new Error(`Drive scan failed (${response.status}).`);
@@ -204,6 +218,7 @@ export class GoogleDriveService {
             return;
           }
 
+          invalidDriveTokens.delete(response.access_token);
           finish(() => resolve({
             connected: true,
             loading: false,
@@ -371,17 +386,18 @@ export class GoogleDriveService {
     return payload.files || [];
   }
 
-  async listAudioFiles(accessToken: string): Promise<DriveAudioFile[]> {
+  async listAudioFiles(accessToken: string, folderId = ''): Promise<DriveAudioFile[]> {
     const files: DriveAudioFile[] = [];
+    const requestedFolderId = folderId === 'drive-root' ? '' : folderId;
     let pageToken = '';
     do {
       const params = new URLSearchParams({
         // Drive uploads are sometimes labelled application/octet-stream or have
         // uppercase extensions, so fetch non-folder metadata and filter locally.
-        q: "trashed=false and mimeType != 'application/vnd.google-apps.folder'",
+        q: `${requestedFolderId ? `'${requestedFolderId}' in parents and ` : ''}trashed=false and mimeType != 'application/vnd.google-apps.folder'`,
         pageSize: '100',
         orderBy: 'modifiedTime desc',
-        fields: 'nextPageToken,files(id,name,mimeType,createdTime,modifiedTime)',
+        fields: 'nextPageToken,files(id,name,mimeType,parents,createdTime,modifiedTime)',
         spaces: 'drive',
         includeItemsFromAllDrives: 'true',
         supportsAllDrives: 'true',
@@ -401,13 +417,6 @@ export class GoogleDriveService {
   }
 
   async refreshAccessToken(loginHint?: string, silent = false): Promise<string> {
-    // Google Identity Services can still create a popup for prompt="none".
-    // Background refreshes do not have a user gesture, so browsers block that
-    // popup and log "Failed to open popup window". Reconnect only from an
-    // explicit Sync/Reconnect Drive action instead.
-    if (silent) {
-      throw new Error('Google Drive authorization expired. Click Sync Drive to reconnect.');
-    }
     if (!this.refreshPromise) {
       this.refreshPromise = this.connect(loginHint || this.loginHint, silent ? 'none' : '')
         .then(state => {
@@ -422,6 +431,9 @@ export class GoogleDriveService {
   }
 
   async downloadMediaFile(accessToken: string, fileId: string, parentSignal?: AbortSignal): Promise<Blob> {
+    if (isDriveTokenInvalid(accessToken)) {
+      throw new Error('Google Drive authorization expired. Reconnect Google Drive and try again.');
+    }
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
     const abortFromParent = () => controller.abort();
@@ -436,6 +448,7 @@ export class GoogleDriveService {
       });
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
+          markDriveTokenInvalid(accessToken);
           throw new Error('Google Drive authorization expired. Reconnect Google Drive and try again.');
         }
         throw new Error(`Drive media could not be downloaded (${response.status}).`);
@@ -488,7 +501,7 @@ export class GoogleDriveService {
       else signal.addEventListener('abort', abortFromParent, { once: true });
     }
     try {
-      const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,createdTime,modifiedTime,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata', {
+      const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,parents,createdTime,modifiedTime,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -591,6 +604,7 @@ export class GoogleDriveService {
       ? `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media${accessToken ? `&access_token=${encodeURIComponent(accessToken)}` : ''}`
       : file.webContentLink || file.thumbnailUrl;
     const previewUrl = sharpenDriveThumbnail(file.thumbnailUrl, accessToken) || mediaUrl;
+    const dimensions = isVideo ? file.videoMediaMetadata : file.imageMediaMetadata;
     return {
       id: `drive-${file.id}`,
       title: file.name.replace(/\.[^.]+$/, ''),
@@ -604,6 +618,8 @@ export class GoogleDriveService {
       authToken: accessToken,
       driveFileId: file.id,
       orientation: normalizeDriveRotation(file.imageMediaMetadata?.rotation),
+      width: dimensions?.width,
+      height: dimensions?.height,
       mimeType: file.mimeType,
       location: file.imageMediaMetadata?.location ? 'Drive GPS metadata' : undefined,
       tags: ['drive', isVideo ? 'video' : 'photo'],
@@ -648,6 +664,6 @@ export const googleDriveService = new GoogleDriveService();
 const sharpenDriveThumbnail = (url: string, _accessToken?: string) => {
   if (!url) return url;
   return url
-    .replace(/=s\d+(-[cp])?$/i, '=s960')
-    .replace(/sz=w\d+/i, 'sz=w960');
+    .replace(/=s\d+(-[cp])?$/i, '=s1280')
+    .replace(/sz=w\d+/i, 'sz=w1280');
 };

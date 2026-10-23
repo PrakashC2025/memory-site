@@ -1,6 +1,7 @@
 import { visualMemoriesOnly, type Memory } from '../data/memories';
 
 export const DRIVE_SESSION_KEY = 'memoriya-drive-session-v1';
+export const DRIVE_OFFLINE_LIBRARY_KEY = 'memoriya-drive-offline-library-v1';
 export const DRIVE_MEMORIES_UPDATED_EVENT = 'memoriya-drive-memories-updated';
 export const DRIVE_ACCESS_TOKEN_UPDATED_EVENT = 'memoriya-drive-access-token-updated';
 
@@ -18,6 +19,7 @@ export const releaseDriveSyncLock = () => {
 
 interface DriveSessionSnapshot {
   accessToken: string;
+  driveAuthRequired?: boolean;
   nextPageToken: string;
   changePageToken?: string;
   importCount: number;
@@ -27,11 +29,35 @@ interface DriveSessionSnapshot {
   driveFolders?: Array<{ id: string; name: string }>;
 }
 
-export const readDriveMemories = () => {
+type OfflineDriveSnapshot = {
+  memories: Memory[];
+  driveFolderId?: string;
+  driveFolders?: Array<{ id: string; name: string }>;
+  savedAt: number;
+};
+
+const readStoredSnapshot = <T,>(key: string, storage: Storage) => {
   try {
-    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
-    if (!stored) return [];
-    const snapshot = JSON.parse(stored) as DriveSessionSnapshot;
+    const stored = storage.getItem(key);
+    return stored ? JSON.parse(stored) as T : null;
+  } catch {
+    return null;
+  }
+};
+
+const saveOfflineSnapshot = (snapshot: OfflineDriveSnapshot) => {
+  try {
+    window.localStorage.setItem(DRIVE_OFFLINE_LIBRARY_KEY, JSON.stringify(snapshot));
+  } catch {
+    // IndexedDB media blobs remain available even when metadata storage is denied.
+  }
+};
+
+export const readDriveMemories = () => {
+  const session = readStoredSnapshot<DriveSessionSnapshot>(DRIVE_SESSION_KEY, window.sessionStorage);
+  const snapshot = session || readStoredSnapshot<OfflineDriveSnapshot>(DRIVE_OFFLINE_LIBRARY_KEY, window.localStorage);
+  if (!snapshot) return [];
+  try {
     // Keep the local session metadata after the short-lived OAuth token expires.
     // Story Mode can still play the IndexedDB blobs, while the main screen can
     // ask the user to sync again when Drive needs a fresh token.
@@ -54,14 +80,35 @@ export const readDriveAccessToken = () => {
   }
 };
 
-export const readDriveFolderId = () => {
+export const readDriveAuthRequired = () => {
   try {
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
-    if (!stored) return '';
-    return (JSON.parse(stored) as DriveSessionSnapshot).driveFolderId || '';
+    if (!stored) return false;
+    return Boolean((JSON.parse(stored) as DriveSessionSnapshot).driveAuthRequired);
   } catch {
-    return '';
+    return false;
   }
+};
+
+export const saveDriveAuthRequired = (required: boolean) => {
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    if (!stored) return;
+    const current = JSON.parse(stored) as Partial<DriveSessionSnapshot>;
+    window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
+      ...current,
+      driveAuthRequired: required,
+      savedAt: Date.now(),
+    }));
+    if (required) window.dispatchEvent(new CustomEvent(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, { detail: '' }));
+  } catch {
+    // The in-memory sync guard still prevents repeated requests in this page.
+  }
+};
+
+export const readDriveFolderId = () => {
+  const session = readStoredSnapshot<DriveSessionSnapshot>(DRIVE_SESSION_KEY, window.sessionStorage);
+  return session?.driveFolderId || readStoredSnapshot<OfflineDriveSnapshot>(DRIVE_OFFLINE_LIBRARY_KEY, window.localStorage)?.driveFolderId || '';
 };
 
 export const readDriveChangePageToken = () => {
@@ -102,24 +149,20 @@ export const clearDriveChangePageToken = () => {
 };
 
 export const readDriveFolders = () => {
-  try {
-    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
-    if (!stored) return [];
-    const folders = (JSON.parse(stored) as DriveSessionSnapshot).driveFolders || [];
-    return folders.filter(folder => folder.id && folder.id !== 'drive-root');
-  } catch {
-    return [];
-  }
+  const session = readStoredSnapshot<DriveSessionSnapshot>(DRIVE_SESSION_KEY, window.sessionStorage);
+  const folders = session?.driveFolders || readStoredSnapshot<OfflineDriveSnapshot>(DRIVE_OFFLINE_LIBRARY_KEY, window.localStorage)?.driveFolders || [];
+  return folders.filter(folder => folder.id && folder.id !== 'drive-root');
 };
 
 export const saveDriveMemories = (memories: Memory[], accessToken: string, driveFolderId = '') => {
+  const visualMemories = visualMemoriesOnly(memories);
   try {
-    const visualMemories = visualMemoriesOnly(memories);
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
     const current = stored ? JSON.parse(stored) as Partial<DriveSessionSnapshot> : {};
     window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
       ...current,
       accessToken,
+      driveAuthRequired: false,
       memories: visualMemories,
       driveFolderId,
       nextPageToken: '',
@@ -130,6 +173,12 @@ export const saveDriveMemories = (memories: Memory[], accessToken: string, drive
   } catch {
     // Session storage is optional; IndexedDB remains the playback cache.
   }
+  saveOfflineSnapshot({
+    memories: visualMemories.map(({ authToken: _authToken, ...memory }) => memory),
+    driveFolderId,
+    driveFolders: readDriveFolders(),
+    savedAt: Date.now(),
+  });
 };
 
 export const removeDriveMemories = (driveFileIds: Iterable<string>) => {
@@ -149,6 +198,12 @@ export const removeDriveMemories = (driveFileIds: Iterable<string>) => {
       nextPageToken: current.nextPageToken || '',
       savedAt: Date.now(),
     }));
+    saveOfflineSnapshot({
+      memories: next.map(({ authToken: _authToken, ...memory }) => memory),
+      driveFolderId: current.driveFolderId,
+      driveFolders: current.driveFolders,
+      savedAt: Date.now(),
+    });
     window.dispatchEvent(new CustomEvent(DRIVE_MEMORIES_UPDATED_EVENT));
   } catch {
     // Session storage is optional; in-memory state still removes the media.
@@ -166,6 +221,7 @@ export const saveDriveAccessToken = (accessToken: string) => {
     window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
       ...current,
       accessToken,
+      driveAuthRequired: false,
       memories,
       nextPageToken: current.nextPageToken || '',
       importCount: current.importCount || memories.length,
@@ -180,6 +236,7 @@ export const saveDriveAccessToken = (accessToken: string) => {
 export const clearDriveSession = () => {
   try {
     window.sessionStorage.removeItem(DRIVE_SESSION_KEY);
+    window.localStorage.removeItem(DRIVE_OFFLINE_LIBRARY_KEY);
     window.dispatchEvent(new CustomEvent(DRIVE_MEMORIES_UPDATED_EVENT));
     window.dispatchEvent(new CustomEvent(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, { detail: '' }));
   } catch {

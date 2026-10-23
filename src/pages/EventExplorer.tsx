@@ -49,7 +49,7 @@ const EventExplorer: React.FC = () => {
   });
 
   return (
-    <div className="mx-auto min-h-screen max-w-7xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
+    <div className="events-page mx-auto min-h-screen max-w-7xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
       <PageHero
         kicker="Event Explorer"
         Icon={Sparkles}

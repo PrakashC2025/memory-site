@@ -47,7 +47,7 @@ const Timeline: React.FC = () => {
   const filteredYears = filterYear ? years.filter(year => year.year === filterYear) : years;
 
   return (
-    <div className="mx-auto min-h-screen max-w-6xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
+    <div className="timeline-page mx-auto min-h-screen max-w-6xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
       <PageHero
         kicker="Timeline Journey"
         Icon={CalendarDays}
