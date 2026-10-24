@@ -8,6 +8,7 @@ import {
   Image as ImageIcon,
   Lightbulb,
   Loader2,
+  RefreshCw,
   RotateCcw,
   RotateCw,
   Share2,
@@ -18,7 +19,8 @@ import {
 import type { DriveMediaFile } from '../services/googleDriveService';
 import { googleDriveService, isDriveAuthorizationError } from '../services/googleDriveService';
 import { saveDriveAccessToken } from '../services/driveLibrary';
-import { deleteCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
+import { deleteCachedStoryMedia, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
+import { readPendingCameraUploads, writePendingCameraUploads } from '../services/cameraUploadQueue';
 
 interface ImageCaptureLike {
   takePhoto: () => Promise<Blob>;
@@ -48,6 +50,7 @@ interface CapturedPhoto {
 interface UploadJob {
   id: string;
   file: File;
+  folderId: string;
 }
 
 type CameraCrop = 'original' | 'square' | 'portrait' | 'landscape';
@@ -124,6 +127,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const capturedGalleryRef = useRef<CapturedPhoto[]>([]);
   capturedGalleryRef.current = capturedGallery;
 
+  const persistUploadQueue = () => {
+    writePendingCameraUploads(uploadQueueRef.current.map(job => ({
+      id: job.id,
+      name: job.file.name,
+      type: job.file.type,
+      folderId: job.folderId,
+      createdAt: Date.now(),
+    })));
+  };
+
   useEffect(() => {
     document.body.classList.add('memoriya-camera-active');
     const previousOverflow = document.body.style.overflow;
@@ -139,6 +152,47 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       .then(setFolders)
       .catch(() => setFolders([]));
   }, [accessToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const restorePendingPhotos = async () => {
+      const savedJobs = readPendingCameraUploads();
+      const restored = await Promise.all(savedJobs.map(async savedJob => {
+        const blob = await readCachedStoryMedia(savedJob.id);
+        if (!blob) return null;
+        const file = new File([blob], savedJob.name, { type: savedJob.type || blob.type || 'image/jpeg' });
+        return {
+          job: { id: savedJob.id, file, folderId: savedJob.folderId || 'drive-root' },
+          photo: {
+            sourceBlob: blob,
+            file,
+            url: URL.createObjectURL(blob),
+            queueId: savedJob.id,
+            uploadedFile: null,
+          } as CapturedPhoto,
+        };
+      }));
+      if (cancelled) {
+        restored.forEach(item => { if (item) URL.revokeObjectURL(item.photo.url); });
+        return;
+      }
+      const validItems = restored.filter((item): item is NonNullable<typeof item> => Boolean(item));
+      const currentIds = new Set(uploadQueueRef.current.map(job => job.id));
+      const recoveredJobs = validItems.map(item => item.job).filter(job => !currentIds.has(job.id));
+      uploadQueueRef.current = [...recoveredJobs, ...uploadQueueRef.current];
+      if (validItems.length) {
+        setCapturedGallery(current => [...validItems.map(item => item.photo), ...current]);
+        setCapturedPhoto(current => current || validItems[validItems.length - 1].photo);
+        setPreviewUrl(current => current || validItems[validItems.length - 1].photo.url);
+        setShowLastShot(true);
+      }
+      persistUploadQueue();
+      updatePendingCount();
+      if (navigator.onLine) processUploadQueueRef.current?.();
+    };
+    void restorePendingPhotos();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -208,7 +262,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   }, [facingMode]);
 
   useEffect(() => () => {
-    uploadAbortRef.current?.abort();
+    // Do not abort a pending upload when the camera panel closes. The queue is
+    // persisted and the upload can finish in the background without blocking
+    // the camera or losing a locally captured photo.
     capturedGalleryRef.current.forEach(photo => URL.revokeObjectURL(photo.url));
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     if (originalPreviewUrlRef.current) URL.revokeObjectURL(originalPreviewUrlRef.current);
@@ -304,7 +360,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     setPendingUploads(uploadQueueRef.current.length);
   };
 
-  const startUpload = async (file: File, queueId = ''): Promise<boolean> => {
+  const startUpload = async (file: File, queueId = '', targetFolderId = folderId): Promise<boolean> => {
     if (uploadInFlightRef.current) return false;
     const controller = new AbortController();
     uploadAbortRef.current = controller;
@@ -315,18 +371,21 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       let token = accessToken;
       let uploaded: DriveMediaFile;
       try {
-        uploaded = await googleDriveService.uploadMedia(token, file, folderId, controller.signal);
+        uploaded = await googleDriveService.uploadMedia(token, file, targetFolderId, controller.signal);
       } catch (uploadError) {
         if (!isDriveAuthorizationError(uploadError)) throw uploadError;
         token = await googleDriveService.refreshAccessToken();
         saveDriveAccessToken(token);
-        uploaded = await googleDriveService.uploadMedia(token, file, folderId, controller.signal);
+        uploaded = await googleDriveService.uploadMedia(token, file, targetFolderId, controller.signal);
       }
       if (controller.signal.aborted) return false;
       if (latestQueueIdRef.current === queueId) setUploadedFile(uploaded);
       setCapturedGallery(current => current.map(photo => photo.queueId === queueId ? { ...photo, uploadedFile: uploaded } : photo));
       setCapturedPhoto(current => current?.queueId === queueId ? { ...current, uploadedFile: uploaded } : current);
-      if (queueId) await deleteCachedStoryMedia(queueId);
+      if (queueId) {
+        await deleteCachedStoryMedia(queueId);
+        writePendingCameraUploads(readPendingCameraUploads().filter(job => job.id !== queueId));
+      }
       await writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
       onUploaded(uploaded);
       setStatus('Photo saved locally and synced to Drive.');
@@ -357,9 +416,10 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         const job = uploadQueueRef.current[0];
         if (!job) break;
         updatePendingCount();
-        const uploaded = await startUpload(job.file, job.id);
+        const uploaded = await startUpload(job.file, job.id, job.folderId);
         if (!uploaded) break;
         uploadQueueRef.current.shift();
+        persistUploadQueue();
         updatePendingCount();
       }
     } finally {
@@ -371,10 +431,12 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const resumeUpload = (file: File) => {
     const id = `camera-pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     latestQueueIdRef.current = id;
-    uploadQueueRef.current.push({ id, file });
-    void writeCachedStoryMedia(id, file, file.type);
+    uploadQueueRef.current.push({ id, file, folderId });
+    persistUploadQueue();
     updatePendingCount();
-    void processUploadQueue();
+    // Finish the local IndexedDB write before starting Drive. A sudden
+    // disconnect or tab close can therefore never outrun the local copy.
+    void writeCachedStoryMedia(id, file, file.type).then(() => processUploadQueue());
     return id;
   };
 
@@ -382,6 +444,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
 
   const removeQueuedUpload = async (queueId: string) => {
     uploadQueueRef.current = uploadQueueRef.current.filter(job => job.id !== queueId);
+    persistUploadQueue();
     await deleteCachedStoryMedia(queueId);
     if (latestQueueIdRef.current === queueId && uploadAbortRef.current) uploadAbortRef.current.abort();
     updatePendingCount();
@@ -653,8 +716,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           )}
           {gridEnabled && <div className="memoriya-camera-grid" aria-hidden="true" />}
           <div className="memoriya-camera-corner-tools">
-            <button type="button" onClick={() => setFacingMode(value => value === 'environment' ? 'user' : 'environment')} aria-label="Switch camera">
-              <RotateCcw size={18} />
+            <button type="button" className="memoriya-camera-switch-button" onClick={() => setFacingMode(value => value === 'environment' ? 'user' : 'environment')} aria-label="Switch camera">
+              <RefreshCw size={18} />
             </button>
             {previewUrl && <button type="button" onClick={() => setShowLastShot(value => !value)} aria-label={showLastShot ? 'Show live camera' : 'Show captured preview'}>
               <ImageIcon size={17} />

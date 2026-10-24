@@ -2696,7 +2696,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       // large video cannot delay the first visual sequence.
       const videoSources = await resolveReelSources(videos, controller.signal, driveAccessToken);
       if (controller.signal.aborted) return;
-      setResolvedSources(current => [...current, ...videoSources]);
+      // Replace with this request's complete snapshot. Appending through the
+      // previous React state could race with the photo update and resurrect a
+      // Drive image that was deleted while the video sources were resolving.
+      setResolvedSources([...photoSources, ...videoSources]);
       // Resolve an empty input as a completed state too. This prevents the
       // progress overlay from hanging when a live Drive folder is cleared or
       // all of its media fails validation.
