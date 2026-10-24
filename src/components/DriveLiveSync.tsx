@@ -131,6 +131,9 @@ const DriveLiveSync: React.FC = () => {
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisibilityChange);
     void sync();
+    // Keep the app-wide reconciler at its established cadence. Story Mode has
+    // its own faster poll while it is open, so live playback stays responsive
+    // without increasing Drive traffic for every page.
     const interval = window.setInterval(() => void sync(), 5000);
     return () => {
       active = false;

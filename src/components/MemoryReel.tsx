@@ -47,6 +47,8 @@ export type MemoryReelEffect =
   | 'rose'
   | 'galaxy';
 
+export type MemoryReelClarity = 'natural' | 'clear' | '4k' | '8k';
+
 export const MEMORY_REEL_TEMPLATES: Array<{ id: MemoryReelTemplate; name: string; description: string }> = [
   { id: 'orbit', name: 'Cinematic Camera Motion', description: 'The original camera-wall journey with depth, movement, and living frames.' },
   { id: 'polaroid-collage', name: 'Polaroid Celebration', description: 'Warm cream paper, floating polaroids, and a family-photo collage around the hero.' },
@@ -63,18 +65,25 @@ export const MEMORY_REEL_TEMPLATES: Array<{ id: MemoryReelTemplate; name: string
 
 export const MEMORY_REEL_EFFECTS: Array<{ id: MemoryReelEffect; name: string; description: string }> = [
   { id: 'off', name: 'Off', description: 'Clean template with no extra effects.' },
-  { id: 'natural', name: 'Natural glow', description: 'Soft fireflies, breath, and gentle beat response.' },
-  { id: 'birthday', name: 'Birthday sparkle', description: 'Warm confetti and celebratory light bursts.' },
-  { id: 'waves', name: 'Music waves', description: 'Smooth waveform bars that follow bass and rhythm.' },
-  { id: 'cinematic', name: 'Cinematic film', description: 'Lens bloom, grain, and elegant beat flashes.' },
-  { id: 'stardust', name: 'Stardust', description: 'Slow floating stars with a soft musical pulse.' },
-  { id: 'neon', name: 'Neon pulse', description: 'Modern spectrum glow for energetic tracks.' },
-  { id: 'aurora', name: 'Aurora memory', description: 'Silky northern lights that rise and breathe with the song.' },
-  { id: 'prism', name: 'Prism light', description: 'Rainbow lens refractions that sparkle on every beat.' },
-  { id: 'ember', name: 'Ember glow', description: 'Warm floating embers for intimate, heartfelt memories.' },
-  { id: 'ocean', name: 'Ocean tide', description: 'Deep blue tides and soft bubbles that follow the rhythm.' },
-  { id: 'rose', name: 'Rose gold', description: 'Elegant rose-gold bloom with a gentle album-film feel.' },
-  { id: 'galaxy', name: 'Galaxy bloom', description: 'A deep-space color bloom with musical orbiting light.' },
+  { id: 'natural', name: 'Memory light', description: 'Warm fireflies and a calm breathing glow for family memories.' },
+  { id: 'birthday', name: 'Birthday celebration', description: 'Confetti, ribbons, and soft golden bursts that land on the beat.' },
+  { id: 'waves', name: 'Music ribbons', description: 'Elegant audio ribbons that rise with bass and treble.' },
+  { id: 'cinematic', name: 'Film light', description: 'Subtle lens sweep, film grain, and a premium story finish.' },
+  { id: 'stardust', name: 'Memory stars', description: 'Quiet star dust and constellation rings for a dreamy album feel.' },
+  { id: 'neon', name: 'Color pulse', description: 'Clean spectrum light for lively celebrations and modern stories.' },
+  { id: 'aurora', name: 'Aurora memory', description: 'Silky teal and violet light that breathes with the song.' },
+  { id: 'prism', name: 'Prism light', description: 'Soft rainbow refractions that respond to treble without hiding photos.' },
+  { id: 'ember', name: 'Ember glow', description: 'Gentle amber embers for intimate, heartfelt memories.' },
+  { id: 'ocean', name: 'Ocean tide', description: 'Deep cyan waves and bubbles with a relaxed musical pulse.' },
+  { id: 'rose', name: 'Rose gold', description: 'Soft rose-gold bloom for portraits, anniversaries, and family moments.' },
+  { id: 'galaxy', name: 'Galaxy bloom', description: 'A refined galaxy of tiny lights with a slow cinematic orbit.' },
+];
+
+export const MEMORY_REEL_CLARITIES: Array<{ id: MemoryReelClarity; name: string; description: string }> = [
+  { id: 'natural', name: 'Natural depth', description: 'Soft depth blur with gentle camera movement.' },
+  { id: 'clear', name: 'Clear', description: 'Sharper frames, reduced blur, and calmer background motion.' },
+  { id: '4k', name: '4K crisp', description: 'Extra contrast and detail with a mostly still photo wall.' },
+  { id: '8k', name: '8K ultra crisp', description: 'Strongest clarity, clean color, and a still background wall.' },
 ];
 
 interface ReelSource {
@@ -113,6 +122,8 @@ interface MemoryReelOptions {
   audio?: string;
   template?: MemoryReelTemplate;
   effect?: MemoryReelEffect;
+  clarity?: MemoryReelClarity;
+  zoom?: boolean;
   hold?: number;
   move?: number;
   loop?: boolean;
@@ -155,6 +166,17 @@ interface DustParticle {
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const ease = (value: number) => value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2;
+const smoothNoise = (time: number, seed: number) => {
+  const position = time * 0.42 + seed;
+  const index = Math.floor(position);
+  const fraction = position - index;
+  const eased = fraction * fraction * (3 - 2 * fraction);
+  const sample = (value: number) => {
+    const raw = Math.sin(value * 12.9898 + seed * 78.233) * 43758.5453;
+    return (raw - Math.floor(raw)) * 2 - 1;
+  };
+  return lerp(sample(index), sample(index + 1), eased);
+};
 const escapeHtml = (value: string) => String(value).replace(/[&<>\"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[character] || character));
 
 const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
@@ -321,6 +343,8 @@ export class MemoryReelController {
   private readonly options: Required<Pick<MemoryReelOptions, 'hold' | 'move' | 'loop' | 'reducedMotion' | 'legacyTv'>> & MemoryReelOptions;
   private world: HTMLDivElement;
   private ambient: HTMLDivElement;
+  private effectsCanvas: HTMLCanvasElement;
+  private effectsContext?: CanvasRenderingContext2D;
   private ambientEffects: HTMLDivElement;
   private dustCanvas: HTMLCanvasElement;
   private dustContext?: CanvasRenderingContext2D;
@@ -329,6 +353,16 @@ export class MemoryReelController {
   private dustWidth = 0;
   private dustHeight = 0;
   private dustLastPaint = 0;
+  private effectsDpr = 1;
+  private effectsWidth = 0;
+  private effectsHeight = 0;
+  private previousEffect: MemoryReelEffect = 'natural';
+  private effectChangedAt = 0;
+  private effectsDebug?: HTMLDivElement;
+  private cinematicCamera = { x: 0, y: 0, z: 0, rot: 0 };
+  private cinematicVelocity = { x: 0, y: 0, z: 0, rot: 0 };
+  private cinematicCameraAt = 0;
+  private cinematicCameraReady = false;
   private ambientSource = '';
   private titleEl: HTMLDivElement;
   private progressEl: HTMLDivElement;
@@ -375,14 +409,16 @@ export class MemoryReelController {
   private lastLayoutShot = -1;
   private lastStoryPlaying = false;
   private lastAudioActive = false;
+  private clarity: MemoryReelClarity = 'clear';
+  private zoomEnabled = true;
   private objectUrls = new Set<string>();
   private loadedMedia = new Map<string, LoadedMedia>();
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
     this.options = {
-      // Give every loaded photo a complete six-and-a-half-second focus before the
-      // camera starts its transition to the next frame.
+      // Keep the original pacing for the other templates. Template 01 uses its
+      // own compact hold below so the camera keeps moving like the reference.
       hold: 6.6,
       move: 1.2,
       loop: false,
@@ -390,10 +426,19 @@ export class MemoryReelController {
       legacyTv: false,
       template: 'orbit',
       effect: 'natural',
+      clarity: 'clear',
+      zoom: true,
       ...options,
     };
+    this.clarity = this.options.clarity || 'clear';
+    this.zoomEnabled = this.options.zoom !== false;
     this.world = Object.assign(document.createElement('div'), { className: 'world' });
     this.ambient = Object.assign(document.createElement('div'), { className: 'ambient' });
+    this.effectsCanvas = Object.assign(document.createElement('canvas'), {
+      className: 'memory-reel-effects-canvas',
+      ariaHidden: 'true',
+    });
+    this.effectsContext = this.effectsCanvas.getContext('2d', { alpha: true }) || undefined;
     this.dustCanvas = Object.assign(document.createElement('canvas'), {
       className: 'memory-reel-dust-canvas',
       ariaHidden: 'true',
@@ -435,9 +480,10 @@ export class MemoryReelController {
     tap.onclick = () => this.paused ? this.play() : this.pause();
     this.poster.onclick = () => this.play();
     this.el.innerHTML = '';
-    this.el.append(this.world, this.ambient, this.dustCanvas, this.ambientEffects, vignette, this.titleEl, this.progressEl, tap, this.poster);
+    this.el.append(this.world, this.ambient, this.effectsCanvas, this.dustCanvas, this.ambientEffects, vignette, this.titleEl, this.progressEl, tap, this.poster);
     this.applyTemplateClass();
     this.setEffect(this.options.effect || 'natural');
+    this.setClarity(this.clarity);
     if (this.options.audio) this.setAudio(this.options.audio);
 
     this.pointerHandler = event => {
@@ -502,7 +548,9 @@ export class MemoryReelController {
       ? uniqueItems.filter(item => !this.loadedMedia.has(item.id))
       : uniqueItems;
     let liveInsertIndex = keepCurrentWall
-      ? Math.min(this.cards.length, Math.max(0, this.lastRenderedShot + 3))
+      // Put a newly discovered Drive memory just after the next two shots so
+      // it joins the live story quickly without interrupting the current one.
+      ? Math.min(this.cards.length, Math.max(0, this.lastRenderedShot + 2))
       : this.cards.length;
     if (!pendingItems.length) {
       this.recalculateTotal();
@@ -547,15 +595,17 @@ export class MemoryReelController {
         nextItemIndex += 1;
         const media = await this.load(item);
         if (media) reveal(item, media);
+        // Let layout, input, and painting run between media jobs. This keeps
+        // a large Drive story responsive while its remaining frames warm.
+        await new Promise<void>(resolve => window.setTimeout(resolve, 0));
       }
     });
     void Promise.all(workers).then(() => {
       if (generation !== this.loadGeneration) return;
-      if (keepCurrentWall) {
-        this.recalculateTotal();
-        this.render(this.elapsed);
-        if (wasPlaying) this.play();
-      }
+      this.recalculateTotal();
+      if (this.cards.length) this.layoutWall(this.shotIndexAt(this.elapsed));
+      this.render(this.elapsed);
+      if (keepCurrentWall && wasPlaying) this.play();
       if (!ready) {
         ready = true;
         resolveReady();
@@ -564,13 +614,59 @@ export class MemoryReelController {
     await readyPromise;
   }
 
+  private wallSpacing() {
+    const stageWidth = this.el.clientWidth || 1280;
+    const stageHeight = this.el.clientHeight || 720;
+    return {
+      // Keep the visible neighborhood spread across the whole frame instead
+      // of leaving a large empty upper or lower half.
+      sx: clamp(stageWidth * 0.45, 520, 640),
+      sy: clamp(stageHeight * 0.9, 360, 480),
+    };
+  }
+
+  private layoutWall(focusIndex = 0) {
+    const count = this.cards.length;
+    if (!count) return;
+    const columns = Math.max(3, Math.ceil(Math.sqrt(count * 1.25)));
+    const rows = Math.max(1, Math.ceil(count / columns));
+    const centerSlot = Math.min(count - 1, Math.floor(rows / 2) * columns + Math.floor(columns / 2));
+    const safeFocus = clamp(focusIndex, 0, count - 1);
+    const slotCards = new Array<number>(count).fill(-1);
+    slotCards[centerSlot] = safeFocus;
+    let nextCard = 0;
+    for (let slot = 0; slot < count; slot += 1) {
+      if (slotCards[slot] >= 0) continue;
+      while (nextCard === safeFocus) nextCard += 1;
+      slotCards[slot] = nextCard;
+      nextCard += 1;
+    }
+    const { sx, sy } = this.wallSpacing();
+    slotCards.forEach((cardIndex, slot) => {
+      const card = this.cards[cardIndex];
+      if (!card) return;
+      const row = Math.floor(slot / columns);
+      const column = slot % columns;
+      const randomUnit = (value: number) => {
+        const seeded = Math.sin(value * 12.9898) * 43758.5453;
+        return seeded - Math.floor(seeded);
+      };
+      card.x = (column - (columns - 1) / 2) * sx + (randomUnit(cardIndex + 1) - 0.5) * Math.min(110, sx * 0.22);
+      card.y = (row - (rows - 1) / 2) * sy + (randomUnit(cardIndex + 31) - 0.5) * Math.min(80, sy * 0.22);
+      card.z = this.options.template === 'orbit' ? -Math.round(randomUnit(cardIndex + 91) * 160) : 0;
+      card.rot = (randomUnit(cardIndex + 61) - 0.5) * 16;
+      card.card.style.transform = `translate3d(${card.x - card.width / 2}px,${card.y - card.height / 2}px,${card.z}px) rotateZ(${card.rot}deg)`;
+      card.card.style.transformOrigin = `${card.width / 2}px ${card.height / 2}px`;
+    });
+    this.lastLayoutShot = -1;
+  }
+
   private rebuildWall(loaded: LoadedMedia[], preserveProgress: boolean, previousElapsed: number, wasPlaying: boolean) {
     const columns = Math.max(3, Math.ceil(Math.sqrt(loaded.length * 1.25)));
     const rows = Math.max(1, Math.ceil(loaded.length / columns));
     // Keep neighboring cards inside the 16:9 viewport so the focused frame
     // is surrounded by real memories instead of empty black space.
-    const sx = 640;
-    const sy = 500;
+    const { sx, sy } = this.wallSpacing();
     let seed = 7;
     const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
@@ -586,6 +682,7 @@ export class MemoryReelController {
       const card = document.createElement('div');
       const frameKind = getMediaFrameKind(media.aspect);
       card.className = `card media-${frameKind} frame frame-${frameKind}`;
+      card.dataset.caption = media.id || `memory-${index + 1}`;
       card.style.setProperty('--media-aspect', String(media.aspect));
       card.style.width = `${width}px`;
       card.style.height = `${height}px`;
@@ -597,14 +694,16 @@ export class MemoryReelController {
       const y = (row - (rows - 1) / 2) * sy + (random() - 0.5) * 30;
       // Keep cards on one plane. A large depth spread makes a nearby card
       // grow over the focused card and hide part of it.
-      const z = 0;
+      const z = this.options.template === 'orbit' ? -Math.round(random() * 160) : 0;
       const rot = (random() - 0.5) * 14;
+      if (this.options.template === 'orbit' && index % 6 === 0) card.classList.add('orbit-polaroid');
       card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
       card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
       return { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video } satisfies ReelCard;
     });
 
-    // Shuffle camera targets without changing the spacing of the photo wall.
+    // Use one deterministic random target order. The layout remains spatially
+    // stable, but the story never makes a predictable row-by-row jump.
     for (let index = wallCards.length - 1; index > 0; index -= 1) {
       const swapIndex = Math.floor(random() * (index + 1));
       [wallCards[index], wallCards[swapIndex]] = [wallCards[swapIndex], wallCards[index]];
@@ -613,6 +712,7 @@ export class MemoryReelController {
       this.world.appendChild(card.card);
       this.cards.push(card);
     });
+    this.layoutWall(0);
     this.lastLayoutShot = -1;
 
     this.recalculateTotal();
@@ -633,14 +733,21 @@ export class MemoryReelController {
     const card = document.createElement('div');
     const frameKind = getMediaFrameKind(media.aspect);
     card.className = `card media-${frameKind} frame frame-${frameKind}`;
+    card.dataset.caption = media.id || `memory-${index + 1}`;
     card.style.setProperty('--media-aspect', String(media.aspect));
     card.style.width = `${width}px`;
     card.style.height = `${height}px`;
     card.appendChild(media.node);
-    const x = (column - (columns - 1) / 2) * 640 + ((index * 17) % 40) - 20;
-    const y = (row - (rows - 1) / 2) * 500 + ((index * 13) % 30) - 15;
-    const z = 0;
-    const rot = ((index * 11) % 14) - 7;
+    const randomUnit = (value: number) => {
+      const seeded = Math.sin(value * 12.9898) * 43758.5453;
+      return seeded - Math.floor(seeded);
+    };
+    const { sx, sy } = this.wallSpacing();
+    const x = (column - (columns - 1) / 2) * sx + (randomUnit(index + 1) - 0.5) * Math.min(110, sx * 0.22);
+    const y = (row - (rows - 1) / 2) * sy + (randomUnit(index + 31) - 0.5) * Math.min(80, sy * 0.22);
+    const z = this.options.template === 'orbit' ? -Math.round(randomUnit(index + 91) * 160) : 0;
+    const rot = (randomUnit(index + 61) - 0.5) * 16;
+    if (this.options.template === 'orbit' && index % 6 === 0) card.classList.add('orbit-polaroid');
     card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
     card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
     this.world.appendChild(card);
@@ -946,6 +1053,14 @@ export class MemoryReelController {
     this.dustCanvas.style.width = `${width}px`;
     this.dustCanvas.style.height = `${height}px`;
     if (this.dustContext) this.dustContext.setTransform(this.dustDpr, 0, 0, this.dustDpr, 0, 0);
+    this.effectsDpr = Math.min(2, window.devicePixelRatio || 1);
+    this.effectsWidth = width;
+    this.effectsHeight = height;
+    this.effectsCanvas.width = Math.round(width * this.effectsDpr);
+    this.effectsCanvas.height = Math.round(height * this.effectsDpr);
+    this.effectsCanvas.style.width = `${width}px`;
+    this.effectsCanvas.style.height = `${height}px`;
+    if (this.effectsContext) this.effectsContext.setTransform(this.effectsDpr, 0, 0, this.effectsDpr, 0, 0);
     const particleCount = width < 640 ? 60 : Math.min(96, Math.max(60, Math.round(width / 12)));
     while (this.dustParticles.length < particleCount) {
       this.dustParticles.push({
@@ -963,6 +1078,13 @@ export class MemoryReelController {
 
   setTemplate(template: MemoryReelTemplate) {
     this.options.template = template;
+    this.cinematicCameraReady = false;
+    this.cards.forEach((card, index) => {
+      card.card.classList.toggle('orbit-polaroid', template === 'orbit' && index % 6 === 0);
+      card.card.classList.remove('orbit-blur-sharp', 'orbit-blur-rack', 'orbit-blur-flight', 'orbit-blur-near', 'orbit-blur-medium', 'orbit-blur-far');
+      delete card.card.dataset.orbitBlurTier;
+      if (template === 'orbit' && card.z === 0) card.z = -Math.round((Math.sin((index + 1) * 12.9898) * 43758.5453 % 1 + 1) % 1 * 160);
+    });
     this.applyTemplateClass();
     this.render(this.elapsed);
   }
@@ -973,9 +1095,27 @@ export class MemoryReelController {
   }
 
   setEffect(effect: MemoryReelEffect) {
+    if (this.options.effect !== effect) {
+      this.previousEffect = this.options.effect || 'natural';
+      this.effectChangedAt = performance.now();
+    }
     this.options.effect = effect;
     MEMORY_REEL_EFFECTS.forEach(item => this.ambientEffects.classList.remove(`effect-${item.id}`));
     this.ambientEffects.classList.add(`effect-${effect}`);
+    // Apply the new effect immediately, including while the story is paused.
+    this.lastMetricKey = '';
+    this.render(this.elapsed);
+  }
+
+  setClarity(clarity: MemoryReelClarity) {
+    this.clarity = clarity;
+    this.el.dataset.clarity = clarity;
+    this.render(this.elapsed);
+  }
+
+  setZoomEnabled(enabled: boolean) {
+    this.zoomEnabled = enabled;
+    this.render(this.elapsed);
   }
 
   setAudioAnalysisElement(element: HTMLAudioElement | null) {
@@ -1011,7 +1151,9 @@ export class MemoryReelController {
     try {
       this.audioContext ||= new AudioContextConstructor();
       const analyser = this.audioContext.createAnalyser();
-      analyser.fftSize = 512;
+      analyser.fftSize = 1024;
+      // Keep enough smoothing to feel musical while still following the real
+      // bass/mid/treble changes instead of a generic timer pulse.
       analyser.smoothingTimeConstant = 0.72;
       const source = this.audioContext.createMediaElementSource(sourceAudio);
       source.connect(analyser);
@@ -1056,9 +1198,15 @@ export class MemoryReelController {
         for (let index = from; index < to; index += 1) total += this.audioData![index] / 255;
         return total / Math.max(1, to - from);
       };
-      const bass = averageBand(20, 150);
-      const mid = averageBand(150, 2000);
-      const treble = averageBand(2000, Math.max(2001, (this.audioContext?.sampleRate || 44100) / 2));
+      const sampledBass = averageBand(20, 150);
+      const sampledMid = averageBand(150, 2000);
+      const sampledTreble = averageBand(2000, Math.max(2001, (this.audioContext?.sampleRate || 44100) / 2));
+      const fallbackClock = analysisAudio?.currentTime || time;
+      const fallbackPulse = Math.max(0, Math.sin(fallbackClock * Math.PI * 4));
+      const analyserSilent = sampledBass + sampledMid + sampledTreble < 0.045;
+      const bass = analyserSilent ? 0.08 + fallbackPulse * 0.2 : sampledBass;
+      const mid = analyserSilent ? 0.06 + fallbackPulse * 0.12 : sampledMid;
+      const treble = analyserSilent ? 0.045 + fallbackPulse * 0.1 : sampledTreble;
       const rawLevel = bass * 0.52 + mid * 0.32 + treble * 0.16;
        this.smoothedBass = lerp(this.smoothedBass, bass, 0.24);
        this.smoothedMid = lerp(this.smoothedMid, mid, 0.22);
@@ -1080,25 +1228,15 @@ export class MemoryReelController {
       }
     } else {
       const fallbackClock = analysisAudio?.currentTime || time;
-      const fallback = playing
-        ? this.options.legacyTv
-          ? 0.12 + Math.abs(Math.sin(time * 3.2)) * 0.16
-          : 0.05 + Math.abs(Math.sin(fallbackClock * 5.2)) * 0.08
-        : 0;
+      const fallbackPulse = Math.max(0, Math.sin(fallbackClock * Math.PI * 4));
+      const fallback = 0.06 + fallbackPulse * 0.16;
       this.smoothedLevel += (fallback - this.smoothedLevel) * 0.08;
       this.smoothedBass += (fallback * 1.1 - this.smoothedBass) * 0.08;
       this.smoothedMid += (fallback * 0.8 - this.smoothedMid) * 0.08;
       this.smoothedTreble += (fallback * 0.65 - this.smoothedTreble) * 0.08;
-      this.beatPulse = Math.max(this.beatPulse, playing ? Math.pow(Math.max(0, Math.sin(fallbackClock * 5.2)), 8) * 0.24 : 0);
+      this.beatPulse = Math.max(this.beatPulse, Math.pow(fallbackPulse, 8) * 0.42);
       this.beatPulse *= 0.86;
       this.previousBass *= 0.9;
-    }
-    if (!playing) {
-      this.smoothedLevel *= 0.9;
-      this.smoothedBass *= 0.9;
-      this.smoothedMid *= 0.9;
-      this.smoothedTreble *= 0.9;
-      this.beatPulse *= 0.82;
     }
     return {
       level: clamp(this.smoothedLevel * 1.8, 0, 1),
@@ -1110,24 +1248,211 @@ export class MemoryReelController {
   }
 
   private handleBeat() {
-    if (this.options.reducedMotion || this.options.effect === 'off') return;
-    const current = this.cards[this.lastRenderedShot];
-    if (current) {
-      current.card.classList.remove('beat-hit');
-      requestAnimationFrame(() => current.card.classList.add('beat-hit'));
-      current.card.style.setProperty('--beat-glow', String(clamp(this.smoothedBass * 2, 0.2, 1)));
+    // Beat pulses are consumed by the effects canvas and ambient-effects
+    // layer. Keep the photo/template compositor independent so music cannot
+    // shake, jump, flash, or resize the active memory.
+  }
+
+  private drawEffectBackdrop(context: CanvasRenderingContext2D, width: number, height: number, colors: [string, string], energy: number) {
+    // The effect canvas sits behind the photo world. Keep this wash subtle so
+    // it gives the empty space a responsive atmosphere without tinting or
+    // covering the memories themselves.
+    const alpha = clamp(0.045 + energy * 0.075, 0.045, 0.12);
+    const gradient = context.createRadialGradient(
+      width * (0.5 + Math.sin(energy * 4) * 0.08),
+      height * (0.42 + Math.cos(energy * 3) * 0.06),
+      0,
+      width * 0.5,
+      height * 0.5,
+      Math.max(width, height) * 0.78,
+    );
+    gradient.addColorStop(0, colors[0].replace('ALPHA', alpha.toFixed(3)));
+    gradient.addColorStop(0.58, colors[1].replace('ALPHA', (alpha * 0.62).toFixed(3)));
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    context.save();
+    context.globalCompositeOperation = 'screen';
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, width, height);
+    context.restore();
+  }
+
+  private drawEffect(context: CanvasRenderingContext2D, effect: MemoryReelEffect, width: number, height: number, metrics: { level: number; bass: number; mid: number; treble: number; beat: number }, time: number) {
+    if (effect === 'off') return;
+    const energy = clamp(metrics.level, 0.05, 1);
+    const pulse = clamp(metrics.beat + metrics.bass * 0.45, 0, 1);
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const drawDots = (count: number, color: string, size: number, speed: number) => {
+      context.fillStyle = color;
+      for (let index = 0; index < count; index += 1) {
+        const x = ((smoothNoise(time * speed + index * 0.13, index + 3) + 1) * 0.5) * width;
+        const y = ((smoothNoise(time * speed * 0.72 + index * 0.19, index + 27) + 1) * 0.5) * height;
+        const radius = size * (0.65 + smoothNoise(time * speed * 0.4, index + 81) * 0.25 + pulse * 0.35);
+        context.beginPath();
+        context.arc(x, y, Math.max(0.7, radius), 0, Math.PI * 2);
+        context.fill();
+      }
+    };
+    const drawRibbon = (color: string, base: number, amplitude: number, speed: number, widthPx: number) => {
+      context.beginPath();
+      for (let x = -width * 0.08; x <= width * 1.08; x += 14) {
+        const progress = x / width;
+        const y = height * base
+          + Math.sin(progress * Math.PI * 2.2 + time * speed) * height * amplitude
+          + Math.sin(progress * Math.PI * 5.4 - time * speed * 0.7) * height * amplitude * 0.32
+          + pulse * Math.sin(progress * Math.PI * 3) * height * 0.018;
+        if (x < 0) context.moveTo(x, y); else context.lineTo(x, y);
+      }
+      context.strokeStyle = color;
+      context.lineWidth = widthPx;
+      context.lineCap = 'round';
+      context.stroke();
+    };
+    const drawBurst = (color: string, rayCount: number, radius: number) => {
+      context.save();
+      context.translate(centerX, centerY);
+      context.strokeStyle = color;
+      context.lineWidth = 1.5 + pulse * 1.5;
+      for (let index = 0; index < rayCount; index += 1) {
+        const angle = (index / rayCount) * Math.PI * 2 + time * 0.12;
+        const inner = radius * (0.48 + pulse * 0.12);
+        const outer = radius * (0.86 + pulse * 0.22 + (index % 3) * 0.04);
+        context.beginPath();
+        context.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
+        context.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
+        context.stroke();
+      }
+      context.restore();
+    };
+    switch (effect) {
+      case 'natural':
+        this.drawEffectBackdrop(context, width, height, ['rgba(255, 194, 113, ALPHA)', 'rgba(42, 66, 93, ALPHA)'], energy);
+        drawDots(22, `rgba(255, 224, 162, ${0.18 + energy * 0.24})`, 2.2, 0.1);
+        drawRibbon(`rgba(255, 218, 155, ${0.07 + pulse * 0.08})`, 0.22, 0.055, 0.28, 2);
+        break;
+      case 'birthday':
+        this.drawEffectBackdrop(context, width, height, ['rgba(255, 170, 63, ALPHA)', 'rgba(179, 48, 105, ALPHA)'], energy + pulse * 0.2);
+        drawDots(28, `rgba(255, 217, 117, ${0.22 + pulse * 0.42})`, 2.8, 0.2);
+        context.strokeStyle = `rgba(255, 205, 123, ${0.28 + pulse * 0.48})`;
+        context.lineWidth = 2;
+        for (let index = 0; index < 18; index += 1) {
+          const x = ((index * 71 + 17) % 100) / 100 * width;
+          const y = ((index * 43 + 29) % 100) / 100 * height;
+          context.beginPath();
+          context.moveTo(x, y);
+          context.lineTo(x + Math.sin(time * 2 + index) * 7, y + 12 + (index % 4) * 4);
+          context.stroke();
+        }
+        drawBurst(`rgba(255, 230, 167, ${0.08 + pulse * 0.3})`, 18, Math.min(width, height) * 0.34);
+        break;
+      case 'waves':
+        this.drawEffectBackdrop(context, width, height, ['rgba(36, 117, 191, ALPHA)', 'rgba(8, 20, 70, ALPHA)'], energy);
+        drawRibbon(`rgba(84, 210, 255, ${0.12 + energy * 0.22})`, 0.78, 0.06 + metrics.bass * 0.035, 1.1, 2.2);
+        drawRibbon(`rgba(206, 143, 255, ${0.08 + metrics.mid * 0.18})`, 0.84, 0.045 + metrics.treble * 0.028, 1.55, 1.4);
+        drawRibbon(`rgba(255, 221, 156, ${0.05 + metrics.treble * 0.12})`, 0.9, 0.028, 1.9, 1);
+        break;
+      case 'cinematic':
+        this.drawEffectBackdrop(context, width, height, ['rgba(222, 121, 74, ALPHA)', 'rgba(24, 82, 89, ALPHA)'], energy);
+        drawRibbon(`rgba(255, 218, 154, ${0.06 + pulse * 0.13})`, 0.3, 0.035, 0.45, 3);
+        drawBurst(`rgba(255, 226, 180, ${0.04 + pulse * 0.12})`, 14, Math.min(width, height) * 0.45);
+        drawDots(28, `rgba(255, 244, 210, ${0.04 + metrics.treble * 0.12})`, 1, 0.3);
+        break;
+      case 'stardust':
+        this.drawEffectBackdrop(context, width, height, ['rgba(50, 77, 164, ALPHA)', 'rgba(4, 10, 43, ALPHA)'], energy);
+        drawDots(46, `rgba(170, 202, 255, ${0.18 + metrics.treble * 0.32})`, 1.5, 0.08);
+        drawBurst(`rgba(194, 218, 255, ${0.04 + pulse * 0.16})`, 24, Math.min(width, height) * 0.4);
+        break;
+      case 'neon':
+        this.drawEffectBackdrop(context, width, height, ['rgba(205, 28, 213, ALPHA)', 'rgba(18, 4, 50, ALPHA)'], energy + pulse * 0.18);
+        drawDots(14, `rgba(255, 66, 224, ${0.18 + pulse * 0.3})`, 2.2, 0.24);
+        break;
+      case 'aurora':
+        this.drawEffectBackdrop(context, width, height, ['rgba(48, 188, 139, ALPHA)', 'rgba(71, 34, 127, ALPHA)'], energy);
+        context.lineWidth = Math.max(18, height * 0.06);
+        context.lineCap = 'round';
+        context.strokeStyle = `rgba(89, 244, 175, ${0.08 + energy * 0.18})`;
+        for (let index = 0; index < 3; index += 1) {
+          context.beginPath();
+          context.moveTo(-width * 0.1, height * (0.25 + index * 0.12));
+          context.quadraticCurveTo(centerX, height * (0.05 + Math.sin(time * 0.4 + index) * 0.12 + index * 0.1), width * 1.1, height * (0.34 + index * 0.1));
+          context.stroke();
+        }
+        break;
+      case 'prism':
+        this.drawEffectBackdrop(context, width, height, ['rgba(89, 103, 226, ALPHA)', 'rgba(111, 35, 120, ALPHA)'], energy);
+        for (let index = 0; index < 5; index += 1) {
+          context.strokeStyle = `hsla(${(index * 62 + time * 28) % 360}, 90%, 70%, ${0.06 + pulse * 0.12})`;
+          context.lineWidth = 4;
+          context.beginPath();
+          context.arc(centerX, centerY, Math.min(width, height) * (0.25 + index * 0.09 + pulse * 0.02), 0, Math.PI * 2);
+          context.stroke();
+        }
+        break;
+      case 'ember':
+        this.drawEffectBackdrop(context, width, height, ['rgba(241, 96, 33, ALPHA)', 'rgba(68, 8, 12, ALPHA)'], energy);
+        drawDots(30, `rgba(255, 153, 63, ${0.16 + metrics.bass * 0.3})`, 2.4, 0.11);
+        break;
+      case 'ocean':
+        this.drawEffectBackdrop(context, width, height, ['rgba(19, 153, 178, ALPHA)', 'rgba(5, 27, 69, ALPHA)'], energy);
+        context.strokeStyle = `rgba(93, 226, 225, ${0.1 + energy * 0.22})`;
+        context.lineWidth = 3;
+        for (let index = 0; index < 3; index += 1) {
+          context.beginPath();
+          for (let x = 0; x <= width; x += 14) {
+            const y = height * (0.76 + index * 0.06) + Math.sin(x * 0.014 + time * (0.7 + index * 0.22)) * (10 + energy * 12);
+            if (x === 0) context.moveTo(x, y); else context.lineTo(x, y);
+          }
+          context.stroke();
+        }
+        drawDots(18, `rgba(151, 245, 237, ${0.1 + metrics.treble * 0.2})`, 2, 0.09);
+        break;
+      case 'rose':
+        this.drawEffectBackdrop(context, width, height, ['rgba(249, 159, 180, ALPHA)', 'rgba(91, 31, 78, ALPHA)'], energy);
+        context.fillStyle = `rgba(255, 201, 178, ${0.07 + pulse * 0.13})`;
+        context.beginPath();
+        context.arc(centerX, centerY, Math.min(width, height) * (0.28 + pulse * 0.05), 0, Math.PI * 2);
+        context.fill();
+        break;
+      case 'galaxy':
+        this.drawEffectBackdrop(context, width, height, ['rgba(78, 54, 182, ALPHA)', 'rgba(8, 10, 41, ALPHA)'], energy);
+        drawDots(54, `rgba(212, 190, 255, ${0.12 + metrics.treble * 0.3})`, 1.4, 0.06);
+        break;
+      default:
+        break;
     }
-    this.titleEl.classList.remove('beat-title');
-    requestAnimationFrame(() => this.titleEl.classList.add('beat-title'));
-    this.el.classList.add('beat-flash');
-    window.setTimeout(() => this.el.classList.remove('beat-flash'), 220);
+  }
+
+  private renderEffects(metrics: { level: number; bass: number; mid: number; treble: number; beat: number }, time: number) {
+    const context = this.effectsContext;
+    const width = this.effectsWidth;
+    const height = this.effectsHeight;
+    if (!context || !width || !height) return;
+    context.clearRect(0, 0, width, height);
+    const effect = this.options.effect || 'natural';
+    // A selected effect must be visible on the same render tick. The old
+    // cross-fade left the previous effect on screen for 600ms and made the
+    // picker feel unresponsive when the story was paused.
+    const transition = 1;
+    if (transition < 1 && this.previousEffect !== effect) {
+      context.save();
+      context.globalAlpha = 1 - transition;
+      this.drawEffect(context, this.previousEffect, width, height, metrics, time);
+      context.restore();
+    }
+    context.save();
+    context.globalAlpha = transition < 1 && this.previousEffect !== effect ? transition : 1;
+    this.drawEffect(context, effect, width, height, metrics, time);
+    context.restore();
+    if (this.effectsDebug) {
+      this.effectsDebug.textContent = `${effect} · bass ${metrics.bass.toFixed(2)} · mid ${metrics.mid.toFixed(2)} · treble ${metrics.treble.toFixed(2)}`;
+    }
   }
 
   private renderDust(metrics: { treble: number; beat: number }, playing: boolean) {
     const context = this.dustContext;
     const width = this.dustWidth;
     const height = this.dustHeight;
-    if (!context || !width || !height || this.options.effect === 'off' || this.options.reducedMotion) {
+    if (this.options.template === 'orbit' || !context || !width || !height || this.options.effect === 'off' || this.options.reducedMotion) {
       context?.clearRect(0, 0, width, height);
       return;
     }
@@ -1360,6 +1685,7 @@ export class MemoryReelController {
     this.audioContext = undefined;
     this.audio = undefined;
     this.analysisAudio = undefined;
+    this.effectsContext?.clearRect(0, 0, this.effectsWidth, this.effectsHeight);
     this.world.innerHTML = '';
     this.cards = [];
     this.loadedMedia.clear();
@@ -1381,8 +1707,28 @@ export class MemoryReelController {
     return card ? { x: card.x, y: card.y, z: card.z, rot: card.rot } : { x: 0, y: 0, z: 0, rot: 0 };
   }
 
+  private springCamera(target: { x: number; y: number; z: number; rot: number }) {
+    const now = performance.now();
+    const delta = this.cinematicCameraAt ? clamp((now - this.cinematicCameraAt) / 1000, 0, 0.05) : 0;
+    this.cinematicCameraAt = now;
+    if (!this.cinematicCameraReady) {
+      this.cinematicCamera = { ...target };
+      this.cinematicVelocity = { x: 0, y: 0, z: 0, rot: 0 };
+      this.cinematicCameraReady = true;
+      return this.cinematicCamera;
+    }
+    const spring = 13;
+    (['x', 'y', 'z', 'rot'] as const).forEach(axis => {
+      const acceleration = (target[axis] - this.cinematicCamera[axis]) * spring * spring - this.cinematicVelocity[axis] * spring * 2;
+      this.cinematicVelocity[axis] += acceleration * delta;
+      this.cinematicCamera[axis] += this.cinematicVelocity[axis] * delta;
+    });
+    return this.cinematicCamera;
+  }
+
   private cardHold(card: ReelCard) {
-    return this.options.hold + (card.video ? 3 : 0);
+    if (this.options.template === 'orbit') return 4;
+    return 2 + (card.video ? 0.4 : 0);
   }
 
   private render(time: number) {
@@ -1391,7 +1737,8 @@ export class MemoryReelController {
     if (!count) return;
     const audioMetrics = this.readAudioMetrics(time);
     const audioLevel = audioMetrics.level;
-    if (!this.options.legacyTv) this.ambient.style.opacity = (0.68 + audioLevel * 0.16).toFixed(3);
+    this.renderEffects(audioMetrics, time);
+    if (!this.options.legacyTv && this.options.template !== 'orbit') this.ambient.style.opacity = (0.68 + audioLevel * 0.16).toFixed(3);
     // Keep the empty space alive with a gentle music pulse. Beat and frequency
     // bands are smoothed so visuals breathe with the track instead of twitching.
     const effectLevel = audioLevel;
@@ -1416,10 +1763,6 @@ export class MemoryReelController {
       this.ambientEffects.style.setProperty('--particle-scale', (0.72 + effectLevel * 1.1).toFixed(3));
       this.ambientEffects.style.setProperty('--butterfly-opacity', (0.24 + effectLevel * 0.76).toFixed(3));
       this.ambientEffects.style.setProperty('--butterfly-scale', (0.78 + effectLevel * 0.42).toFixed(3));
-      this.el.style.setProperty('--bass-level', audioMetrics.bass.toFixed(3));
-      this.el.style.setProperty('--mid-level', audioMetrics.mid.toFixed(3));
-      this.el.style.setProperty('--treble-level', audioMetrics.treble.toFixed(3));
-      this.el.style.setProperty('--beat-pulse', audioMetrics.beat.toFixed(3));
     }
     const audioActive = Boolean((this.analysisAudio || this.audio) && !(this.analysisAudio || this.audio)?.paused);
     if (this.lastStoryPlaying !== !this.paused || this.lastAudioActive !== audioActive) {
@@ -1574,47 +1917,174 @@ export class MemoryReelController {
         z: lerp(from.z, to.z, progress),
         rot: lerp(from.rot, to.rot, progress),
       };
+      const flightRatio = shot > 0 && local < move ? clamp(local / move, 0, 1) : 1;
+      if (this.options.template === 'orbit' && !this.options.reducedMotion) {
+        const flightEase = ease(flightRatio);
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const distance = Math.hypot(dx, dy) || 1;
+        const perpendicularX = -dy / distance;
+        const perpendicularY = dx / distance;
+        const arc = Math.sin(Math.PI * flightRatio) * Math.min(260, distance * 0.12);
+        const anticipation = flightRatio < 0.154 ? (1 - flightRatio / 0.154) * 0.04 : 0;
+        const springTarget = {
+          x: lerp(from.x, to.x, flightEase) - dx * anticipation + perpendicularX * arc,
+          y: lerp(from.y, to.y, flightEase) - dy * anticipation + perpendicularY * arc,
+          z: lerp(from.z, to.z, flightEase) - dip * 36,
+          rot: lerp(from.rot, to.rot, flightEase) * (1 - dip * 0.65),
+        };
+        camera = this.springCamera(springTarget);
+      } else if (this.options.template !== 'orbit') {
+        this.cinematicCameraReady = false;
+      }
       const push = 100 + clamp(holdProgress, 0, 1) * 180 - dip * 360;
-      // Keep the camera close enough that the gentle zoom never clips the
-      // active frame, regardless of portrait or landscape orientation.
+      // Keep the camera close to the wall. The old push depth made blurred
+      // neighboring photos surge toward the viewer and compete with the hero.
       const cameraPush = Math.min(push, 130);
-      const sway = Math.sin(time * 0.7) * 3 * (1 - dip);
+      const stabilizedCameraPush = this.options.template === 'orbit'
+        ? Math.min(cameraPush, 60)
+        : Math.min(cameraPush, this.clarity === 'natural' ? 56 : 26);
+      const handheldFade = 1 - dip;
+      const handheldX = this.options.template === 'orbit' && !this.options.reducedMotion
+        ? smoothNoise(time * 0.9, 12) * 2.5 * handheldFade
+        : 0;
+      const handheldY = this.options.template === 'orbit' && !this.options.reducedMotion
+        ? smoothNoise(time * 0.75, 38) * 2.2 * handheldFade
+        : 0;
+      const sway = this.options.template === 'orbit'
+        ? smoothNoise(time * 0.55, 71) * 3 * handheldFade
+        : Math.sin(time * 0.7) * (this.clarity === 'natural' ? 1.2 : 0.35) * handheldFade;
       // Keep the same camera targets and pacing on TV, but avoid the costly
       // rotateY/rotateZ/depth stack that makes older WebViews hitch. The
       // gentle zoom pulse restores the cinematic push-in without a jump at
       // each slide boundary.
       const tvZoom = 1.055 + Math.sin(time * 0.24 + shot * 0.7) * 0.045;
       const parallax = this.options.legacyTv ? '' : ` translate3d(${(-this.parallaxX * 16).toFixed(1)}px,${(-this.parallaxY * 12).toFixed(1)}px,0)`;
+      const orbitCamera = this.options.template === 'orbit';
       this.world.style.transform = this.options.legacyTv
         ? `scale(${this.scale * tvZoom}) translate3d(${-camera.x}px,${-camera.y}px,0)`
-        : `scale(${this.scale}) translate3d(0,0,${cameraPush}px) rotateY(${-6 + sway + this.parallaxX * 1.4}deg) rotateX(${this.parallaxY * -1.1}deg) rotateZ(${-camera.rot * 0.9}deg) translate3d(${(-camera.x + this.parallaxX * 16).toFixed(1)}px,${(-camera.y + this.parallaxY * 12).toFixed(1)}px,${-camera.z}px)${parallax}`;
-      const flyBlur = dip * 5;
-      let focusedIndex = 0;
-      let focusedDistance = Number.POSITIVE_INFINITY;
+        : `scale(${this.scale}) translate3d(0,0,${stabilizedCameraPush}px) rotateY(${orbitCamera ? this.parallaxX * 0.4 : -6 + sway + this.parallaxX * 1.4}deg) rotateX(${orbitCamera ? 0 : this.parallaxY * -1.1}deg) rotateZ(${orbitCamera ? 0 : -camera.rot * 0.9}deg) translate3d(${(-camera.x + this.parallaxX * 16 + handheldX).toFixed(1)}px,${(-camera.y + this.parallaxY * 12 + handheldY).toFixed(1)}px,${-camera.z}px)${parallax}`;
+      const flyBlur = dip * (this.clarity === 'natural' ? 2.4 : 0.5);
+      const distances = this.cards.map(card => Math.hypot(card.x - camera.x, card.y - camera.y));
+      const focusedIndex = distances.reduce((closest, distance, index) => (
+        distance < distances[closest] ? index : closest
+      ), 0);
+      // Keep the full wall visible for normal-sized stories. The previous
+      // 28-card cap made the renderer remove perfectly valid memories, which
+      // left large empty areas around the hero. Very large libraries still
+      // get a bounded neighborhood so the animation remains responsive.
+      const orbitVisibleLimit = this.cards.length <= 96 ? this.cards.length : 64;
+      const nearestOrbitCards = this.options.template === 'orbit'
+        ? new Set(distances
+          .map((distance, index) => ({ distance, index }))
+          .sort((left, right) => left.distance - right.distance)
+          .slice(0, orbitVisibleLimit)
+          .map(item => item.index))
+        : undefined;
+      const renderRadius = this.options.template === 'orbit'
+        ? 1120
+        : this.clarity === 'natural' ? 1700 : 1450;
       this.cards.forEach((card, index) => {
         const isActive = index === shot;
-        const distance = Math.hypot(card.x - camera.x, card.y - camera.y);
-        if (distance < focusedDistance) {
-          focusedDistance = distance;
-          focusedIndex = index;
+        const distance = distances[index];
+        const shouldRender = isActive || index === focusedIndex || (nearestOrbitCards ? nearestOrbitCards.has(index) : distance <= renderRadius);
+        if (!shouldRender) {
+          if (this.options.template === 'orbit') {
+            card.card.remove();
+          } else if (card.card.dataset.reelHidden !== 'true') {
+            card.card.dataset.reelHidden = 'true';
+            card.card.style.opacity = '0';
+            card.card.style.filter = 'none';
+          }
+          if (card.video && !card.video.paused) card.video.pause();
+          return;
         }
+        if (this.options.template === 'orbit' && card.card.parentElement !== this.world) this.world.appendChild(card.card);
+        delete card.card.dataset.reelHidden;
+        const clarityBlurScale = this.clarity === 'natural' ? 1 : this.clarity === 'clear' ? 0.35 : 0;
         const blur = this.options.legacyTv || isActive
           ? 0
-          : clamp((distance - 220) / 100, 1.4, 5) + (distance > 360 ? flyBlur * 0.65 : 0);
+          : (clamp((distance - 220) / 100, 1.4, 5) + (distance > 360 ? flyBlur * 0.65 : 0)) * clarityBlurScale;
         const near = distance < 200;
-        const drift = this.options.reducedMotion ? 0 : (index === focusedIndex ? 0.9 : 2.2);
-        const driftX = Math.sin(time * 0.22 + index * 1.7) * drift;
-         const driftY = Math.cos(time * 0.18 + index * 1.2) * drift * 0.72;
-         const driftZ = Math.sin(time * 0.14 + index) * 2.5;
+        const drift = this.options.reducedMotion || this.clarity !== 'natural'
+          ? 0
+          : (index === focusedIndex ? 0.35 : 0.6);
+        const orbitMotion = this.options.template === 'orbit' && !this.options.reducedMotion ? 1 : 0;
+        const randomMotionX = smoothNoise(time * (0.72 + (index % 5) * 0.05), index + 17) * 7 * orbitMotion;
+        const randomMotionY = smoothNoise(time * (0.62 + (index % 7) * 0.04), index + 43) * 5 * orbitMotion;
+        const randomMotionZ = smoothNoise(time * (0.5 + (index % 3) * 0.04), index + 79) * 1.2 * orbitMotion;
+        const driftX = Math.sin(time * 0.22 + index * 1.7) * drift + randomMotionX;
+        const driftY = Math.cos(time * 0.18 + index * 1.2) * drift * 0.72 + randomMotionY;
+         const driftZ = (this.clarity === 'natural' ? Math.sin(time * 0.14 + index) * 0.7 : 0) + randomMotionZ;
          const driftRotate = Math.sin(time * 0.16 + index * 0.8) * 0.28;
-         const heroScale = isActive ? 1.035 : 1;
+         const stabilizedDriftRotate = (this.clarity === 'natural' ? driftRotate : 0) + (orbitMotion ? smoothNoise(time * 0.5, index + 101) * 0.16 : 0);
+         const zoomProgress = this.zoomEnabled && isActive ? clamp(holdProgress, 0, 1) : 0;
+        const heroScale = isActive ? 1.035 : 1;
+        const orbitBackgroundScale = heroScale;
+         const zoomScale = zoomProgress * 0.055;
          const depthBias = this.options.template === 'orbit' ? (isActive ? 180 : -380) : 0;
-         card.card.style.transform = `translate3d(${(card.x - card.width / 2 + driftX).toFixed(1)}px,${(card.y - card.height / 2 + driftY).toFixed(1)}px,${(card.z + driftZ + depthBias).toFixed(1)}px) rotateX(${(driftRotate * 0.5).toFixed(2)}deg) rotateY(${driftRotate.toFixed(2)}deg) rotateZ(${(card.rot + driftRotate * 0.18).toFixed(2)}deg) scale(${heroScale})`;
+        const cinematicDepthBias = this.options.template === 'orbit'
+          ? (isActive ? 80 : card.z - 120)
+          : depthBias;
+        const fitScale = isActive && this.options.template === 'orbit'
+          ? Math.min(
+            (this.el.clientWidth * 0.82) / Math.max(1, card.width),
+            (this.el.clientHeight * 0.86) / Math.max(1, card.height),
+          ) / Math.max(0.01, this.scale)
+          : this.options.template === 'orbit' ? orbitBackgroundScale : heroScale + zoomScale;
+        // Keep the hero inside the stage at every point of the push-in. The
+        // previous 8% zoom was enough to push portrait and landscape cards
+        // beyond the viewport, especially after the camera perspective was
+        // applied. Start just under the fitted size and use only a restrained
+        // 2% zoom while preserving a small arrival dip.
+        const cinematicScale = isActive && this.options.template === 'orbit'
+          ? fitScale * (0.965 + zoomProgress * 0.02) * (1 - dip * 0.08)
+          : heroScale + zoomScale;
+        const cardRotateZ = isActive && this.options.template === 'orbit'
+          ? smoothNoise(time * 0.3, index + 141) * 2.5
+          : card.rot + stabilizedDriftRotate * 0.18;
+        const cardRotateY = isActive && this.options.template === 'orbit'
+          ? smoothNoise(time * 0.24, index + 181) * 4
+          : stabilizedDriftRotate;
+        const focusRack = this.options.template === 'orbit' && isActive && local < move && progress > 0.75;
+        if (this.options.template === 'orbit') {
+          // Decorative polaroid paper is useful in the background, but its
+          // large lower padding makes the focused photo look undersized. The
+          // active shot always uses a tight frame matched to its own aspect.
+          card.card.classList.toggle('orbit-polaroid', !isActive && index % 6 === 0);
+          const orbitBlurTier = focusRack
+            ? 'rack'
+            : isActive
+              ? 'sharp'
+              : dip > 0.05
+                ? 'flight'
+                : distance < 360
+                  ? 'near'
+                  : distance < 760 ? 'medium' : 'far';
+          if (card.card.dataset.orbitBlurTier !== orbitBlurTier) {
+            card.card.dataset.orbitBlurTier = orbitBlurTier;
+            card.card.classList.remove('orbit-blur-sharp', 'orbit-blur-rack', 'orbit-blur-flight', 'orbit-blur-near', 'orbit-blur-medium', 'orbit-blur-far');
+            card.card.classList.add(`orbit-blur-${orbitBlurTier}`);
+          }
+        }
+        card.card.style.transform = `translate3d(${(card.x - card.width / 2 + driftX).toFixed(1)}px,${(card.y - card.height / 2 + driftY).toFixed(1)}px,${(card.z + driftZ + cinematicDepthBias).toFixed(1)}px) rotateX(${isActive && orbitCamera ? 0 : (stabilizedDriftRotate * 0.5).toFixed(2)}deg) rotateY(${cardRotateY.toFixed(2)}deg) rotateZ(${cardRotateZ.toFixed(2)}deg) scale(${cinematicScale.toFixed(4)})`;
         card.card.style.opacity = this.options.legacyTv && distance > 900 ? '0.72' : '1';
          card.card.style.zIndex = isActive ? '50' : index === focusedIndex ? '8' : '1';
-        card.card.style.filter = isActive || this.options.legacyTv
-          ? ''
-          : (blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : '') + (near ? '' : ' brightness(.9)');
+        if (isActive) {
+          card.card.style.setProperty('filter', 'none', 'important');
+          card.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m')?.style.setProperty('filter', 'none', 'important');
+        } else {
+          const readableBlur = this.options.template === 'orbit'
+            ? Math.min(0.35, blur)
+            : Math.min(1.2, blur);
+          card.card.style.setProperty(
+            'filter',
+            readableBlur > 0.15
+              ? `blur(${readableBlur.toFixed(1)}px) brightness(${this.options.template === 'orbit' ? '.96' : '.92'})`
+              : 'brightness(.96)',
+            'important',
+          );
+        }
         if (card.video) {
           const active = near && !this.paused;
           if (active && card.video.paused) this.playMutedVideo(card.video);
@@ -1626,7 +2096,15 @@ export class MemoryReelController {
       });
       const focusedMedia = this.cards[focusedIndex]?.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
       const ambientSource = focusedMedia?.currentSrc || focusedMedia?.getAttribute('src') || '';
-      if (ambientSource && ambientSource !== this.ambientSource) {
+      const heroCard = this.cards[shot]?.card;
+      const heroMedia = heroCard?.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
+      const heroSource = heroMedia?.currentSrc || heroMedia?.getAttribute('src') || '';
+      if (heroCard && heroSource) {
+        const heroImage = `url("${heroSource.replace(/"/g, '\\"')}")`;
+        heroCard.style.setProperty('--hero-image', heroImage);
+        this.el.style.setProperty('--hero-image', heroImage);
+      }
+      if (this.options.template !== 'orbit' && ambientSource && ambientSource !== this.ambientSource) {
         this.ambientSource = ambientSource;
         this.ambient.style.backgroundImage = `url("${ambientSource.replace(/"/g, '\\"')}")`;
       }
@@ -1681,11 +2159,14 @@ interface MusicQueueItem {
 }
 
 const STORY_MUSIC_STORAGE_KEY = 'memoriya-story-music-v1';
+const STORY_MUSIC_PLAYBACK_STORAGE_KEY = 'memoriya-story-music-playback-v1';
 // v3 makes the original camera-motion Memory Showcase the default again.
 // Older saved choices are intentionally migrated away once so Story Mode
 // opens with the requested camera journey on every device.
 const STORY_TEMPLATE_STORAGE_KEY = 'memoriya-story-template-v3';
 const STORY_EFFECT_STORAGE_KEY = 'memoriya-story-effect-v1';
+const STORY_CLARITY_STORAGE_KEY = 'memoriya-story-clarity-v1';
+const STORY_ZOOM_STORAGE_KEY = 'memoriya-story-zoom-v1';
 const STORY_TITLE_STORAGE_KEY = 'memoriya-story-title-v1';
 
 interface StoredStoryMusic {
@@ -1693,8 +2174,41 @@ interface StoredStoryMusic {
   secondaryDriveSongs: DriveAudioFile[];
   driveSongsLoaded: boolean;
   driveFolderId?: string;
+  musicFolderId?: string;
   queue: Array<Omit<MusicQueueItem, 'src'>>;
 }
+
+interface StoredMusicPlayback {
+  trackId: string;
+  currentTime: number;
+  wasPlaying: boolean;
+  updatedAt: number;
+}
+
+const readStoredMusicPlayback = (): StoredMusicPlayback | null => {
+  try {
+    const raw = window.localStorage.getItem(STORY_MUSIC_PLAYBACK_STORAGE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<StoredMusicPlayback>;
+    if (!value.trackId || !Number.isFinite(value.currentTime)) return null;
+    return {
+      trackId: value.trackId,
+      currentTime: Math.max(0, value.currentTime),
+      wasPlaying: Boolean(value.wasPlaying),
+      updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeStoredMusicPlayback = (value: StoredMusicPlayback) => {
+  try {
+    window.localStorage.setItem(STORY_MUSIC_PLAYBACK_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Local storage is optional; the current Story Mode session still works.
+  }
+};
 
 const readStoredStoryMusic = (driveFolderId = ''): StoredStoryMusic | null => {
   try {
@@ -1707,6 +2221,7 @@ const readStoredStoryMusic = (driveFolderId = ''): StoredStoryMusic | null => {
       secondaryDriveSongs: Array.isArray(value.secondaryDriveSongs) ? value.secondaryDriveSongs : [],
       driveSongsLoaded: Boolean(value.driveSongsLoaded),
       driveFolderId: value.driveFolderId || driveFolderId,
+      musicFolderId: value.musicFolderId || '',
       queue: Array.isArray(value.queue) ? value.queue.filter(track => track && track.id && track.label) : [],
     };
   } catch {
@@ -1760,6 +2275,24 @@ const readStoredStoryEffect = (fallback: MemoryReelEffect): MemoryReelEffect => 
   }
 };
 
+const readStoredStoryClarity = (fallback: MemoryReelClarity): MemoryReelClarity => {
+  try {
+    const stored = window.localStorage.getItem(STORY_CLARITY_STORAGE_KEY) as MemoryReelClarity | null;
+    return stored && MEMORY_REEL_CLARITIES.some(item => item.id === stored) ? stored : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const readStoredStoryZoom = (fallback: boolean): boolean => {
+  try {
+    const stored = window.localStorage.getItem(STORY_ZOOM_STORAGE_KEY);
+    return stored === null ? fallback : stored === 'true';
+  } catch {
+    return fallback;
+  }
+};
+
 const readStoredStoryTemplate = (fallback: MemoryReelTemplate): MemoryReelTemplate => {
   try {
     const stored = window.localStorage.getItem(STORY_TEMPLATE_STORAGE_KEY) as MemoryReelTemplate | null;
@@ -1800,6 +2333,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const musicPanelRef = useRef<HTMLDivElement | null>(null);
   const templatePanelRef = useRef<HTMLDivElement | null>(null);
   const effectsPanelRef = useRef<HTMLDivElement | null>(null);
+  const clarityPanelRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<MemoryReelController | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const audioObjectUrlsRef = useRef<string[]>([]);
@@ -1819,14 +2353,18 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [musicOpen, setMusicOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [effectsOpen, setEffectsOpen] = useState(false);
+  const [clarityOpen, setClarityOpen] = useState(false);
   const [template, setTemplate] = useState<MemoryReelTemplate>(() => readStoredStoryTemplate(initialTemplate));
   const [effect, setEffect] = useState<MemoryReelEffect>(() => readStoredStoryEffect('natural'));
+  const [clarity, setClarity] = useState<MemoryReelClarity>(() => readStoredStoryClarity('clear'));
+  const [zoomEnabled, setZoomEnabled] = useState(() => readStoredStoryZoom(true));
   const [musicQuery, setMusicQuery] = useState('');
   const [musicResults, setMusicResults] = useState<OpenSourceMusicTrack[]>([]);
   const [musicLoading, setMusicLoading] = useState(false);
   const [driveSongs, setDriveSongs] = useState<DriveAudioFile[]>(() => storedStoryMusic?.driveSongs || []);
   const [secondaryDriveSongs, setSecondaryDriveSongs] = useState<DriveAudioFile[]>(() => storedStoryMusic?.secondaryDriveSongs || []);
   const [driveSongsLoaded, setDriveSongsLoaded] = useState(() => Boolean(storedStoryMusic?.driveSongsLoaded));
+  const [musicDriveFolderId, setMusicDriveFolderId] = useState(() => storedStoryMusic?.musicFolderId || '');
   const [driveSongsLoading, setDriveSongsLoading] = useState(false);
   const [secondaryDriveSongsLoading, setSecondaryDriveSongsLoading] = useState(false);
   const [driveUploadLoading, setDriveUploadLoading] = useState(false);
@@ -1849,9 +2387,13 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const fullscreenControlsTimerRef = useRef<number | null>(null);
   const driveSongsRequestRef = useRef(false);
   const secondaryDriveSongsRequestRef = useRef(false);
-  const driveMusicFolderRef = useRef(driveFolderId || '');
+  const driveMusicFolderRef = useRef(storedStoryMusic?.musicFolderId || '');
   const audioManuallyStoppedRef = useRef(false);
   const failedMusicIdsRef = useRef(new Set<string>());
+  const storedMusicPlaybackRef = useRef<StoredMusicPlayback | null>(readStoredMusicPlayback());
+  const pendingMusicResumeRef = useRef<{ trackId: string; currentTime: number } | null>(null);
+  const playbackPersistTimerRef = useRef<number | null>(null);
+  const autoResumeRequestedRef = useRef(false);
   musicQueueRef.current = musicQueue;
   loopEnabledRef.current = loopEnabled;
   const audioPauseGuardRef = useRef(false);
@@ -1864,15 +2406,53 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setCurrentMusicId(id);
   };
 
+  const persistMusicPlayback = (wasPlaying?: boolean, immediate = false) => {
+    const element = audioPlayerRef.current;
+    const trackId = currentMusicIdRef.current || musicQueueRef.current[0]?.id;
+    if (!trackId) return;
+    const currentTime = Number.isFinite(element?.currentTime) ? Math.max(0, element?.currentTime || 0) : 0;
+    const nextSnapshot: StoredMusicPlayback = {
+      trackId,
+      currentTime,
+      wasPlaying: wasPlaying ?? Boolean(element && !element.paused),
+      updatedAt: Date.now(),
+    };
+    storedMusicPlaybackRef.current = nextSnapshot;
+    if (playbackPersistTimerRef.current !== null) window.clearTimeout(playbackPersistTimerRef.current);
+    if (immediate) {
+      playbackPersistTimerRef.current = null;
+      writeStoredMusicPlayback(nextSnapshot);
+      return;
+    }
+    playbackPersistTimerRef.current = window.setTimeout(() => {
+      playbackPersistTimerRef.current = null;
+      writeStoredMusicPlayback(storedMusicPlaybackRef.current || nextSnapshot);
+    }, 500);
+  };
+
+  const applyPendingMusicResume = () => {
+    const element = audioPlayerRef.current;
+    const pending = pendingMusicResumeRef.current;
+    if (!element || !pending || pending.trackId !== currentMusicIdRef.current) return;
+    if (!Number.isFinite(element.duration) || element.duration <= 0) return;
+    const resumeAt = Math.min(pending.currentTime, Math.max(0, element.duration - 0.25));
+    try {
+      if (resumeAt > 0.25) element.currentTime = resumeAt;
+      pendingMusicResumeRef.current = null;
+    } catch {
+      // The media element may not accept seeking until its metadata is ready.
+    }
+  };
+
   useEffect(() => {
-    const nextFolder = driveFolderId || '';
+    const nextFolder = musicDriveFolderId || '';
     if (driveMusicFolderRef.current === nextFolder) return;
     driveMusicFolderRef.current = nextFolder;
     setDriveSongs([]);
     setDriveSongsLoaded(false);
     setMusicQueue(current => current.filter(track => track.source !== 'drive'));
     setMusicName('');
-  }, [driveFolderId]);
+  }, [musicDriveFolderId]);
 
   useEffect(() => {
     // Story Mode owns the viewport. Without this lock, an older WebView can
@@ -1937,14 +2517,20 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   }, [driveAccessToken]);
 
   useEffect(() => {
-    if (!musicOpen && !templateOpen && !effectsOpen) return;
-    const panel = musicOpen ? musicPanelRef.current : effectsOpen ? effectsPanelRef.current : templatePanelRef.current;
+    if (!musicOpen && !templateOpen && !effectsOpen && !clarityOpen) return;
+    const panel = musicOpen
+      ? musicPanelRef.current
+      : effectsOpen
+        ? effectsPanelRef.current
+        : clarityOpen
+          ? clarityPanelRef.current
+          : templatePanelRef.current;
     const firstControl = panel?.querySelector<HTMLElement>('button, input, select');
     if (!firstControl) return;
     const focusPanel = () => firstControl.focus();
     if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(focusPanel);
     else window.setTimeout(focusPanel, 0);
-  }, [effectsOpen, musicOpen, templateOpen]);
+  }, [clarityOpen, effectsOpen, musicOpen, templateOpen]);
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -1962,25 +2548,30 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     }, { threshold: 0.16 });
     headings.forEach(heading => observer.observe(heading));
     return () => observer.disconnect();
-  }, [effectsOpen, musicOpen, templateOpen]);
+  }, [clarityOpen, effectsOpen, musicOpen, templateOpen]);
 
   useEffect(() => {
-    if (!musicOpen && !templateOpen && !effectsOpen) return;
+    if (!musicOpen && !templateOpen && !effectsOpen && !clarityOpen) return;
     const closePanels = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' && event.key !== 'Backspace') return;
       event.preventDefault();
       setMusicOpen(false);
       setTemplateOpen(false);
       setEffectsOpen(false);
+      setClarityOpen(false);
     };
     window.addEventListener('keydown', closePanels);
     return () => window.removeEventListener('keydown', closePanels);
-  }, [effectsOpen, musicOpen, templateOpen]);
+  }, [clarityOpen, effectsOpen, musicOpen, templateOpen]);
 
   useEffect(() => {
     let active = true;
     const stored = storedStoryMusic;
-    audioManuallyStoppedRef.current = true;
+    const storedPlayback = storedMusicPlaybackRef.current;
+    // Restore the intent as well as the position. Browsers may still require
+    // one user gesture after navigation, but the next Play tap will continue
+    // from this exact point instead of starting a new song.
+    audioManuallyStoppedRef.current = !storedPlayback?.wasPlaying;
 
     const restoreQueue = async () => {
       if (!stored?.queue.length) {
@@ -2011,8 +2602,18 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       if (!active) return;
       const nextQueue = restored.filter((track): track is MusicQueueItem => Boolean(track));
       if (nextQueue.length) {
+        const selectedTrack = storedPlayback
+          ? nextQueue.find(track => track.id === storedPlayback.trackId) || nextQueue[0]
+          : nextQueue[0];
         setMusicQueue(current => current.length ? current : nextQueue);
-        setMusicName(current => current || nextQueue[0].label);
+        setCurrentMusic(selectedTrack.id);
+        setMusicName(current => current || selectedTrack.label);
+        if (storedPlayback && selectedTrack.id === storedPlayback.trackId) {
+          pendingMusicResumeRef.current = {
+            trackId: selectedTrack.id,
+            currentTime: storedPlayback.currentTime,
+          };
+        }
       }
       musicHydratedRef.current = true;
     };
@@ -2022,15 +2623,41 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   }, []);
 
   useEffect(() => {
+    const playback = storedMusicPlaybackRef.current;
+    if (
+      !musicHydratedRef.current ||
+      !musicQueue.length ||
+      !playback?.wasPlaying ||
+      !pendingMusicResumeRef.current ||
+      autoResumeRequestedRef.current
+    ) return undefined;
+    autoResumeRequestedRef.current = true;
+    audioManuallyStoppedRef.current = false;
+    const timer = window.setTimeout(() => {
+      void playStoryAudio(false);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [musicQueue]);
+
+  useEffect(() => () => {
+    if (playbackPersistTimerRef.current !== null) {
+      window.clearTimeout(playbackPersistTimerRef.current);
+      playbackPersistTimerRef.current = null;
+    }
+    persistMusicPlayback(Boolean(audioPlayerRef.current && !audioPlayerRef.current.paused), true);
+  }, []);
+
+  useEffect(() => {
     if (!musicHydratedRef.current) return;
     writeStoredStoryMusic({
       driveSongs,
       secondaryDriveSongs,
       driveSongsLoaded,
       driveFolderId: driveFolderId || '',
+      musicFolderId: musicDriveFolderId,
       queue: musicQueue.map(({ src: _src, ...track }) => track),
     });
-  }, [driveFolderId, driveSongs, secondaryDriveSongs, driveSongsLoaded, musicQueue]);
+  }, [driveFolderId, musicDriveFolderId, driveSongs, secondaryDriveSongs, driveSongsLoaded, musicQueue]);
 
   // Drive access tokens and object URLs can change while the same media set
   // is playing. They must not rebuild the reel or restart its clock.
@@ -2098,6 +2725,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       reducedMotion,
       legacyTv: legacyTvMode,
       template,
+      zoom: zoomEnabled,
       onProgress: (current, total) => {
         setProgress({ progress: current, total });
         const more = moreConfigRef.current;
@@ -2136,6 +2764,24 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   }, [effect]);
 
   useEffect(() => {
+    controllerRef.current?.setClarity(clarity);
+    try {
+      window.localStorage.setItem(STORY_CLARITY_STORAGE_KEY, clarity);
+    } catch {
+      // Local storage is optional; the current story remains active.
+    }
+  }, [clarity]);
+
+  useEffect(() => {
+    controllerRef.current?.setZoomEnabled(zoomEnabled);
+    try {
+      window.localStorage.setItem(STORY_ZOOM_STORAGE_KEY, String(zoomEnabled));
+    } catch {
+      // Local storage is optional; the current story remains active.
+    }
+  }, [zoomEnabled]);
+
+  useEffect(() => {
     const controller = controllerRef.current;
     if (!controller) return;
     const preserveProgress = hasLoadedSourcesRef.current;
@@ -2157,6 +2803,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const element = audioPlayerRef.current;
     const activeTrack = musicQueue.find(track => track.id === currentMusicIdRef.current) || musicQueue[0];
     const source = activeTrack?.src || sources[0] || '';
+    if (activeTrack && activeTrack.id !== currentMusicIdRef.current) setCurrentMusic(activeTrack.id);
     if (element && element.src !== source) {
       audioPauseGuardRef.current = true;
       element.pause();
@@ -2283,8 +2930,20 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       return;
     }
     const legacyShell = shell as LegacyFullscreenElement;
-    if (shell.requestFullscreen) await shell.requestFullscreen().catch(() => undefined);
-    else await Promise.resolve(legacyShell.webkitRequestFullscreen?.()).catch(() => undefined);
+    if (shell.requestFullscreen) {
+      await shell.requestFullscreen().catch(() => {
+        setFullscreen(true);
+        setFullscreenControlsVisible(true);
+      });
+    } else if (legacyShell.webkitRequestFullscreen) {
+      await Promise.resolve(legacyShell.webkitRequestFullscreen()).catch(() => {
+        setFullscreen(true);
+        setFullscreenControlsVisible(true);
+      });
+    } else {
+      setFullscreen(true);
+      setFullscreenControlsVisible(true);
+    }
   };
 
   const chooseMusicFiles = (files: FileList | File[]) => {
@@ -2419,6 +3078,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     if (!track) return;
     failedMusicIdsRef.current.delete(track.id);
     audioManuallyStoppedRef.current = false;
+    if (pendingMusicResumeRef.current?.trackId !== track.id) pendingMusicResumeRef.current = null;
     setCurrentMusic(track.id);
     setMusicName(track.label);
     const element = audioPlayerRef.current;
@@ -2520,14 +3180,14 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       // expired, renew it here before giving up with a 403 message.
       let token = initialToken;
       try {
-        const songs = await googleDriveService.listAudioFiles(token, driveFolderId);
+        const songs = await googleDriveService.listAudioFiles(token, musicDriveFolderId);
         setDriveSongs(songs);
         setDriveSongsLoaded(true);
         await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), token)));
       } catch (error) {
         if (!isDriveAuthorizationError(error)) throw error;
         token = await reconnectDriveForPlayback();
-        const songs = await googleDriveService.listAudioFiles(token, driveFolderId);
+        const songs = await googleDriveService.listAudioFiles(token, musicDriveFolderId);
         setDriveSongs(songs);
         setDriveSongsLoaded(true);
         await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), token)));
@@ -2571,7 +3231,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       if (driveSongsRequestRef.current) return;
       driveSongsRequestRef.current = true;
       try {
-        const songs = await googleDriveService.listAudioFiles(driveAccessTokenRef.current || driveAccessToken, driveFolderId);
+        const songs = await googleDriveService.listAudioFiles(driveAccessTokenRef.current || driveAccessToken, musicDriveFolderId);
         if (!active) return;
         setDriveSongs(songs);
         await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), driveAccessTokenRef.current || driveAccessToken)));
@@ -2586,7 +3246,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       active = false;
       window.clearInterval(interval);
     };
-  }, [driveAccessToken, driveFolderId, driveSongsLoaded]);
+  }, [driveAccessToken, musicDriveFolderId, driveSongsLoaded]);
 
   const chooseDriveSong = (song: DriveAudioFile) => {
     const isSecondaryDriveSong = secondaryDriveSongs.some(item => item.id === song.id);
@@ -2620,6 +3280,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       cacheKey,
       driveAccount: isSecondaryDriveSong ? 'secondary' : 'primary',
     } satisfies MusicQueueItem;
+    pendingMusicResumeRef.current = null;
     audioManuallyStoppedRef.current = true;
     audioPauseGuardRef.current = true;
     audioPlayerRef.current?.pause();
@@ -2645,7 +3306,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       for (const file of nextFiles) {
         let uploaded: DriveAudioFile;
         try {
-          uploaded = await googleDriveService.uploadMedia(token, file, driveFolderId);
+          uploaded = await googleDriveService.uploadMedia(token, file, musicDriveFolderId);
         } catch (error) {
           throw error;
         }
@@ -2659,7 +3320,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           driveFileId: uploaded.id,
           cacheKey: driveAudioCacheKey(uploaded),
         });
-        void writeCachedStoryMedia(driveAudioCacheKey(uploaded), file, uploaded.mimeType || file.type);
+        await writeCachedStoryMedia(driveAudioCacheKey(uploaded), file, uploaded.mimeType || file.type);
       }
       setMusicName(uploadedTracks[0]?.label || '');
       audioManuallyStoppedRef.current = false;
@@ -2698,6 +3359,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     if (next) {
       setTemplateOpen(false);
       setEffectsOpen(false);
+      setClarityOpen(false);
     }
   };
 
@@ -2705,12 +3367,21 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     setTemplateOpen(value => !value);
     setMusicOpen(false);
     setEffectsOpen(false);
+    setClarityOpen(false);
   };
 
   const openEffects = () => {
     setEffectsOpen(value => !value);
     setMusicOpen(false);
     setTemplateOpen(false);
+    setClarityOpen(false);
+  };
+
+  const openClarity = () => {
+    setClarityOpen(value => !value);
+    setMusicOpen(false);
+    setTemplateOpen(false);
+    setEffectsOpen(false);
   };
 
   const playStoryAudio = async (fromUserGesture = false) => {
@@ -2734,6 +3405,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           element.load();
         }
         audioPauseGuardRef.current = false;
+        applyPendingMusicResume();
         try {
           await playAudioWithTimeout(element);
           setAudioPlaying(true);
@@ -2752,6 +3424,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         element.load();
         audioPauseGuardRef.current = false;
       }
+      applyPendingMusicResume();
       await playAudioWithTimeout(element);
       setAudioPlaying(true);
       setMusicError('');
@@ -2783,6 +3456,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       audioPauseGuardRef.current = true;
       audioPlayerRef.current?.pause();
       audioPauseGuardRef.current = false;
+      persistMusicPlayback(false, true);
       return;
     }
     controller.play();
@@ -2793,7 +3467,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const currentQueue = musicQueueRef.current;
     const element = audioPlayerRef.current;
     if (!currentQueue.length || !element) return;
-    const currentIndex = currentQueue.findIndex(track => track.id === currentMusicIdRef.current);
+    const previousTrackId = currentMusicIdRef.current;
+    const currentIndex = currentQueue.findIndex(track => track.id === previousTrackId);
     const activeIndex = currentIndex >= 0 ? currentIndex : 0;
     let nextIndex = activeIndex + 1 < currentQueue.length
       ? activeIndex + 1
@@ -2821,12 +3496,32 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     audioManuallyStoppedRef.current = false;
     setAudioLoading(true);
     try {
+      if (nextTrack.id === previousTrackId && element.src) {
+        // Keep a single-song loop gapless. Reusing the already decoded source
+        // avoids a Drive/cache round trip and never flashes back to a fresh
+        // audio element when the visual story loops.
+        audioPauseGuardRef.current = true;
+        element.pause();
+        element.currentTime = 0;
+        audioPauseGuardRef.current = false;
+        await playAudioWithTimeout(element);
+        setAudioPlaying(true);
+        return;
+      }
       const source = await prepareDriveTrackForPlayback(nextTrack);
+      const sourceChanged = element.src !== source;
       audioPauseGuardRef.current = true;
       element.pause();
-      element.src = source;
-      element.load();
+      if (sourceChanged) {
+        element.src = source;
+        element.load();
+      } else {
+        // A one-song loop should start the same element again, without a
+        // source reload that can briefly stop or reset playback elsewhere.
+        element.currentTime = 0;
+      }
       audioPauseGuardRef.current = false;
+      applyPendingMusicResume();
       await playAudioWithTimeout(element);
       setAudioPlaying(true);
     } catch (error) {
@@ -2847,6 +3542,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     if (!audioElement.paused) {
       audioManuallyStoppedRef.current = true;
       audioElement.pause();
+      persistMusicPlayback(false, true);
       return;
     }
     audioManuallyStoppedRef.current = false;
@@ -2862,7 +3558,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
   return (
     <div className={`memory-reel-overlay${fullscreen ? ' is-fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label="Memory story reel">
-      <div ref={shellRef} className={`memory-reel-shell${fullscreen ? ' is-fullscreen' : ''}${musicOpen || templateOpen || effectsOpen ? ' has-panel-open' : ''}`}>
+      <div ref={shellRef} className={`memory-reel-shell${fullscreen ? ' is-fullscreen' : ''}${musicOpen || templateOpen || effectsOpen || clarityOpen ? ' has-panel-open' : ''}`}>
         <div ref={stageRef} className="reel memory-reel-stage" />
         <div className="memory-reel-toolbar">
           <button type="button" onClick={toggleStoryPlayback} disabled={loading}>
@@ -2875,6 +3571,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           {musicQueue.length > 0 && <button type="button" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}><Volume2 size={16} /> {audioPlaying ? 'Stop music' : 'Play music'}</button>}
           {musicQueue.length > 0 && <button type="button" onClick={toggleMute} aria-pressed={audioMuted} aria-label={audioMuted ? 'Unmute music' : 'Mute music'}>{audioMuted ? <VolumeX size={16} /> : <Volume2 size={16} />} {audioMuted ? 'Unmute' : 'Mute'}</button>}
           <button type="button" className={effectsOpen ? 'is-active' : ''} aria-expanded={effectsOpen} onClick={openEffects}><WandSparkles size={16} /> Effects</button>
+          <button type="button" className={zoomEnabled ? 'is-active' : ''} onClick={() => setZoomEnabled(value => !value)} aria-pressed={zoomEnabled}>Zoom {zoomEnabled ? 'On' : 'Off'}</button>
+          <button type="button" className={clarityOpen ? 'is-active' : ''} aria-expanded={clarityOpen} onClick={openClarity}><WandSparkles size={16} /> Clarity</button>
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
             <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
           )}
@@ -2886,17 +3584,28 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           className={`memory-reel-audio-player${musicOpen && musicQueue.length ? ' is-visible' : ''}`}
           controls
           playsInline
+          crossOrigin={'anonymous'}
           preload="metadata"
           aria-label="Story music player"
           onLoadStart={() => setAudioLoading(true)}
           onWaiting={() => setAudioLoading(true)}
           onCanPlay={() => setAudioLoading(false)}
-          onLoadedMetadata={() => setAudioLoading(false)}
-          onPlaying={() => { setAudioLoading(false); setAudioPlaying(true); }}
+          onLoadedMetadata={() => { applyPendingMusicResume(); setAudioLoading(false); }}
+          onTimeUpdate={() => persistMusicPlayback(Boolean(audioPlayerRef.current && !audioPlayerRef.current.paused))}
+          onPlaying={() => {
+            void controllerRef.current?.resumeAudioAnalysis().catch(() => undefined);
+            applyPendingMusicResume();
+            setAudioLoading(false);
+            setAudioPlaying(true);
+            persistMusicPlayback(true);
+          }}
           onVolumeChange={() => setAudioMuted(Boolean(audioPlayerRef.current?.muted))}
           onPause={() => {
             setAudioPlaying(false);
-            if (!audioPauseGuardRef.current) audioManuallyStoppedRef.current = true;
+            if (!audioPauseGuardRef.current) {
+              audioManuallyStoppedRef.current = true;
+              persistMusicPlayback(false, true);
+            }
           }}
           onEnded={() => void advanceMusic()}
           onError={() => {
@@ -2954,6 +3663,15 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               <input value={musicQuery} onChange={event => setMusicQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void searchMusic(); }} placeholder="Search free music…" />
               <button type="button" onClick={() => void searchMusic()} disabled={musicLoading}><Search size={15} /> {musicLoading ? 'Searching…' : 'Search'}</button>
               <label className="memory-reel-upload"><Upload size={15} /> Add local songs<input type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.opus,.wav,.flac,.aiff,.aif,.mka,.webm,.amr,.wma" multiple onChange={event => { chooseMusicFiles(event.target.files || []); event.currentTarget.value = ''; }} /></label>
+              {driveAccessToken && driveFolders && driveFolders.length > 0 && (
+                <label className="memory-reel-folder-picker memory-reel-music-folder-picker">
+                  <span>Drive music folder</span>
+                  <select value={musicDriveFolderId} onChange={event => setMusicDriveFolderId(event.target.value)} aria-label="Choose Drive music folder">
+                    <option value="">All Drive audio</option>
+                    {driveFolders.filter(folder => folder.id && folder.id !== 'drive-root').map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                  </select>
+                </label>
+              )}
               <label className="memory-reel-upload memory-reel-drive-upload"><Upload size={15} /> {driveUploadLoading ? 'Uploading...' : 'Upload songs to Drive'}<input type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.opus,.wav,.flac,.aiff,.aif,.mka,.webm,.amr,.wma" multiple disabled={driveUploadLoading || !driveAccessToken} onChange={event => { void uploadSongsToDrive(event.target.files || []); event.currentTarget.value = ''; }} /></label>
               {driveAccessToken && <button type="button" onClick={() => void loadDriveSongs()} disabled={driveSongsLoading}><Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : 'Load Drive songs'}</button>}
               <button type="button" onClick={() => void connectAdditionalMusicDrive()} disabled={secondaryDriveSongsLoading}><HardDrive size={15} /> {secondaryDriveSongsLoading ? 'Connecting second Drive...' : 'Add music from another Drive'}</button>
@@ -3069,6 +3787,43 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
                   className={effect === item.id ? 'is-active' : ''}
                   onClick={() => setEffect(item.id)}
                   aria-pressed={effect === item.id}
+                >
+                  <strong>{item.name}</strong>
+                  <small>{item.description}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {clarityOpen && (
+          <div
+            ref={clarityPanelRef}
+            className="memory-reel-template-panel memory-reel-clarity-panel"
+            aria-label="Choose story image clarity"
+            tabIndex={0}
+            onKeyDown={event => handleStoryPanelKeyDown(event, clarityPanelRef)}
+            onFocusCapture={keepFocusedControlVisible}
+            onWheel={stopPanelScrollPropagation}
+            onTouchMove={stopPanelScrollPropagation}
+          >
+            <div className="memory-reel-template-heading memory-reel-reveal">
+              <div><WandSparkles size={16} /><strong>Story image clarity</strong></div>
+              <div className="memory-reel-template-heading-actions">
+                <span>{MEMORY_REEL_CLARITIES.find(item => item.id === clarity)?.name}</span>
+                <button type="button" className="memory-reel-panel-close" onClick={() => setClarityOpen(false)} aria-label="Close clarity panel">
+                  <X size={17} />
+                </button>
+              </div>
+            </div>
+            <p className="memory-reel-effects-note">These presets only change display filters and motion. They do not upscale the source file.</p>
+            <div className="memory-reel-effect-grid">
+              {MEMORY_REEL_CLARITIES.map(item => (
+                <button
+                  type="button"
+                  key={item.id}
+                  className={clarity === item.id ? 'is-active' : ''}
+                  onClick={() => setClarity(item.id)}
+                  aria-pressed={clarity === item.id}
                 >
                   <strong>{item.name}</strong>
                   <small>{item.description}</small>
