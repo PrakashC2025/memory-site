@@ -5,6 +5,7 @@ import ffmpegCoreScript from '@ffmpeg/core?url';
 import ffmpegCoreWasm from '@ffmpeg/core/wasm?url';
 import { HardDrive, Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, VolumeX, WandSparkles, X } from 'lucide-react';
 import { isVisualMemory, type Memory } from '../data/memories';
+import { beginHeavyVisualPause } from '../utils/visualActivity';
 import { googleDriveService, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
 import { readDriveAuthRequired, saveDriveAccessToken, saveDriveAuthRequired } from '../services/driveLibrary';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
@@ -472,6 +473,7 @@ export class MemoryReelController {
   private prefetchTimer = 0;
   private lastDiagnostic = '';
   private lastAmbientOpacity = '';
+  private lastEffectsPaintAt = 0;
   // Measured paint cost. On weak hardware the loop lowers its repaint rate
   // instead of dropping frames mid-motion: the clock is real-time and every
   // motion term is a function of time, so the animation looks identical, it
@@ -651,9 +653,11 @@ export class MemoryReelController {
     this.pendingSources = [...newlyAdded, ...stillQueued];
 
     let liveInsertIndex = keepCurrentWall
-      // Put a newly discovered Drive memory just after the next two shots so
-      // it joins the live story quickly without interrupting the current one.
-      ? Math.min(this.cards.length, Math.max(0, this.lastRenderedShot + 2))
+      // A photo uploaded to the live Drive folder becomes the very next shot.
+      // It lands immediately after the frame that is on screen right now, so
+      // the current shot is never interrupted and the new photo is not hidden
+      // behind two other photos waiting their turn.
+      ? Math.min(this.cards.length, Math.max(0, this.lastRenderedShot + 1))
       : this.cards.length;
     // A live update only warms a small slice; a cold start paints a full wall.
     const eagerBatch = this.pendingSources.splice(0, keepCurrentWall ? WALL_LIVE_BATCH : WALL_INITIAL_BATCH);
@@ -1400,7 +1404,11 @@ export class MemoryReelController {
     this.dustCanvas.style.width = `${width}px`;
     this.dustCanvas.style.height = `${height}px`;
     if (this.dustContext) this.dustContext.setTransform(this.dustDpr, 0, 0, this.dustDpr, 0, 0);
-    this.effectsDpr = Math.min(2, window.devicePixelRatio || 1);
+    // The effect layer is soft gradients and dots, so a dense backing store
+    // buys nothing visible but costs a lot of per-frame fill on phones.
+    const coarsePointer = typeof window.matchMedia === 'function'
+      && window.matchMedia('(pointer: coarse)').matches;
+    this.effectsDpr = coarsePointer ? 1 : Math.min(1.5, window.devicePixelRatio || 1);
     this.effectsWidth = width;
     this.effectsHeight = height;
     this.effectsCanvas.width = Math.round(width * this.effectsDpr);
@@ -2143,7 +2151,14 @@ export class MemoryReelController {
     if (!count) return;
     const audioMetrics = this.readAudioMetrics(time);
     const audioLevel = audioMetrics.level;
-    this.renderEffects(audioMetrics, time);
+    // The effect layer is slow, soft motion. Redrawing it at most 30 times a
+    // second halves full-screen canvas fill on phones with no visible change,
+    // while the cards above it keep painting every frame.
+    const effectsNow = performance.now();
+    if (effectsNow - this.lastEffectsPaintAt >= 1000 / 30) {
+      this.lastEffectsPaintAt = effectsNow;
+      this.renderEffects(audioMetrics, time);
+    }
     if (!this.options.legacyTv && this.options.template !== 'orbit') {
       // Writing the same string still invalidates style, so compare first.
       const ambientOpacity = (0.68 + audioLevel * 0.16).toFixed(3);
@@ -2548,9 +2563,14 @@ export class MemoryReelController {
             card.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m')?.style.setProperty('filter', 'none', 'important');
           }
         } else {
-          const readableBlur = this.options.template === 'orbit'
+          // Quantise to half-pixel steps. Blur values differ by well under a
+          // pixel at these radii, but every distinct string forces the browser
+          // to re-rasterise that layer, so coarser steps cut the work without
+          // any visible change.
+          const rawBlur = this.options.template === 'orbit'
             ? Math.min(0.35, blur)
             : Math.min(1.2, blur);
+          const readableBlur = Math.round(rawBlur * 2) / 2;
           const nextFilter = readableBlur > 0.15
             ? `blur(${readableBlur.toFixed(1)}px) brightness(${this.options.template === 'orbit' ? '.96' : '.92'})`
             : 'brightness(.96)';
@@ -3225,7 +3245,12 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     });
     controllerRef.current = controller;
     controller.setAudioAnalysisElement(audioPlayerRef.current);
+    // The reel covers the viewport, so the ambient background canvas and the
+    // splash cursor are invisible while it is mounted. Pausing them also stops
+    // the overlay's backdrop blur from recomputing every frame.
+    const releaseHeavyVisualPause = beginHeavyVisualPause();
     return () => {
+      releaseHeavyVisualPause();
       controller.destroy();
       controllerRef.current = null;
     };

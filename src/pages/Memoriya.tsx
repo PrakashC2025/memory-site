@@ -129,6 +129,13 @@ const Memoriya: React.FC = () => {
   const localFileIdsRef = useRef(new Set<string>());
   const memoriesRef = useRef<Memory[]>([]);
   memoriesRef.current = memories;
+  // True while a story reel is on screen. The Drive poller switches to the
+  // cheap changes feed on a short cadence so live uploads and deletions show
+  // up while the person is watching instead of a minute later.
+  const reelOpenRef = useRef(false);
+  // Set by the Drive poller so opening a story can request a fresh changes
+  // poll immediately instead of waiting out the idle interval.
+  const driveSyncNowRef = useRef<(() => void) | null>(null);
   // Drive ids this screen has previously seen in the shared Drive snapshot.
   // Used to tell a real Drive-side deletion apart from a photo that was only
   // just imported locally and has not been published yet.
@@ -346,25 +353,51 @@ const Memoriya: React.FC = () => {
         lastDriveSyncAt = Date.now();
       }
     };
-    // Background Drive scans freeze the UI on large libraries. Poll on a long
-    // cadence with a cooldown so focus/visibility events cannot stack scans.
+    // Background Drive scans freeze the UI on large libraries, so the idle
+    // cadence stays long. While a story is playing the person is watching the
+    // folder, so poll only the cheap metadata changes feed (no downloads, no
+    // folder snapshot) on a short cadence: an upload or a deletion then lands
+    // in the story within seconds instead of after a minute.
     const DRIVE_SYNC_INTERVAL_MS = 60000;
     const DRIVE_SYNC_COOLDOWN_MS = 45000;
+    const LIVE_STORY_POLL_MS = 8000;
+    const LIVE_STORY_COOLDOWN_MS = 6000;
     let lastDriveSyncAt = 0;
-    const driveSyncDue = () => Date.now() - lastDriveSyncAt >= DRIVE_SYNC_COOLDOWN_MS;
-    const throttledSync = () => {
-      if (driveSyncDue()) void syncLatestDriveMedia();
+    let timer = 0;
+    const scheduleNextSync = () => {
+      if (!active) return;
+      const liveStory = reelOpenRef.current;
+      timer = window.setTimeout(() => {
+        if (!active) return;
+        const cooldown = reelOpenRef.current ? LIVE_STORY_COOLDOWN_MS : DRIVE_SYNC_COOLDOWN_MS;
+        if (Date.now() - lastDriveSyncAt >= cooldown) void syncLatestDriveMedia();
+        driveSyncNowRef.current = () => {
+      if (!active) return;
+      if (Date.now() - lastDriveSyncAt < 1500) return;
+      void syncLatestDriveMedia();
     };
-    const interval = window.setInterval(throttledSync, DRIVE_SYNC_INTERVAL_MS);
+    scheduleNextSync();
+      }, liveStory ? LIVE_STORY_POLL_MS : DRIVE_SYNC_INTERVAL_MS);
+    };
+    scheduleNextSync();
     return () => {
       active = false;
-      window.clearInterval(interval);
+      driveSyncNowRef.current = null;
+      window.clearTimeout(timer);
     };
   }, [accessToken, driveFolderId]);
 
   useEffect(() => {
     if (!selected && filteredMemories[0]) setSelected(filteredMemories[0]);
   }, [filteredMemories, selected]);
+
+  useEffect(() => {
+    const open = Boolean(reelConfig);
+    reelOpenRef.current = open;
+    // Opening the story is exactly when a stale folder is most noticeable, so
+    // ask for a fresh changes poll right away rather than at the next tick.
+    if (open) driveSyncNowRef.current?.();
+  }, [reelConfig]);
 
   useEffect(() => {
     if (!reelConfig?.live) return;

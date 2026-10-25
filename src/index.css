@@ -2818,6 +2818,17 @@ input[type="number"]::-webkit-inner-spin-button {
   backdrop-filter: blur(18px);
 }
 
+/* While a reel covers the screen the backdrop blur has to be recomputed for
+   every repainted frame, which is what made phones hot during Story Mode. The
+   backdrop is a static, near-black layer, so the blur contributes almost
+   nothing visually; a slightly denser background keeps the same dark look
+   without the per-frame full-screen blur. */
+html.heavy-visual-paused .memory-reel-overlay {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: rgba(0, 0, 0, 0.965);
+}
+
 .memory-reel-shell {
   width: 100%;
   max-width: none;
@@ -12765,4 +12776,38 @@ html:not(.legacy-tv-browser) .page-hero button {
   box-shadow:
     0 16px 30px rgba(0, 0, 0, .64),
     0 0 calc(14px + var(--beat-pulse, 0) * 34px) rgba(255, 198, 110, calc(.12 + var(--beat-pulse, 0) * .32)) !important;
+}
+
+/* ---------------------------------------------------------------------------
+   Story Mode playback cost
+   ---------------------------------------------------------------------------
+   These rules only remove work the browser was doing for no visual gain.
+
+   1. The camera wall writes the world transform every frame. A 700ms CSS
+      transition on that property meant every write restarted a long animation
+      on a full-screen layer holding dozens of blurred cards: the compositor
+      animated continuously, the camera lagged behind its computed target, and
+      phones ran hot. Per-frame writes are already smooth, so the transition is
+      pure overhead.
+   2. `will-change: filter` on every card forced hundreds of promoted, filtered
+      layers into GPU memory. Cards are animated with `transform`, so that is
+      the only property worth promoting; blur is rasterised on demand.
+   3. A 350ms transition on `filter` re-blurred a card continuously after every
+      change, while the renderer already recomputes blur from camera distance
+      each frame.
+   --------------------------------------------------------------------------- */
+.memory-reel-stage[class*="memory-reel-template-"] .world {
+  transition: none;
+}
+
+.memory-reel-stage .card,
+.memory-reel-stage[class*="memory-reel-template-"] .card {
+  transition: opacity 0.35s ease;
+  will-change: transform;
+}
+
+.memory-reel-stage .card.is-active,
+.memory-reel-stage[class*="memory-reel-template-"] .card.is-active,
+.memory-reel-stage .card.beat-fly-front {
+  will-change: transform, opacity;
 }

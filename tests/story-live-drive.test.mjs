@@ -157,6 +157,23 @@ if (afterAdd?.state !== 'unknown') record('live add: clock not reset', afterAdd?
 const survivors = before.filter(c => c.isConnected && root.contains(c) && c.dataset.probe !== undefined);
 record('live add: wall NOT rebuilt (no template restart)', `${afterAdd?.rebuilds} (was ${first?.rebuilds})`, Boolean(afterAdd && first && afterAdd.rebuilds === first.rebuilds));
 record('live add: wall did not collapse', `${second?.cards} -> ${afterAdd?.cards}`, Boolean(afterAdd && second && afterAdd.cards >= second.cards));
+// A newly uploaded photo must be the very next shot, not hidden behind two
+// photos that were already queued. Its wall slot is the current shot + 1.
+if (addCard && afterAdd) {
+  const insertedIndex = Number(addCard.style.getPropertyValue('--reel-index'));
+  record(
+    'live add: new photo is the very next shot',
+    Number.isFinite(insertedIndex) ? insertedIndex - afterAdd.shot : 'n/a',
+    Number.isFinite(insertedIndex) && insertedIndex - afterAdd.shot <= 1 && insertedIndex >= afterAdd.shot,
+    `index=${insertedIndex} shot=${afterAdd.shot}`,
+  );
+}
+// Ambient background layers are invisible behind the reel; they must be parked.
+record(
+  'reel parks the hidden background visuals',
+  window.document.documentElement.className,
+  window.document.documentElement.classList.contains('heavy-visual-paused'),
+);
 
 // ---------- LIVE DELETE (delete an on-wall photo + one off-wall) ----------
 const deleted = before[3]?.dataset.caption;
