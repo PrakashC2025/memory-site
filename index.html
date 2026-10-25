@@ -15,7 +15,33 @@
     <link rel="manifest" href="/manifest.webmanifest" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- First-paint splash: replaced by React as soon as the bundle mounts.
+           Keeps the screen from looking frozen while the app JS downloads. -->
+      <div
+        id="boot-splash"
+        style="min-height:100vh;display:grid;place-items:center;background:#070a12;color:#fff;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;text-align:center"
+      >
+        <div>
+          <div style="font-size:26px;font-weight:800;letter-spacing:0.16em;text-transform:uppercase">Memoriya</div>
+          <div style="margin-top:12px;font-size:12px;letter-spacing:0.22em;text-transform:uppercase;color:rgba(255,255,255,0.55)">
+            Opening your memories
+          </div>
+          <div style="margin:18px auto 0;height:4px;width:180px;overflow:hidden;border-radius:999px;background:rgba(255,255,255,0.12)">
+            <div style="height:100%;width:40%;border-radius:999px;background:#67e8f9;animation:memo-boot-bar 1.1s ease-in-out infinite"></div>
+          </div>
+        </div>
+        <style>
+          @keyframes memo-boot-bar {
+            0% { transform: translateX(-110%); }
+            100% { transform: translateX(320%); }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            #boot-splash div[style*="animation"] { animation: none; width: 100% !important; }
+          }
+        </style>
+      </div>
+    </div>
     <script>
       // Mark Android TV before styles and React mount. Chromium 66 ignores
       // Tailwind's @layer utilities, so the legacy layout must be active from
