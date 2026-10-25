@@ -50,8 +50,9 @@ test('video loading keeps a usable poster and caches before story reveal', async
   assert.match(reel, /playAudioWithTimeout/);
   // Large libraries must not download/decode every frame before the first
   // shot appears: only a bounded first batch is loaded eagerly.
-  assert.match(reel, /const workerCount = Math\.min\(8, firstBatch\.length\)/);
-  assert.match(reel, /const WALL_INITIAL_BATCH = 72/);
+  assert.match(reel, /const workerCount = Math\.min\(8, eagerBatch\.length\)/);
+  assert.match(reel, /const WALL_INITIAL_BATCH = 100/);
+  assert.match(reel, /const WALL_NEXT_BATCH = 40/);
   // A 500 photo library must not queue a full-size download for every file.
   const driveCache = await readProjectFile('src/services/driveCache.ts');
   assert.match(driveCache, /const MAX_WARMED_FILES = 48/);
@@ -65,9 +66,9 @@ test('video loading keeps a usable poster and caches before story reveal', async
   const timelinePage = await readProjectFile('src/pages/Timeline.tsx');
   assert.match(timelinePage, /const TIMELINE_MONTH_PAGE = 8/);
   assert.match(timelinePage, /month\.memories\.slice\(0, TIMELINE_MONTH_PAGE\)/);
-  assert.match(reel, /this\.pendingSources = keepCurrentWall \? \[\] : pendingItems\.slice\(WALL_INITIAL_BATCH\)/);
   assert.match(reel, /private async loadNextBatch\(\)/);
   assert.doesNotMatch(reel, /Math\.min\(8, pendingItems\.length\)/);
+  assert.doesNotMatch(reel, /this\.pendingSources = keepCurrentWall \? \[\]/);
   assert.match(reel, /\| 'polaroid-collage'/);
   assert.match(reel, /id: 'polaroid-collage', name: 'Polaroid Celebration'/);
   assert.match(reel, /--reel-collage-x/);
@@ -82,7 +83,7 @@ test('video loading keeps a usable poster and caches before story reveal', async
   assert.doesNotMatch(reel, /video\.onloadedmetadata = finishVideo/);
   assert.match(css, /memory-reel-template-polaroid-collage \.card\.media-portrait[\s\S]*height: min\(80%, 440px\)/);
   assert.match(css, /card\.media-portrait[\s\S]*height: min\(80%, 440px\)/);
-  assert.match(reel, /this\.removeMissingMedia\(new Set\(uniqueItems\.map\(item => item\.id\)\)\)/);
+  assert.match(reel, /this\.removeMissingMedia\(wantedIds\)/);
   assert.match(reel, /if \(wasPlaying\) this\.play\(\);/);
   assert.match(reel, /this\.lastLayoutShot = -1;[\s\S]*this\.render\(this\.elapsed\);/);
   assert.match(reel, /if \(!item\.driveFileId\) return ''/);
@@ -206,4 +207,30 @@ test('video loading keeps a usable poster and caches before story reveal', async
   assert.match(reel, /googleDriveService\.connect\(undefined, 'select_account'\)/);
   assert.match(reel, /secondaryDriveSongs/);
   assert.match(reel, /Add music from another Drive/);
+});
+
+test('live Drive additions/deletions never stop the story or drop queued frames', async () => {
+  const reel = await readProjectFile('src/components/MemoryReel.tsx');
+
+  // The queue is rebuilt from the current Drive truth on every update, so a
+  // deleted file can never be resurrected from a stale queue.
+  assert.match(reel, /const wantedIds = new Set\(uniqueItems\.map\(item => item\.id\)\)/);
+  assert.match(reel, /const stillQueued = this\.pendingSources\.filter\(item =>/);
+  assert.match(reel, /this\.pendingSources = \[\.\.\.newlyAdded, \.\.\.stillQueued\]/);
+
+  // A live update warms only a small slice, not the whole delta.
+  assert.match(reel, /const WALL_LIVE_BATCH = 12/);
+  assert.match(reel, /keepCurrentWall \? WALL_LIVE_BATCH : WALL_INITIAL_BATCH/);
+
+  // ...and must never leave the playing story paused or reset.
+  assert.match(reel, /if \(keepCurrentWall && wasPlaying\) this\.play\(\)/);
+  assert.match(reel, /if \(wasPlaying && this\.paused\) this\.play\(\)/);
+
+  // Streaming continues after the first batch without restarting the clock.
+  assert.match(reel, /void this\.loadNextBatch\(\);/);
+  assert.match(reel, /private takeQueuedBatch\(limit: number\)/);
+  assert.match(reel, /this\.failedSources\.add\(item\.id\)/);
+  // A drive-side deletion must release the card and its object URL.
+  assert.match(reel, /private removeMissingMedia\(keepIds: Set<string>\)/);
+  assert.match(reel, /this\.releaseObjectUrl\(source\)/);
 });

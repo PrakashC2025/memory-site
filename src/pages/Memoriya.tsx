@@ -25,7 +25,7 @@ import DriveCameraCapture from '../components/DriveCameraCapture';
 import MemoryLightbox from '../components/MemoryLightbox';
 import MemoryReel from '../components/MemoryReel';
 import { getMemoryAspect, isVisualMemory, type Memory } from '../data/memories';
-import { acquireDriveSyncLock, clearDriveChangePageToken, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_SESSION_KEY, readDriveAccessToken, readDriveAuthRequired, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveAuthRequired, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
+import { acquireDriveSyncLock, clearDriveChangePageToken, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, DRIVE_SESSION_KEY, readDriveAccessToken, readDriveAuthRequired, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveAuthRequired, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
 import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile, type DriveConnectionState, type DriveFolder, type DriveMediaFile } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, deleteCachedDriveMedia, warmDriveFolderCache } from '../services/driveCache';
 import { deleteCachedStoryMedia } from '../services/storyMediaCache';
@@ -129,6 +129,10 @@ const Memoriya: React.FC = () => {
   const localFileIdsRef = useRef(new Set<string>());
   const memoriesRef = useRef<Memory[]>([]);
   memoriesRef.current = memories;
+  // Drive ids this screen has previously seen in the shared Drive snapshot.
+  // Used to tell a real Drive-side deletion apart from a photo that was only
+  // just imported locally and has not been published yet.
+  const driveSnapshotIdsRef = useRef<Set<string>>(new Set());
   driveChangePageTokenRef.current = driveChangePageToken;
 
   useEffect(() => {
@@ -366,6 +370,70 @@ const Memoriya: React.FC = () => {
     if (!reelConfig?.live) return;
     setReelConfig(current => current?.live ? { ...current, memories: filteredMemories } : current);
   }, [filteredMemories]);
+
+  // DriveLiveSync reconciles Drive in the background (additions and deletions)
+  // and publishes the result through this event. Without this listener the
+  // gallery - and an already open story - kept showing a photo that had been
+  // deleted in Drive, or missed a newly uploaded one, until the next full poll.
+  useEffect(() => {
+    // Seed the known-id set from the snapshot this screen starts with, so a
+    // photo deleted in Drive right after mount is still recognised.
+    driveSnapshotIdsRef.current = new Set(
+      readDriveMemories().map(memory => memory.driveFileId).filter((id): id is string => Boolean(id)),
+    );
+    const reconcileFromDrive = () => {
+      const stored = readDriveMemories().filter(memory => memory.driveFileId);
+      if (!stored.length) return;
+      const storedById = new Map(stored.map(memory => [memory.driveFileId as string, memory]));
+      const knownIds = driveSnapshotIdsRef.current;
+      const current = memoriesRef.current;
+
+      const unchanged = (left: Memory, right: Memory) =>
+        left.title === right.title
+        && left.date === right.date
+        && left.type === right.type
+        && left.mimeType === right.mimeType
+        && left.thumbnail === right.thumbnail
+        && left.url === right.url;
+
+      const next: Memory[] = [];
+      let changed = false;
+      const removedIds = new Set<string>();
+      current.forEach(memory => {
+        if (!memory.driveFileId) {
+          next.push(memory);
+          return;
+        }
+        const storedMemory = storedById.get(memory.driveFileId);
+        if (storedMemory) {
+          if (!unchanged(memory, storedMemory)) changed = true;
+          next.push(storedMemory);
+          return;
+        }
+        if (knownIds.has(memory.driveFileId)) {
+          // Gone from the Drive snapshot: it was deleted (or trashed) there.
+          removedIds.add(memory.driveFileId);
+          changed = true;
+          return;
+        }
+        next.push(memory);
+      });
+      const existingIds = new Set(next.map(memory => memory.driveFileId || memory.id));
+      const added = stored.filter(memory => !existingIds.has(memory.driveFileId as string));
+      if (added.length) changed = true;
+
+      driveSnapshotIdsRef.current = new Set(storedById.keys());
+      if (!changed) return;
+
+      if (removedIds.size) {
+        setSelected(selectedMemory => selectedMemory?.driveFileId && removedIds.has(selectedMemory.driveFileId) ? null : selectedMemory);
+        setViewerMemory(viewer => viewer?.driveFileId && removedIds.has(viewer.driveFileId) ? null : viewer);
+      }
+      setMemories([...next, ...added].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+    };
+    window.addEventListener(DRIVE_MEMORIES_UPDATED_EVENT, reconcileFromDrive);
+    return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, reconcileFromDrive);
+  }, []);
 
   const appendDriveFiles = (files: DriveMediaFile[], token: string) => {
     void cacheDriveMediaFiles(files, token);

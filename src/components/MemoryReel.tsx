@@ -322,9 +322,17 @@ const convertAudioBlobWithFfmpeg = async (blob: Blob, song: DriveAudioFile) => {
 // Story Mode wall sizing. The wall only ever paints the cards near the
 // camera, so a bounded first batch looks identical while keeping the first
 // frame fast on large Drive libraries.
-const WALL_INITIAL_BATCH = 72;
-const WALL_NEXT_BATCH = 36;
-const WALL_PRELOAD_AHEAD = 20;
+// 100 frames paint a full wall immediately; the rest stream in behind the
+// playhead. Live Drive changes use a smaller eager batch so an addition shows
+// up within a few shots without ever stalling the story.
+const WALL_INITIAL_BATCH = 100;
+const WALL_NEXT_BATCH = 40;
+const WALL_PRELOAD_AHEAD = 24;
+const WALL_LIVE_BATCH = 12;
+// Frames kept warm ahead of the playhead. The rest of the library streams in
+// behind the story in the background, so playback never catches up to an empty
+// wall, while memory stays bounded on very large libraries.
+const WALL_MAX_AHEAD = 180;
 
 const playAudioWithTimeout = async (element: HTMLAudioElement, timeoutMs = 12000) => {
   let timeoutId: number | undefined;
@@ -433,6 +441,14 @@ export class MemoryReelController {
   // batch first, then warm the rest as the story advances.
   private pendingSources: ReelSource[] = [];
   private loadingNextBatch = false;
+  // Sources that failed to load once are skipped so the prefetch queue can
+  // never spin on a permanently broken Drive file.
+  private failedSources = new Set<string>();
+  private prefetchTimer = 0;
+  private lastDiagnostic = '';
+  // Counts full wall rebuilds. A live Drive change must stream cards in
+  // without ever rebuilding (and therefore restarting) the current wall.
+  private wallRebuilds = 0;
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
@@ -550,6 +566,7 @@ export class MemoryReelController {
     const keepCurrentWall = preserveProgress && this.cards.length > 0 && uniqueItems.length > 0;
     // A live Drive update is loaded beside the current wall. Do not pause the
     // story/audio or clear the stage while the replacement images arrive.
+    const wantedIds = new Set(uniqueItems.map(item => item.id));
     if (!keepCurrentWall) {
       this.pause();
       this.revokeObjectUrls();
@@ -557,35 +574,46 @@ export class MemoryReelController {
       this.cards = [];
       this.loadedMedia.clear();
       this.pendingSources = [];
+      this.failedSources.clear();
+      this.loadingNextBatch = false;
+      this.clearPrefetchTimer();
     } else {
-      this.removeMissingMedia(new Set(uniqueItems.map(item => item.id)));
+      this.removeMissingMedia(wantedIds);
     }
     if (!uniqueItems.length) {
+      this.pendingSources = [];
       this.options.onProgress?.(0, 0);
       return;
     }
 
-    const pendingItems = keepCurrentWall
-      ? uniqueItems.filter(item => !this.loadedMedia.has(item.id))
-      : uniqueItems;
+    // Rebuild the prefetch queue from the current Drive truth on every update:
+    // a file deleted in Drive must never be pulled back off a stale queue, and
+    // a file already on the wall must never be downloaded twice. Additions are
+    // placed at the front so a photo added mid-story appears within a few
+    // shots instead of after the whole library.
+    const queuedIds = new Set(this.pendingSources.map(item => item.id));
+    const stillQueued = this.pendingSources.filter(item =>
+      wantedIds.has(item.id) && !this.loadedMedia.has(item.id) && !this.failedSources.has(item.id));
+    const newlyAdded = uniqueItems.filter(item =>
+      !this.loadedMedia.has(item.id) && !queuedIds.has(item.id) && !this.failedSources.has(item.id));
+    this.pendingSources = [...newlyAdded, ...stillQueued];
+
     let liveInsertIndex = keepCurrentWall
       // Put a newly discovered Drive memory just after the next two shots so
       // it joins the live story quickly without interrupting the current one.
       ? Math.min(this.cards.length, Math.max(0, this.lastRenderedShot + 2))
       : this.cards.length;
+    // A live update only warms a small slice; a cold start paints a full wall.
+    const eagerBatch = this.pendingSources.splice(0, keepCurrentWall ? WALL_LIVE_BATCH : WALL_INITIAL_BATCH);
+    const pendingItems = eagerBatch;
     if (!pendingItems.length) {
+      // Nothing new to load (for example a deletion-only update). Keep the
+      // remaining queue and the playing story untouched.
       this.recalculateTotal();
       this.render(this.elapsed);
+      if (keepCurrentWall && wasPlaying) this.play();
       return;
     }
-
-    // Load only a wall's worth of images up front. Anything beyond this batch
-    // waits until the story is close to needing it.
-    const firstBatch = keepCurrentWall
-      ? pendingItems
-      : pendingItems.slice(0, WALL_INITIAL_BATCH);
-    this.pendingSources = keepCurrentWall ? [] : pendingItems.slice(WALL_INITIAL_BATCH);
-    this.loadingNextBatch = false;
 
     let ready = false;
     let resolveReady: () => void = () => undefined;
@@ -617,13 +645,14 @@ export class MemoryReelController {
     };
 
     let nextItemIndex = 0;
-    const workerCount = Math.min(8, firstBatch.length);
+    const workerCount = Math.min(8, eagerBatch.length);
     const workers = Array.from({ length: workerCount }, async () => {
-      while (nextItemIndex < firstBatch.length) {
-        const item = firstBatch[nextItemIndex];
+      while (nextItemIndex < eagerBatch.length) {
+        const item = eagerBatch[nextItemIndex];
         nextItemIndex += 1;
         const media = await this.load(item);
         if (media) reveal(item, media);
+        else this.failedSources.add(item.id);
         // Let layout, input, and painting run between media jobs. This keeps
         // a large Drive story responsive while its remaining frames warm.
         await new Promise<void>(resolve => window.setTimeout(resolve, 0));
@@ -634,7 +663,10 @@ export class MemoryReelController {
       this.recalculateTotal();
       if (this.cards.length) this.layoutWall(this.shotIndexAt(this.elapsed));
       this.render(this.elapsed);
+      // Never leave a live story paused because an update landed mid-shot.
       if (keepCurrentWall && wasPlaying) this.play();
+      // Continue streaming the remaining frames in the background.
+      this.schedulePrefetch(120);
       if (!ready) {
         ready = true;
         resolveReady();
@@ -644,40 +676,106 @@ export class MemoryReelController {
   }
 
   /**
+   * Picks the next queued frames that still belong to the current Drive set.
+   * Nothing is removed here: an item only leaves the queue once it is either on
+   * the wall or known to be broken, so an aborted or mid-flight load can never
+   * silently drop images.
+   */
+  private takeQueuedBatch(limit: number) {
+    const batch: ReelSource[] = [];
+    for (const item of this.pendingSources) {
+      if (batch.length >= limit) break;
+      if (this.loadedMedia.has(item.id) || this.failedSources.has(item.id)) continue;
+      batch.push(item);
+    }
+    return batch;
+  }
+
+  /**
    * Warms the next batch of story frames once the reel approaches the end of
-   * the cards it already has. Keeps memory flat and the clock running instead
-   * of decoding every image in the library up front.
+   * the frames it already has. Playback, the active template, and the current
+   * hero card are never touched: new cards are appended around the wall.
    */
   private async loadNextBatch() {
     if (this.loadingNextBatch || !this.pendingSources.length || this.destroyed) return;
+    const batch = this.takeQueuedBatch(WALL_NEXT_BATCH);
+    if (!batch.length) {
+      // Everything queued is already loaded or broken: stop retrying.
+      this.pendingSources = this.pendingSources.filter(item =>
+        !this.loadedMedia.has(item.id) && !this.failedSources.has(item.id));
+      return;
+    }
     const generation = this.loadGeneration;
     this.loadingNextBatch = true;
-    const batch = this.pendingSources.splice(0, WALL_NEXT_BATCH);
-    const results: LoadedMedia[] = [];
+    const wasPlaying = !this.paused;
     let cursor = 0;
-    const workerCount = Math.min(6, batch.length);
-    await Promise.all(Array.from({ length: workerCount }, async () => {
-      while (cursor < batch.length) {
-        const item = batch[cursor];
-        cursor += 1;
-        if (!item) return;
-        const media = await this.load(item);
-        if (this.destroyed || generation !== this.loadGeneration) return;
-        if (media) results.push({ ...media, id: item.id });
-        await new Promise<void>(resolve => window.setTimeout(resolve, 0));
-      }
-    }));
-    this.loadingNextBatch = false;
-    if (this.destroyed || generation !== this.loadGeneration) return;
-    results.forEach(media => {
-      if (!media.id) return;
-      this.loadedMedia.set(media.id, media);
-      this.appendMediaCard(media);
-    });
-    // Keep prefetching while the story is still inside the fresh batch.
-    if (this.pendingSources.length && this.shotIndexAt(this.elapsed) > this.cards.length - WALL_PRELOAD_AHEAD) {
-      void this.loadNextBatch();
+    try {
+      const workerCount = Math.min(6, batch.length);
+      await Promise.all(Array.from({ length: workerCount }, async () => {
+        while (cursor < batch.length) {
+          const item = batch[cursor];
+          cursor += 1;
+          if (!item) return;
+          const media = await this.load(item);
+          if (this.destroyed || generation !== this.loadGeneration) return;
+          if (!media) {
+            this.failedSources.add(item.id);
+            continue;
+          }
+          // The source id is authoritative: `load()` does not know it yet.
+          const resolved = { ...media, id: item.id };
+          this.loadedMedia.set(item.id, resolved);
+          this.appendMediaCard(resolved);
+          // Give layout, input, and painting a chance between frames.
+          await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+        }
+      }));
+    } finally {
+      this.loadingNextBatch = false;
     }
+    if (this.destroyed || generation !== this.loadGeneration) return;
+    this.pendingSources = this.pendingSources.filter(item =>
+      !this.loadedMedia.has(item.id) && !this.failedSources.has(item.id));
+    this.recalculateTotal();
+    this.render(this.elapsed);
+    // An append must never leave the story stopped.
+    if (wasPlaying && this.paused) this.play();
+    this.schedulePrefetch(160);
+  }
+
+  private clearPrefetchTimer() {
+    if (!this.prefetchTimer) return;
+    window.clearTimeout(this.prefetchTimer);
+    this.prefetchTimer = 0;
+  }
+
+  /**
+   * Keeps the story's wall warm without ever blocking playback. Each turn
+   * loads one small batch, then yields again, so the main thread, the active
+   * template animation, and the audio analyser always get their frames.
+   */
+  private schedulePrefetch(delay = 250) {
+    if (this.destroyed || this.prefetchTimer || !this.pendingSources.length) return;
+    this.prefetchTimer = window.setTimeout(() => {
+      this.prefetchTimer = 0;
+      if (this.destroyed || !this.pendingSources.length) return;
+      if (document.hidden) {
+        // A background tab must not burn bandwidth; resume when visible.
+        this.schedulePrefetch(1200);
+        return;
+      }
+      if (this.loadingNextBatch) {
+        this.schedulePrefetch(200);
+        return;
+      }
+      const framesAhead = this.cards.length - this.shotIndexAt(this.elapsed);
+      if (framesAhead >= WALL_MAX_AHEAD) {
+        // The wall is warm enough; wait for the story to consume some of it.
+        this.schedulePrefetch(900);
+        return;
+      }
+      void this.loadNextBatch();
+    }, delay);
   }
 
   private wallSpacing() {
@@ -728,6 +826,7 @@ export class MemoryReelController {
   }
 
   private rebuildWall(loaded: LoadedMedia[], preserveProgress: boolean, previousElapsed: number, wasPlaying: boolean) {
+    this.wallRebuilds += 1;
     const columns = Math.max(3, Math.ceil(Math.sqrt(loaded.length * 1.25)));
     const rows = Math.max(1, Math.ceil(loaded.length / columns));
     // Keep neighboring cards inside the 16:9 viewport so the focused frame
@@ -1763,6 +1862,7 @@ export class MemoryReelController {
     this.loadedMedia.clear();
     this.pendingSources = [];
     this.loadingNextBatch = false;
+    this.clearPrefetchTimer();
     this.revokeObjectUrls();
   }
 
@@ -2205,6 +2305,14 @@ export class MemoryReelController {
     this.titleEl.classList.toggle('on', showTitle);
     this.progressEl.style.width = `${clamp(time / this.total, 0, 1) * 100}%`;
     this.lastRenderedShot = shot;
+    // Lightweight, throttled diagnostics on the stage element. It costs one
+    // string compare per frame and makes "is the story still playing at the
+    // same shot" verifiable from the DOM (used by the performance tests).
+    const diagnostic = `${Math.round(time)}/${Math.round(this.total)}/${shot}/${this.paused ? 'paused' : 'playing'}/${this.cards.length}/${this.wallRebuilds}`;
+    if (diagnostic !== this.lastDiagnostic) {
+      this.lastDiagnostic = diagnostic;
+      this.el.setAttribute('data-reel-state', diagnostic);
+    }
     this.options.onProgress?.(time, this.total);
   }
 }
