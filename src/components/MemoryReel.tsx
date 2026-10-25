@@ -319,6 +319,21 @@ const convertAudioBlobWithFfmpeg = async (blob: Blob, song: DriveAudioFile) => {
   }
 };
 
+// Story Mode wall sizing. The wall only ever paints the cards near the
+// camera, so a bounded first batch looks identical while keeping the first
+// frame fast on large Drive libraries.
+// 100 frames paint a full wall immediately; the rest stream in behind the
+// playhead. Live Drive changes use a smaller eager batch so an addition shows
+// up within a few shots without ever stalling the story.
+const WALL_INITIAL_BATCH = 100;
+const WALL_NEXT_BATCH = 40;
+const WALL_PRELOAD_AHEAD = 24;
+const WALL_LIVE_BATCH = 12;
+// Frames kept warm ahead of the playhead. The rest of the library streams in
+// behind the story in the background, so playback never catches up to an empty
+// wall, while memory stays bounded on very large libraries.
+const WALL_MAX_AHEAD = 180;
+
 const playAudioWithTimeout = async (element: HTMLAudioElement, timeoutMs = 12000) => {
   let timeoutId: number | undefined;
   try {
@@ -357,7 +372,6 @@ export class MemoryReelController {
   private effectsWidth = 0;
   private effectsHeight = 0;
   private previousEffect: MemoryReelEffect = 'natural';
-  private effectChangedAt = 0;
   private effectsDebug?: HTMLDivElement;
   private cinematicCamera = { x: 0, y: 0, z: 0, rot: 0 };
   private cinematicVelocity = { x: 0, y: 0, z: 0, rot: 0 };
@@ -379,6 +393,15 @@ export class MemoryReelController {
   private paused = true;
   private total = 0;
   private lastPaint = 0;
+  // Card-to-camera distances are expensive to recompute for every frame on
+  // large libraries. Cache them and refresh only when the camera moves
+  // meaningfully or the active shot changes.
+  private lastDistanceComputeAt = 0;
+  private cachedDistances: number[] = [];
+  private cachedFocusedIndex = 0;
+  private cachedNearestOrbitCards: Set<number> | undefined;
+  private lastCameraX = 0;
+  private lastCameraY = 0;
   private audio?: HTMLAudioElement;
   private audioElement?: HTMLAudioElement;
   private analysisAudio?: HTMLAudioElement;
@@ -413,6 +436,19 @@ export class MemoryReelController {
   private zoomEnabled = true;
   private objectUrls = new Set<string>();
   private loadedMedia = new Map<string, LoadedMedia>();
+  // A 500 image story used to download and decode every frame before the
+  // first shot appeared, which made Story Mode look frozen. Load a wall-sized
+  // batch first, then warm the rest as the story advances.
+  private pendingSources: ReelSource[] = [];
+  private loadingNextBatch = false;
+  // Sources that failed to load once are skipped so the prefetch queue can
+  // never spin on a permanently broken Drive file.
+  private failedSources = new Set<string>();
+  private prefetchTimer = 0;
+  private lastDiagnostic = '';
+  // Counts full wall rebuilds. A live Drive change must stream cards in
+  // without ever rebuilding (and therefore restarting) the current wall.
+  private wallRebuilds = 0;
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
@@ -530,31 +566,52 @@ export class MemoryReelController {
     const keepCurrentWall = preserveProgress && this.cards.length > 0 && uniqueItems.length > 0;
     // A live Drive update is loaded beside the current wall. Do not pause the
     // story/audio or clear the stage while the replacement images arrive.
+    const wantedIds = new Set(uniqueItems.map(item => item.id));
     if (!keepCurrentWall) {
       this.pause();
       this.revokeObjectUrls();
       this.world.innerHTML = '';
       this.cards = [];
       this.loadedMedia.clear();
+      this.pendingSources = [];
+      this.failedSources.clear();
+      this.loadingNextBatch = false;
+      this.clearPrefetchTimer();
     } else {
-      this.removeMissingMedia(new Set(uniqueItems.map(item => item.id)));
+      this.removeMissingMedia(wantedIds);
     }
     if (!uniqueItems.length) {
+      this.pendingSources = [];
       this.options.onProgress?.(0, 0);
       return;
     }
 
-    const pendingItems = keepCurrentWall
-      ? uniqueItems.filter(item => !this.loadedMedia.has(item.id))
-      : uniqueItems;
+    // Rebuild the prefetch queue from the current Drive truth on every update:
+    // a file deleted in Drive must never be pulled back off a stale queue, and
+    // a file already on the wall must never be downloaded twice. Additions are
+    // placed at the front so a photo added mid-story appears within a few
+    // shots instead of after the whole library.
+    const queuedIds = new Set(this.pendingSources.map(item => item.id));
+    const stillQueued = this.pendingSources.filter(item =>
+      wantedIds.has(item.id) && !this.loadedMedia.has(item.id) && !this.failedSources.has(item.id));
+    const newlyAdded = uniqueItems.filter(item =>
+      !this.loadedMedia.has(item.id) && !queuedIds.has(item.id) && !this.failedSources.has(item.id));
+    this.pendingSources = [...newlyAdded, ...stillQueued];
+
     let liveInsertIndex = keepCurrentWall
       // Put a newly discovered Drive memory just after the next two shots so
       // it joins the live story quickly without interrupting the current one.
       ? Math.min(this.cards.length, Math.max(0, this.lastRenderedShot + 2))
       : this.cards.length;
+    // A live update only warms a small slice; a cold start paints a full wall.
+    const eagerBatch = this.pendingSources.splice(0, keepCurrentWall ? WALL_LIVE_BATCH : WALL_INITIAL_BATCH);
+    const pendingItems = eagerBatch;
     if (!pendingItems.length) {
+      // Nothing new to load (for example a deletion-only update). Keep the
+      // remaining queue and the playing story untouched.
       this.recalculateTotal();
       this.render(this.elapsed);
+      if (keepCurrentWall && wasPlaying) this.play();
       return;
     }
 
@@ -588,13 +645,14 @@ export class MemoryReelController {
     };
 
     let nextItemIndex = 0;
-    const workerCount = Math.min(8, pendingItems.length);
+    const workerCount = Math.min(8, eagerBatch.length);
     const workers = Array.from({ length: workerCount }, async () => {
-      while (nextItemIndex < pendingItems.length) {
-        const item = pendingItems[nextItemIndex];
+      while (nextItemIndex < eagerBatch.length) {
+        const item = eagerBatch[nextItemIndex];
         nextItemIndex += 1;
         const media = await this.load(item);
         if (media) reveal(item, media);
+        else this.failedSources.add(item.id);
         // Let layout, input, and painting run between media jobs. This keeps
         // a large Drive story responsive while its remaining frames warm.
         await new Promise<void>(resolve => window.setTimeout(resolve, 0));
@@ -605,13 +663,119 @@ export class MemoryReelController {
       this.recalculateTotal();
       if (this.cards.length) this.layoutWall(this.shotIndexAt(this.elapsed));
       this.render(this.elapsed);
+      // Never leave a live story paused because an update landed mid-shot.
       if (keepCurrentWall && wasPlaying) this.play();
+      // Continue streaming the remaining frames in the background.
+      this.schedulePrefetch(120);
       if (!ready) {
         ready = true;
         resolveReady();
       }
     });
     await readyPromise;
+  }
+
+  /**
+   * Picks the next queued frames that still belong to the current Drive set.
+   * Nothing is removed here: an item only leaves the queue once it is either on
+   * the wall or known to be broken, so an aborted or mid-flight load can never
+   * silently drop images.
+   */
+  private takeQueuedBatch(limit: number) {
+    const batch: ReelSource[] = [];
+    for (const item of this.pendingSources) {
+      if (batch.length >= limit) break;
+      if (this.loadedMedia.has(item.id) || this.failedSources.has(item.id)) continue;
+      batch.push(item);
+    }
+    return batch;
+  }
+
+  /**
+   * Warms the next batch of story frames once the reel approaches the end of
+   * the frames it already has. Playback, the active template, and the current
+   * hero card are never touched: new cards are appended around the wall.
+   */
+  private async loadNextBatch() {
+    if (this.loadingNextBatch || !this.pendingSources.length || this.destroyed) return;
+    const batch = this.takeQueuedBatch(WALL_NEXT_BATCH);
+    if (!batch.length) {
+      // Everything queued is already loaded or broken: stop retrying.
+      this.pendingSources = this.pendingSources.filter(item =>
+        !this.loadedMedia.has(item.id) && !this.failedSources.has(item.id));
+      return;
+    }
+    const generation = this.loadGeneration;
+    this.loadingNextBatch = true;
+    const wasPlaying = !this.paused;
+    let cursor = 0;
+    try {
+      const workerCount = Math.min(6, batch.length);
+      await Promise.all(Array.from({ length: workerCount }, async () => {
+        while (cursor < batch.length) {
+          const item = batch[cursor];
+          cursor += 1;
+          if (!item) return;
+          const media = await this.load(item);
+          if (this.destroyed || generation !== this.loadGeneration) return;
+          if (!media) {
+            this.failedSources.add(item.id);
+            continue;
+          }
+          // The source id is authoritative: `load()` does not know it yet.
+          const resolved = { ...media, id: item.id };
+          this.loadedMedia.set(item.id, resolved);
+          this.appendMediaCard(resolved);
+          // Give layout, input, and painting a chance between frames.
+          await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+        }
+      }));
+    } finally {
+      this.loadingNextBatch = false;
+    }
+    if (this.destroyed || generation !== this.loadGeneration) return;
+    this.pendingSources = this.pendingSources.filter(item =>
+      !this.loadedMedia.has(item.id) && !this.failedSources.has(item.id));
+    this.recalculateTotal();
+    this.render(this.elapsed);
+    // An append must never leave the story stopped.
+    if (wasPlaying && this.paused) this.play();
+    this.schedulePrefetch(160);
+  }
+
+  private clearPrefetchTimer() {
+    if (!this.prefetchTimer) return;
+    window.clearTimeout(this.prefetchTimer);
+    this.prefetchTimer = 0;
+  }
+
+  /**
+   * Keeps the story's wall warm without ever blocking playback. Each turn
+   * loads one small batch, then yields again, so the main thread, the active
+   * template animation, and the audio analyser always get their frames.
+   */
+  private schedulePrefetch(delay = 250) {
+    if (this.destroyed || this.prefetchTimer || !this.pendingSources.length) return;
+    this.prefetchTimer = window.setTimeout(() => {
+      this.prefetchTimer = 0;
+      if (this.destroyed || !this.pendingSources.length) return;
+      if (document.hidden) {
+        // A background tab must not burn bandwidth; resume when visible.
+        this.schedulePrefetch(1200);
+        return;
+      }
+      if (this.loadingNextBatch) {
+        this.schedulePrefetch(200);
+        return;
+      }
+      const framesAhead = this.cards.length - this.shotIndexAt(this.elapsed);
+      if (framesAhead >= WALL_MAX_AHEAD) {
+        // The wall is warm enough; wait for the story to consume some of it.
+        this.schedulePrefetch(900);
+        return;
+      }
+      void this.loadNextBatch();
+    }, delay);
   }
 
   private wallSpacing() {
@@ -662,6 +826,7 @@ export class MemoryReelController {
   }
 
   private rebuildWall(loaded: LoadedMedia[], preserveProgress: boolean, previousElapsed: number, wasPlaying: boolean) {
+    this.wallRebuilds += 1;
     const columns = Math.max(3, Math.ceil(Math.sqrt(loaded.length * 1.25)));
     const rows = Math.max(1, Math.ceil(loaded.length / columns));
     // Keep neighboring cards inside the 16:9 viewport so the focused frame
@@ -1097,7 +1262,7 @@ export class MemoryReelController {
   setEffect(effect: MemoryReelEffect) {
     if (this.options.effect !== effect) {
       this.previousEffect = this.options.effect || 'natural';
-      this.effectChangedAt = performance.now();
+  
     }
     this.options.effect = effect;
     MEMORY_REEL_EFFECTS.forEach(item => this.ambientEffects.classList.remove(`effect-${item.id}`));
@@ -1515,6 +1680,12 @@ export class MemoryReelController {
       // A stable 30fps paint budget is smoother than an overloaded 60fps DOM
       // loop on old TVs. The elapsed clock remains real-time and the browser
       // still schedules frames normally, so transitions never speed up.
+      // Pull in the next story batch before the current one runs out.
+      if (this.pendingSources.length
+        && !this.loadingNextBatch
+        && this.shotIndexAt(this.elapsed) > this.cards.length - WALL_PRELOAD_AHEAD) {
+        void this.loadNextBatch();
+      }
       const paintInterval = this.options.legacyTv ? 1000 / 30 : 0;
       if (!paintInterval || now - this.lastPaint >= paintInterval) {
         this.render(this.elapsed);
@@ -1689,6 +1860,9 @@ export class MemoryReelController {
     this.world.innerHTML = '';
     this.cards = [];
     this.loadedMedia.clear();
+    this.pendingSources = [];
+    this.loadingNextBatch = false;
+    this.clearPrefetchTimer();
     this.revokeObjectUrls();
   }
 
@@ -1965,22 +2139,41 @@ export class MemoryReelController {
         ? `scale(${this.scale * tvZoom}) translate3d(${-camera.x}px,${-camera.y}px,0)`
         : `scale(${this.scale}) translate3d(0,0,${stabilizedCameraPush}px) rotateY(${orbitCamera ? this.parallaxX * 0.4 : -6 + sway + this.parallaxX * 1.4}deg) rotateX(${orbitCamera ? 0 : this.parallaxY * -1.1}deg) rotateZ(${orbitCamera ? 0 : -camera.rot * 0.9}deg) translate3d(${(-camera.x + this.parallaxX * 16 + handheldX).toFixed(1)}px,${(-camera.y + this.parallaxY * 12 + handheldY).toFixed(1)}px,${-camera.z}px)${parallax}`;
       const flyBlur = dip * (this.clarity === 'natural' ? 2.4 : 0.5);
-      const distances = this.cards.map(card => Math.hypot(card.x - camera.x, card.y - camera.y));
-      const focusedIndex = distances.reduce((closest, distance, index) => (
-        distance < distances[closest] ? index : closest
-      ), 0);
-      // Keep the full wall visible for normal-sized stories. The previous
-      // 28-card cap made the renderer remove perfectly valid memories, which
-      // left large empty areas around the hero. Very large libraries still
-      // get a bounded neighborhood so the animation remains responsive.
-      const orbitVisibleLimit = this.cards.length <= 96 ? this.cards.length : 64;
-      const nearestOrbitCards = this.options.template === 'orbit'
-        ? new Set(distances
-          .map((distance, index) => ({ distance, index }))
-          .sort((left, right) => left.distance - right.distance)
-          .slice(0, orbitVisibleLimit)
-          .map(item => item.index))
-        : undefined;
+      // Recompute card-to-camera distances only when the camera moves
+      // meaningfully or the active shot changes. A full map plus sort on every
+      // frame stalls large libraries and makes the reel feel hung.
+      const now = performance.now();
+      const cameraMoved = Math.abs(camera.x - this.lastCameraX) > 2 || Math.abs(camera.y - this.lastCameraY) > 2;
+      const stale = now - this.lastDistanceComputeAt > 200 || cameraMoved || this.lastLayoutShot !== shot;
+      let distances: number[];
+      let focusedIndex: number;
+      let nearestOrbitCards: Set<number> | undefined;
+      if (stale) {
+        distances = this.cards.map(card => Math.hypot(card.x - camera.x, card.y - camera.y));
+        focusedIndex = distances.reduce((closest, distance, index) => (
+          distance < distances[closest] ? index : closest
+        ), 0);
+        this.lastCameraX = camera.x;
+        this.lastCameraY = camera.y;
+        this.lastDistanceComputeAt = now;
+        this.cachedDistances = distances;
+        this.cachedFocusedIndex = focusedIndex;
+        if (this.options.template === 'orbit') {
+          const orbitVisibleLimit = this.cards.length <= 96 ? this.cards.length : 64;
+          nearestOrbitCards = new Set(distances
+            .map((distance, index) => ({ distance, index }))
+            .sort((left, right) => left.distance - right.distance)
+            .slice(0, orbitVisibleLimit)
+            .map(item => item.index));
+          this.cachedNearestOrbitCards = nearestOrbitCards;
+        } else {
+          this.cachedNearestOrbitCards = undefined;
+        }
+      } else {
+        distances = this.cachedDistances;
+        focusedIndex = this.cachedFocusedIndex;
+        nearestOrbitCards = this.cachedNearestOrbitCards;
+      }
       const renderRadius = this.options.template === 'orbit'
         ? 1120
         : this.clarity === 'natural' ? 1700 : 1450;
@@ -2091,9 +2284,6 @@ export class MemoryReelController {
           else if (!active && !card.video.paused) card.video.pause();
         }
       });
-      this.cards.forEach((card, index) => {
-         card.card.style.zIndex = index === shot ? '50' : index === focusedIndex ? '8' : '1';
-      });
       const focusedMedia = this.cards[focusedIndex]?.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
       const ambientSource = focusedMedia?.currentSrc || focusedMedia?.getAttribute('src') || '';
       const heroCard = this.cards[shot]?.card;
@@ -2115,6 +2305,14 @@ export class MemoryReelController {
     this.titleEl.classList.toggle('on', showTitle);
     this.progressEl.style.width = `${clamp(time / this.total, 0, 1) * 100}%`;
     this.lastRenderedShot = shot;
+    // Lightweight, throttled diagnostics on the stage element. It costs one
+    // string compare per frame and makes "is the story still playing at the
+    // same shot" verifiable from the DOM (used by the performance tests).
+    const diagnostic = `${Math.round(time)}/${Math.round(this.total)}/${shot}/${this.paused ? 'paused' : 'playing'}/${this.cards.length}/${this.wallRebuilds}`;
+    if (diagnostic !== this.lastDiagnostic) {
+      this.lastDiagnostic = diagnostic;
+      this.el.setAttribute('data-reel-state', diagnostic);
+    }
     this.options.onProgress?.(time, this.total);
   }
 }
@@ -2193,9 +2391,9 @@ const readStoredMusicPlayback = (): StoredMusicPlayback | null => {
     if (!value.trackId || !Number.isFinite(value.currentTime)) return null;
     return {
       trackId: value.trackId,
-      currentTime: Math.max(0, value.currentTime),
+      currentTime: Math.max(0, value.currentTime ?? 0),
       wasPlaying: Boolean(value.wasPlaying),
-      updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
+      updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt! : Date.now(),
     };
   } catch {
     return null;

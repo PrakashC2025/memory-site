@@ -81,10 +81,19 @@ const downloadDriveMedia = async (file: DriveMediaFile, accessToken: string) => 
   }
 };
 
-export const cacheDriveMediaFiles = (files: DriveMediaFile[], accessToken: string, options?: { includeVideos?: boolean }) => {
+// How many originals a single background warm may pull. A 500 photo library
+// used to queue 500 full-size downloads the moment it synced; those downloads
+// filled the media queue ahead of the thumbnails that were actually on screen,
+// so the gallery looked stuck on placeholders. Warming the first screenful is
+// enough: anything else is fetched on demand when it becomes visible.
+const MAX_WARMED_FILES = 48;
+
+export const cacheDriveMediaFiles = (files: DriveMediaFile[], accessToken: string, options?: { includeVideos?: boolean; limit?: number }) => {
+  const limit = Math.max(0, options?.limit ?? MAX_WARMED_FILES);
   const visualFiles = files
     .filter(file => file.mimeType.startsWith('image/') || ((options?.includeVideos ?? true) && file.mimeType.startsWith('video/')))
-    .sort((a, b) => Number(b.mimeType.startsWith('image/')) - Number(a.mimeType.startsWith('image/')));
+    .sort((a, b) => Number(b.mimeType.startsWith('image/')) - Number(a.mimeType.startsWith('image/')))
+    .slice(0, limit);
   return Promise.all(visualFiles.map(file => downloadDriveMedia(file, accessToken))).then(() => undefined);
 };
 
@@ -109,12 +118,21 @@ export const cacheDriveMemories = (memories: Memory[], accessToken: string) => {
   return cacheDriveMediaFiles(files, accessToken, { includeVideos: true });
 };
 
+// Cap how many cached originals become live blob URLs at once. Hundreds of
+// simultaneous object URLs pin decoded images in memory and make large
+// libraries stutter; the reel loads the rest on demand.
+const MAX_HYDRATED_URLS = 60;
+
 export const hydrateCachedDriveMemories = async (memories: Memory[]) => {
   const objectUrls: string[] = [];
+  let remainingUrls = MAX_HYDRATED_URLS;
   const hydrated = await Promise.all(memories.map(async memory => {
     if (!memory.driveFileId) return memory;
+    if (remainingUrls <= 0) return memory;
     const cached = await readCached(memory.driveFileId);
     if (!cached) return memory;
+    if (remainingUrls <= 0) return memory;
+    remainingUrls -= 1;
     const url = URL.createObjectURL(cached.blob);
     objectUrls.push(url);
     return { ...memory, url, thumbnail: url, mimeType: cached.mimeType };

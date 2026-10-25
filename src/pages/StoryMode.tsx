@@ -204,8 +204,19 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       }
     };
 
+    // Full Drive scans block Story Mode playback. Keep them on a long cadence,
+    // only while the tab is visible, and cooldown rapid triggers so the
+    // cinematic reel never hangs waiting on a background sync.
+    const SYNC_INTERVAL_MS = 60000;
+    const SYNC_COOLDOWN_MS = 45000;
+    let lastSyncAt = 0;
+    const dueForSync = () => Date.now() - lastSyncAt >= SYNC_COOLDOWN_MS;
+
     const retryDrive = () => {
+      if (document.visibilityState !== 'visible') return;
       if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+      if (!dueForSync()) return;
+      lastSyncAt = Date.now();
       void syncDrive();
     };
     const onVisibilityChange = () => {
@@ -215,7 +226,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     window.addEventListener('focus', retryDrive);
     document.addEventListener('visibilitychange', onVisibilityChange);
     void syncDrive();
-    const interval = window.setInterval(retryDrive, 5000);
+    const interval = window.setInterval(retryDrive, SYNC_INTERVAL_MS);
     return () => {
       active = false;
       window.clearInterval(interval);

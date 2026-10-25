@@ -9,6 +9,8 @@ import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
 import { DRIVE_MEMORIES_UPDATED_EVENT, readDriveMemories } from '../services/driveLibrary';
 
+const TIMELINE_MONTH_PAGE = 8;
+
 const MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 const EMOTION_LABELS: Record<string, string> = {
@@ -45,6 +47,9 @@ const Timeline: React.FC = () => {
   }, []);
   const years = groupMemoriesByYear(driveMemories);
   const filteredYears = filterYear ? years.filter(year => year.year === filterYear) : years;
+  // A busy month can hold hundreds of photos. Render a first page per month so
+  // a 500-photo library does not mount 500 animated cards at once.
+  const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
 
   return (
     <div className="timeline-page mx-auto min-h-screen max-w-6xl px-4 pb-16 pt-24 md:px-8 md:pt-28">
@@ -144,7 +149,10 @@ const Timeline: React.FC = () => {
                   </motion.div>
 
                   <div className="grid grid-cols-1 gap-4 pl-10 md:grid-cols-2 md:pl-0">
-                    {month.memories.map((memory, memoryIndex) => {
+                    {(expandedMonths[month.label]
+                      ? month.memories
+                      : month.memories.slice(0, TIMELINE_MONTH_PAGE)
+                    ).map((memory, memoryIndex) => {
                       const isLeft = (monthIndex + memoryIndex) % 2 === 0;
                       return (
                         <motion.button
@@ -188,6 +196,16 @@ const Timeline: React.FC = () => {
                         </motion.button>
                       );
                     })}
+                    {!expandedMonths[month.label] && month.memories.length > TIMELINE_MONTH_PAGE && (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedMonths(current => ({ ...current, [month.label]: true }))}
+                        className="neon-button py-3 text-sm font-bold"
+                        style={{ color: yearColor, borderColor: yearColor + '55' }}
+                      >
+                        Show {month.memories.length - TIMELINE_MONTH_PAGE} more from {MONTH_NAMES[month.month]}
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
