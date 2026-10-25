@@ -12811,3 +12811,67 @@ html:not(.legacy-tv-browser) .page-hero button {
 .memory-reel-stage .card.beat-fly-front {
   will-change: transform, opacity;
 }
+
+/* ---------------------------------------------------------------------------
+   Story Mode scrolling
+   ---------------------------------------------------------------------------
+   The reel overlay holds the stage, the toolbar and the Music / Template /
+   Effects / Clarity panels, which together are taller than a phone viewport.
+
+   1. `place-items: center` on a scroll container hides the overflowing top
+      edge: once the shell is taller than the screen that content can never be
+      scrolled back into view. `align-content: start` keeps everything reachable.
+   2. Momentum scrolling and `overscroll-behavior: contain` keep the swipe
+      inside the reel instead of dragging the page behind it.
+   3. Long panels get their own scroll area so a big Drive music list or the
+      template grid cannot push the toolbar off screen.
+   --------------------------------------------------------------------------- */
+.memory-reel-overlay {
+  /* `safe center` keeps the current centred composition whenever the reel fits
+     the screen, and automatically falls back to the top edge when it does not,
+     so overflowing content stays reachable instead of being clipped above the
+     scroll origin. Browsers without `safe` keep the previous centred result. */
+  align-content: safe center;
+  align-items: safe center;
+  justify-items: stretch;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+/* The stage only drives a parallax from pointer movement; vertical swipes must
+   still reach the overlay so the page scrolls on touch devices. */
+.memory-reel-stage {
+  touch-action: pan-y;
+}
+
+.memory-reel-music-panel,
+.memory-reel-template-panel,
+.memory-reel-panel {
+  max-height: min(58dvh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+
+/* Landscape phones pin the reel to a 100vh block with the overlay locked, and
+   only the Music / Template panels were positioned inside the viewport, so the
+   Effects and Clarity panels rendered below the fold with no way to reach them.
+   Float every panel above the toolbar and let it scroll on its own. */
+@media (max-width: 900px) and (orientation: landscape) {
+  .memory-reel-shell.has-panel-open .memory-reel-panel {
+    position: absolute;
+    left: 0.55rem;
+    right: 0.55rem;
+    bottom: 3.2rem;
+    z-index: 50;
+    max-height: 68vh;
+    overflow-y: auto;
+    border-radius: 16px;
+    background: rgba(5, 8, 17, 0.96);
+  }
+}

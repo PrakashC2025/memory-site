@@ -337,6 +337,21 @@ test('mobile playback avoids the expensive compositing paths', async () => {
   // Hidden ambient layers stop animating (and resume) with the reel.
   assert.match(reel, /beginHeavyVisualPause\(\)/);
   assert.match(splash, /isHeavyVisualPaused\(\)/);
+  // Story Mode must stay scrollable: no document-level scroll lock on modern
+  // browsers, a real scroll container with reachable overflow, and scrollable
+  // panels (including the Effects/Clarity panel in landscape).
+  const reelComponent = await readProjectFile('src/components/MemoryReel.tsx');
+  assert.match(css, /html\.heavy-visual-paused \.memory-reel-overlay/);
+  assert.match(css, /\.memory-reel-overlay \{[\s\S]*align-content: safe center;/);
+  assert.match(css, /\.memory-reel-overlay \{[\s\S]*overflow-y: auto;/);
+  assert.match(css, /\.memory-reel-overlay \{[\s\S]*-webkit-overflow-scrolling: touch;/);
+  assert.match(css, /\.memory-reel-stage \{\s*touch-action: pan-y;/);
+  assert.match(css, /\.memory-reel-panel \{[\s\S]*max-height: min\(58dvh, 460px\);/);
+  assert.match(css, /orientation: landscape\) \{[\s\S]*\.memory-reel-panel \{[\s\S]*overflow-y: auto;/);
+  assert.doesNotMatch(css, /memory-reel-effects-panel|memory-reel-clarity-panel/);
+  // The document overflow lock is legacy-TV only.
+  assert.match(reelComponent, /if \(!legacyTvMode\) return undefined;/);
+
   // Soft effect gradients are filled at most 30 times a second.
   assert.match(reel, /effectsNow - this\.lastEffectsPaintAt >= 1000 \/ 30/);
   assert.match(reel, /coarsePointer \? 1 : Math\.min\(1\.5, window\.devicePixelRatio \|\| 1\)/);

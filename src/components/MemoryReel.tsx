@@ -2958,8 +2958,13 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   }, [musicDriveFolderId]);
 
   useEffect(() => {
-    // Story Mode owns the viewport. Without this lock, an older WebView can
-    // send remote-wheel/trackpad events through the fixed overlay to Home.
+    // Only old TV WebViews need the document locked: they forward remote
+    // wheel/trackpad events through the fixed overlay to the page behind it.
+    // On phones and desktop the lock is what made Story Mode feel unscrollable
+    // - locking <html> and <body> together stops or badly breaks scrolling of
+    // the overlay's own content in mobile Safari and Android Chrome, and the
+    // fixed overlay already hides the page underneath.
+    if (!legacyTvMode) return undefined;
     const previousBodyOverflow = document.body.style.overflow;
     const previousDocumentOverflow = document.documentElement.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -2968,7 +2973,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       document.body.style.overflow = previousBodyOverflow;
       document.documentElement.style.overflow = previousDocumentOverflow;
     };
-  }, []);
+  }, [legacyTvMode]);
 
   const scrollStoryPanel = (panel: HTMLDivElement, amount: number) => {
     if (typeof panel.scrollBy === 'function') panel.scrollBy(0, amount);

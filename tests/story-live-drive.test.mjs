@@ -168,6 +168,15 @@ if (addCard && afterAdd) {
     `index=${insertedIndex} shot=${afterAdd.shot}`,
   );
 }
+// The reel must not lock the document on modern browsers: locking <html> and
+// <body> overflow is the classic cause of a dead-scrolling overlay on phones.
+record(
+  'page is not scroll-locked while the reel is open',
+  `html="${window.document.documentElement.style.overflow}" body="${window.document.body.style.overflow}"`,
+  window.document.documentElement.style.overflow !== 'hidden'
+    && window.document.body.style.overflow !== 'hidden',
+);
+
 // Ambient background layers are invisible behind the reel; they must be parked.
 record(
   'reel parks the hidden background visuals',
