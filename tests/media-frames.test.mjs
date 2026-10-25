@@ -43,9 +43,31 @@ test('video loading keeps a usable poster and caches before story reveal', async
 
   assert.match(preview, /!memory\.driveFileId \? memory\.url : ''/);
   assert.match(preview, /drive-preview-video-underlay/);
+  // Offscreen previews must not read IndexedDB or queue Drive downloads.
+  assert.match(preview, /observeNearViewport/);
+  assert.match(preview, /if \(!nearViewport\) return undefined;/);
   assert.match(preview, /onLoadedData=\{handleVideoLoaded\}/);
   assert.match(reel, /playAudioWithTimeout/);
-  assert.match(reel, /const workerCount = Math\.min\(8, pendingItems\.length\)/);
+  // Large libraries must not download/decode every frame before the first
+  // shot appears: only a bounded first batch is loaded eagerly.
+  assert.match(reel, /const workerCount = Math\.min\(8, firstBatch\.length\)/);
+  assert.match(reel, /const WALL_INITIAL_BATCH = 72/);
+  // A 500 photo library must not queue a full-size download for every file.
+  const driveCache = await readProjectFile('src/services/driveCache.ts');
+  assert.match(driveCache, /const MAX_WARMED_FILES = 48/);
+  assert.match(driveCache, /\.slice\(0, limit\)/);
+  assert.match(driveCache, /const MAX_HYDRATED_URLS = 60/);
+  // Galleries render a page of cards at a time instead of every memory.
+  const memoriya = await readProjectFile('src/pages/Memoriya.tsx');
+  assert.match(memoriya, /const REEL_LIST_PAGE = 40/);
+  assert.match(memoriya, /const STORY_MONTH_PAGE = 12/);
+  assert.match(memoriya, /memories\.slice\(0, shown\)/);
+  const timelinePage = await readProjectFile('src/pages/Timeline.tsx');
+  assert.match(timelinePage, /const TIMELINE_MONTH_PAGE = 8/);
+  assert.match(timelinePage, /month\.memories\.slice\(0, TIMELINE_MONTH_PAGE\)/);
+  assert.match(reel, /this\.pendingSources = keepCurrentWall \? \[\] : pendingItems\.slice\(WALL_INITIAL_BATCH\)/);
+  assert.match(reel, /private async loadNextBatch\(\)/);
+  assert.doesNotMatch(reel, /Math\.min\(8, pendingItems\.length\)/);
   assert.match(reel, /\| 'polaroid-collage'/);
   assert.match(reel, /id: 'polaroid-collage', name: 'Polaroid Celebration'/);
   assert.match(reel, /--reel-collage-x/);

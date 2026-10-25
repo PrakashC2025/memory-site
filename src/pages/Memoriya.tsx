@@ -1009,7 +1009,37 @@ interface ReelsStageProps {
   lightweight: boolean;
 }
 
-const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, openMemory, onPlayStory, activeReaction, setActiveReaction }) => (
+// A 500-photo Drive library used to mount 500 preview rows (and 500 image
+// elements) at once, which stalled the landing view. Only a window of rows is
+// rendered; the sentinel below the list grows the window as you scroll.
+const REEL_LIST_PAGE = 40;
+
+const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, openMemory, onPlayStory, activeReaction, setActiveReaction }) => {
+  const [visibleCount, setVisibleCount] = useState(REEL_LIST_PAGE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const total = memories.length;
+  const shown = Math.min(visibleCount, total);
+  const visibleMemories = useMemo(() => memories.slice(0, shown), [memories, shown]);
+
+  // Reset the window when the underlying list changes size (new Drive page,
+  // search filter, folder switch) so stale counts never hide fresh items.
+  useEffect(() => {
+    setVisibleCount(current => Math.max(REEL_LIST_PAGE, Math.min(current, total)));
+  }, [total]);
+
+  useEffect(() => {
+    if (shown >= total) return undefined;
+    const sentinel = sentinelRef.current;
+    if (!sentinel || typeof IntersectionObserver === 'undefined') return undefined;
+    const observer = new IntersectionObserver(entries => {
+      if (!entries.some(entry => entry.isIntersecting)) return;
+      setVisibleCount(current => Math.min(total, current + REEL_LIST_PAGE));
+    }, { rootMargin: '600px 0px' });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [shown, total]);
+
+  return (
   <section className="memoriya-reel-stage">
     <article
       className="memoriya-reel-phone"
@@ -1048,7 +1078,7 @@ const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, ope
     </article>
     <button type="button" className="memoriya-story-launch" onClick={onPlayStory}><Film size={16} /> Play full camera-wall story</button>
     <div className="memoriya-reel-list">
-      {memories.map((memory, index) => (
+      {visibleMemories.map((memory, index) => (
         <button
           key={memory.id}
           onClick={() => {
@@ -1066,9 +1096,18 @@ const ReelsStage = memo<ReelsStageProps>(({ memories, selected, setSelected, ope
           <ChevronRight size={16} />
         </button>
       ))}
+      {shown < total && (
+        <div ref={sentinelRef} className="memoriya-reel-list-more">
+          <button type="button" onClick={() => setVisibleCount(current => Math.min(total, current + REEL_LIST_PAGE))}>
+            Show more memories
+          </button>
+          <small>Showing {shown} of {total}</small>
+        </div>
+      )}
     </div>
   </section>
-));
+  );
+});
 
 ReelsStage.displayName = 'ReelsStage';
 
@@ -1134,30 +1173,55 @@ const AlbumsStage = memo<{
 
 AlbumsStage.displayName = 'AlbumsStage';
 
+// Each month used to render every photo it contained. With hundreds of
+// images in one month that produced a wall of thumbnails that appeared frozen.
+const STORY_MONTH_PAGE = 12;
+
 const StoryStage = memo<{
   timeline: [string, Memory[]][];
   openMemory: (memory: Memory) => void;
-}>(({ timeline, openMemory }) => (
-  <section className="memoriya-storyline">
-    {timeline.map(([month, items]) => (
-      <article key={month}>
-        <time>{month}</time>
-        <div>
-          {items.map(memory => (
-            <button key={memory.id} onClick={() => openMemory(memory)}>
-              <OptimizedImage memory={memory} width={160} />
-              <span>
-                <strong>{memory.title}</strong>
-                <small>{memory.type} - {formatDay.format(new Date(memory.date))} at {formatTime.format(new Date(memory.date))}</small>
-              </span>
-              <MessageCircleHeart size={17} />
-            </button>
-          ))}
-        </div>
-      </article>
-    ))}
-  </section>
-));
+}>(({ timeline, openMemory }) => {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  return (
+    <section className="memoriya-storyline">
+      {timeline.map(([month, items]) => {
+        const limit = expanded[month] ? items.length : Math.min(items.length, STORY_MONTH_PAGE);
+        const remaining = items.length - limit;
+        return (
+          <article key={month}>
+            <time>{month}</time>
+            <div>
+              {items.slice(0, limit).map(memory => (
+                <button key={memory.id} onClick={() => openMemory(memory)}>
+                  <OptimizedImage memory={memory} width={160} />
+                  <span>
+                    <strong>{memory.title}</strong>
+                    <small>{memory.type} - {formatDay.format(new Date(memory.date))} at {formatTime.format(new Date(memory.date))}</small>
+                  </span>
+                  <MessageCircleHeart size={17} />
+                </button>
+              ))}
+              {remaining > 0 && (
+                <button
+                  type="button"
+                  className="memoriya-storyline-more"
+                  onClick={() => setExpanded(current => ({ ...current, [month]: true }))}
+                >
+                  <span>
+                    <strong>Show {remaining} more</strong>
+                    <small>{limit} of {items.length} in {month}</small>
+                  </span>
+                  <ChevronRight size={17} />
+                </button>
+              )}
+            </div>
+          </article>
+        );
+      })}
+    </section>
+  );
+});
 
 StoryStage.displayName = 'StoryStage';
 

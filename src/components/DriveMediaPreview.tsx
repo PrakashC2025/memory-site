@@ -6,6 +6,7 @@ import { googleDriveService } from '../services/googleDriveService';
 import { saveDriveAccessToken } from '../services/driveLibrary';
 import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 import { withMediaFetch } from '../utils/mediaQueue';
+import { observeNearViewport } from '../utils/visibilityGate';
 
 interface Props {
   memory: Memory;
@@ -27,6 +28,18 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   const authAttemptedRef = useRef(false);
   const cacheHydrationAttemptedRef = useRef(false);
   const cacheHydrationTimerRef = useRef<number | undefined>(undefined);
+  const hostRef = useRef<HTMLSpanElement>(null);
+  // A 500-photo library mounts 500 of these. Only the previews near the
+  // viewport are allowed to read IndexedDB or queue a Drive download, so the
+  // media queue stays free for images the person can actually see.
+  const [nearViewport, setNearViewport] = useState(Boolean(eager));
+
+  useEffect(() => {
+    if (eager || nearViewport) return undefined;
+    const host = hostRef.current;
+    if (!host) return undefined;
+    return observeNearViewport(host, () => setNearViewport(true));
+  }, [eager, nearViewport]);
 
   useEffect(() => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
@@ -47,6 +60,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   }, [memory.id, memory.thumbnail, memory.url]);
 
   useEffect(() => {
+    if (!nearViewport) return undefined;
     if (!memory.driveFileId || blobSrc || cacheHydrationAttemptedRef.current) return undefined;
     let cancelled = false;
     let attempt = 0;
@@ -75,6 +89,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   }, [blobSrc, memory.driveFileId, memory.id, memory.thumbnail, memory.url]);
 
   useEffect(() => {
+    if (!nearViewport) return undefined;
     const canUseDriveMedia = Boolean(memory.authToken && memory.driveFileId);
     // Show Drive's thumbnail immediately. The original is only needed when a
     // thumbnail is missing/broken or when a video is explicitly opened. This
@@ -115,7 +130,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
       cancelled = true;
       controller.abort();
     };
-  }, [blobSrc, eager, failed, fallbackLoading, imageCandidates.length, memory.authToken, memory.driveFileId, memory.id, memory.mimeType, memory.type, videoActive]);
+  }, [blobSrc, eager, failed, fallbackLoading, imageCandidates.length, memory.authToken, memory.driveFileId, memory.id, memory.mimeType, memory.type, nearViewport, videoActive]);
 
   const src = memory.type === 'video'
     ? blobSrc || (!memory.driveFileId ? memory.url : '')
@@ -147,7 +162,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   };
 
   return (
-    <span className="drive-media-preview-wrap">
+    <span className="drive-media-preview-wrap" ref={hostRef}>
       {memory.type === 'video' && !failed && src && (videoActive || !memory.thumbnail) ? (
         <>
           {!loaded && memory.thumbnail && (

@@ -8458,6 +8458,35 @@ nav.fixed.left-0.right-0.top-0 {
   object-fit: cover;
 }
 
+/* Windowed list footer: the reel list renders a page of rows at a time so a
+   500-photo library does not mount 500 previews at once. */
+.memoriya-reel-list-more {
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  padding: 0.6rem 0 1.2rem;
+  grid-column: 1 / -1;
+}
+
+.memoriya-reel-list-more button {
+  display: inline-grid;
+  grid-template-columns: none;
+  justify-content: center;
+  border: 1px solid rgba(255, 208, 138, 0.35);
+  background: rgba(255, 208, 138, 0.12);
+  color: #ffe4bd;
+  border-radius: 999px;
+  padding: 0.55rem 1.1rem;
+  font-weight: 850;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.memoriya-reel-list-more small {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.7rem;
+}
+
 .memoriya-reel-list strong,
 .memoriya-reel-list small,
 .memoriya-place-list strong,
@@ -8731,6 +8760,19 @@ nav.fixed.left-0.right-0.top-0 {
   aspect-ratio: 1;
   border-radius: 8px;
   object-fit: cover;
+}
+
+/* Per-month expander: a busy month renders its first page of photos only. */
+.memoriya-storyline .memoriya-storyline-more {
+  grid-template-columns: minmax(0, 1fr) 1.5rem;
+  border: 1px dashed rgba(255, 208, 138, 0.35);
+  background: rgba(255, 208, 138, 0.07);
+  color: #ffe4bd;
+  cursor: pointer;
+}
+
+.memoriya-storyline .memoriya-storyline-more strong {
+  font-size: 0.8rem;
 }
 
 .memoriya-storyline strong,

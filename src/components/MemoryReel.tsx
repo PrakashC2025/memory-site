@@ -319,6 +319,13 @@ const convertAudioBlobWithFfmpeg = async (blob: Blob, song: DriveAudioFile) => {
   }
 };
 
+// Story Mode wall sizing. The wall only ever paints the cards near the
+// camera, so a bounded first batch looks identical while keeping the first
+// frame fast on large Drive libraries.
+const WALL_INITIAL_BATCH = 72;
+const WALL_NEXT_BATCH = 36;
+const WALL_PRELOAD_AHEAD = 20;
+
 const playAudioWithTimeout = async (element: HTMLAudioElement, timeoutMs = 12000) => {
   let timeoutId: number | undefined;
   try {
@@ -421,6 +428,11 @@ export class MemoryReelController {
   private zoomEnabled = true;
   private objectUrls = new Set<string>();
   private loadedMedia = new Map<string, LoadedMedia>();
+  // A 500 image story used to download and decode every frame before the
+  // first shot appeared, which made Story Mode look frozen. Load a wall-sized
+  // batch first, then warm the rest as the story advances.
+  private pendingSources: ReelSource[] = [];
+  private loadingNextBatch = false;
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
@@ -544,6 +556,7 @@ export class MemoryReelController {
       this.world.innerHTML = '';
       this.cards = [];
       this.loadedMedia.clear();
+      this.pendingSources = [];
     } else {
       this.removeMissingMedia(new Set(uniqueItems.map(item => item.id)));
     }
@@ -565,6 +578,14 @@ export class MemoryReelController {
       this.render(this.elapsed);
       return;
     }
+
+    // Load only a wall's worth of images up front. Anything beyond this batch
+    // waits until the story is close to needing it.
+    const firstBatch = keepCurrentWall
+      ? pendingItems
+      : pendingItems.slice(0, WALL_INITIAL_BATCH);
+    this.pendingSources = keepCurrentWall ? [] : pendingItems.slice(WALL_INITIAL_BATCH);
+    this.loadingNextBatch = false;
 
     let ready = false;
     let resolveReady: () => void = () => undefined;
@@ -596,10 +617,10 @@ export class MemoryReelController {
     };
 
     let nextItemIndex = 0;
-    const workerCount = Math.min(8, pendingItems.length);
+    const workerCount = Math.min(8, firstBatch.length);
     const workers = Array.from({ length: workerCount }, async () => {
-      while (nextItemIndex < pendingItems.length) {
-        const item = pendingItems[nextItemIndex];
+      while (nextItemIndex < firstBatch.length) {
+        const item = firstBatch[nextItemIndex];
         nextItemIndex += 1;
         const media = await this.load(item);
         if (media) reveal(item, media);
@@ -620,6 +641,43 @@ export class MemoryReelController {
       }
     });
     await readyPromise;
+  }
+
+  /**
+   * Warms the next batch of story frames once the reel approaches the end of
+   * the cards it already has. Keeps memory flat and the clock running instead
+   * of decoding every image in the library up front.
+   */
+  private async loadNextBatch() {
+    if (this.loadingNextBatch || !this.pendingSources.length || this.destroyed) return;
+    const generation = this.loadGeneration;
+    this.loadingNextBatch = true;
+    const batch = this.pendingSources.splice(0, WALL_NEXT_BATCH);
+    const results: LoadedMedia[] = [];
+    let cursor = 0;
+    const workerCount = Math.min(6, batch.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (cursor < batch.length) {
+        const item = batch[cursor];
+        cursor += 1;
+        if (!item) return;
+        const media = await this.load(item);
+        if (this.destroyed || generation !== this.loadGeneration) return;
+        if (media) results.push({ ...media, id: item.id });
+        await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+      }
+    }));
+    this.loadingNextBatch = false;
+    if (this.destroyed || generation !== this.loadGeneration) return;
+    results.forEach(media => {
+      if (!media.id) return;
+      this.loadedMedia.set(media.id, media);
+      this.appendMediaCard(media);
+    });
+    // Keep prefetching while the story is still inside the fresh batch.
+    if (this.pendingSources.length && this.shotIndexAt(this.elapsed) > this.cards.length - WALL_PRELOAD_AHEAD) {
+      void this.loadNextBatch();
+    }
   }
 
   private wallSpacing() {
@@ -1523,6 +1581,12 @@ export class MemoryReelController {
       // A stable 30fps paint budget is smoother than an overloaded 60fps DOM
       // loop on old TVs. The elapsed clock remains real-time and the browser
       // still schedules frames normally, so transitions never speed up.
+      // Pull in the next story batch before the current one runs out.
+      if (this.pendingSources.length
+        && !this.loadingNextBatch
+        && this.shotIndexAt(this.elapsed) > this.cards.length - WALL_PRELOAD_AHEAD) {
+        void this.loadNextBatch();
+      }
       const paintInterval = this.options.legacyTv ? 1000 / 30 : 0;
       if (!paintInterval || now - this.lastPaint >= paintInterval) {
         this.render(this.elapsed);
@@ -1697,6 +1761,8 @@ export class MemoryReelController {
     this.world.innerHTML = '';
     this.cards = [];
     this.loadedMedia.clear();
+    this.pendingSources = [];
+    this.loadingNextBatch = false;
     this.revokeObjectUrls();
   }
 
