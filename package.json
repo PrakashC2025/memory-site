@@ -9,7 +9,8 @@
     "build": "vite build",
     "test": "node --test tests/compatibility.test.mjs tests/colors.test.mjs tests/media-frames.test.mjs",
     "preview": "vite preview",
-    "test:story": "node tests/story-live-drive.test.mjs"
+    "test:story": "node tests/story-live-drive.test.mjs",
+    "test:perf": "node tests/story-performance.test.mjs"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",

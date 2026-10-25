@@ -234,3 +234,44 @@ test('live Drive additions/deletions never stop the story or drop queued frames'
   assert.match(reel, /private removeMissingMedia\(keepIds: Set<string>\)/);
   assert.match(reel, /this\.releaseObjectUrl\(source\)/);
 });
+
+test('story renderer keeps large libraries smooth without changing the look', async () => {
+  const reel = await readProjectFile('src/components/MemoryReel.tsx');
+
+  // The active shot is found with a binary search over a prebuilt timeline, not
+  // a full-library scan on every paint.
+  assert.match(reel, /private rebuildShotTimeline\(\)/);
+  assert.match(reel, /private ensureShotTimeline\(\)/);
+  assert.match(reel, /const starts = this\.ensureShotTimeline\(\);/);
+  assert.match(reel, /private shotStarts = new Float64Array\(0\)/);
+  assert.doesNotMatch(reel, /this\.cards\.slice\(0, index\)\.reduce/);
+
+  // Culling is bounded to the neighbourhood of the camera by a spatial grid.
+  assert.match(reel, /private static readonly GRID_CELL/);
+  assert.match(reel, /private collectNearby\(cameraX: number, cameraY: number, radius: number\)/);
+  assert.match(reel, /private collectWithin\(/);
+  // The old full-library allocation + comparator sort must be gone.
+  assert.doesNotMatch(reel, /this\.cards\.map\(card => Math\.hypot/);
+  assert.doesNotMatch(reel, /nearestOrbitCards = new Set\(distances/);
+
+  // Style writes are dirty checked so blur layers are not re-rasterised when
+  // nothing changed.
+  assert.match(reel, /if \(nextFilter !== card\.lastFilter\)/);
+  assert.match(reel, /if \(nextTransform !== card\.lastTransform\)/);
+  assert.match(reel, /if \(nextZIndex !== card\.lastZIndex\)/);
+
+  // Per-shot position variables are only written for visible cards.
+  assert.match(reel, /private applyReelCardVars\(card: ReelCard, index: number, shot: number\)/);
+  assert.match(reel, /if \(this\.isCardVisible\(card, index\)\) this\.applyReelCardVars/);
+  // A streamed append must not force a whole-wall reposition pass.
+  assert.match(reel, /const insertedAt = Math\.min\(insertIndex, this\.cards\.length\)/);
+  const appendBody = reel.slice(reel.indexOf('private appendMediaCard'));
+  const nextMethod = appendBody.indexOf('private removeMissingMedia');
+  assert.ok(nextMethod > 0);
+  assert.doesNotMatch(appendBody.slice(0, nextMethod), /this\.lastLayoutShot = -1/);
+
+  // Repaint pacing adapts to measured frame cost instead of dropping motion.
+  assert.match(reel, /private trackPaintCost\(cost: number, now: number\)/);
+  assert.match(reel, /this\.adaptivePaintInterval = 1000 \/ 30/);
+  assert.match(reel, /private paintCostEma = 0/);
+});

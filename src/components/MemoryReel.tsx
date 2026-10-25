@@ -151,6 +151,14 @@ interface ReelCard {
   width: number;
   height: number;
   video?: HTMLVideoElement;
+  // Last values written to the DOM. Comparing before writing avoids style
+  // invalidation and (for `filter: blur()`) full layer re-rasterisation on
+  // frames where the value did not actually change.
+  lastFilter?: string;
+  lastZIndex?: string;
+  lastOpacity?: string;
+  lastTransform?: string;
+  varsShot?: number;
 }
 
 interface DustParticle {
@@ -397,11 +405,28 @@ export class MemoryReelController {
   // large libraries. Cache them and refresh only when the camera moves
   // meaningfully or the active shot changes.
   private lastDistanceComputeAt = 0;
-  private cachedDistances: number[] = [];
+  // Cumulative story timeline. Rebuilt only when the card list changes, so the
+  // active shot is a binary search instead of a full-library scan on every
+  // frame (a 1000 photo story was scanning the whole list twice per paint).
+  private shotStarts = new Float64Array(0);
+  private shotStartsDirty = true;
   private cachedFocusedIndex = 0;
   private cachedNearestOrbitCards: Set<number> | undefined;
   private lastCameraX = 0;
   private lastCameraY = 0;
+  // Uniform spatial grid over card positions. Only the cards actually near the
+  // camera are measured, so a 1000 photo story costs the same as a 60 photo
+  // one. Rebuilt only when the wall layout changes.
+  private static readonly GRID_CELL = 620;
+  private grid = new Map<number, number[]>();
+  private gridDirty = true;
+  private distanceByCard = new Float64Array(0);
+  private candidateMask = new Uint8Array(0);
+  private candidates: number[] = [];
+  private candidateMaskActive = false;
+  private lastRenderRadius = 0;
+  private paintCount = 0;
+  private candidateDistances: number[] = [];
   private audio?: HTMLAudioElement;
   private audioElement?: HTMLAudioElement;
   private analysisAudio?: HTMLAudioElement;
@@ -446,6 +471,16 @@ export class MemoryReelController {
   private failedSources = new Set<string>();
   private prefetchTimer = 0;
   private lastDiagnostic = '';
+  private lastAmbientOpacity = '';
+  // Measured paint cost. On weak hardware the loop lowers its repaint rate
+  // instead of dropping frames mid-motion: the clock is real-time and every
+  // motion term is a function of time, so the animation looks identical, it
+  // just samples the same path fewer times.
+  private paintCostEma = 0;
+  private adaptivePaintInterval = 0;
+  private adaptivePaintedAt = 0;
+  private lastHeroImage = '';
+  private lastHeroCard?: HTMLDivElement;
   // Counts full wall rebuilds. A live Drive change must stream cards in
   // without ever rebuilding (and therefore restarting) the current wall.
   private wallRebuilds = 0;
@@ -546,6 +581,23 @@ export class MemoryReelController {
     };
     document.addEventListener('visibilitychange', this.visibilityHandler);
 
+    // Test hook: exposes the latest culling decision on demand so the
+    // equivalent-of-brute-force behaviour can be verified without adding any
+    // work to the render loop itself.
+    Object.defineProperty(el, '__reelDebug', {
+      configurable: true,
+      value: {
+        snapshot: () => ({
+          template: this.options.template,
+          radius: this.lastRenderRadius,
+          camera: { x: this.lastCameraX, y: this.lastCameraY },
+          candidates: [...this.candidates],
+          focusedIndex: this.cachedFocusedIndex,
+          nearest: this.cachedNearestOrbitCards ? [...this.cachedNearestOrbitCards] : null,
+          cards: this.cards.map((card, index) => ({ index, x: card.x, y: card.y })),
+        }),
+      },
+    });
     this.resizeObserver = typeof ResizeObserver !== 'undefined'
       ? new ResizeObserver(() => this.resize())
       : undefined;
@@ -778,6 +830,91 @@ export class MemoryReelController {
     }, delay);
   }
 
+  private gridKey(cellX: number, cellY: number) {
+    // Symmetric offset keeps negative cells distinct (no hash collisions).
+    return (cellX + 4096) * 16384 + (cellY + 4096);
+  }
+
+  /** Rebuilds the spatial index from the current card positions. */
+  private rebuildGrid() {
+    const cell = MemoryReelController.GRID_CELL;
+    this.grid.clear();
+    for (let index = 0; index < this.cards.length; index += 1) {
+      const card = this.cards[index];
+      const key = this.gridKey(Math.floor(card.x / cell), Math.floor(card.y / cell));
+      const bucket = this.grid.get(key);
+      if (bucket) bucket.push(index);
+      else this.grid.set(key, [index]);
+    }
+    this.gridDirty = false;
+    this.lastDistanceComputeAt = 0;
+  }
+
+  private ensureGrid() {
+    if (this.gridDirty || this.distanceByCard.length !== this.cards.length) {
+      if (this.distanceByCard.length !== this.cards.length) {
+        this.distanceByCard = new Float64Array(this.cards.length);
+        this.candidateMask = new Uint8Array(this.cards.length);
+      }
+      this.rebuildGrid();
+    }
+  }
+
+  /**
+   * Collects the cards within `radius` of the camera, writing distances into
+   * the reused `distanceByCard` buffer. Returns the number of candidates.
+   */
+  private collectNearby(cameraX: number, cameraY: number, radius: number) {
+    this.ensureGrid();
+    const cell = MemoryReelController.GRID_CELL;
+    this.candidates.length = 0;
+    this.candidateDistances.length = 0;
+    if (!this.cards.length) return 0;
+    this.candidateMaskActive = true;
+    const minCellX = Math.floor((cameraX - radius) / cell);
+    const maxCellX = Math.floor((cameraX + radius) / cell);
+    const minCellY = Math.floor((cameraY - radius) / cell);
+    const maxCellY = Math.floor((cameraY + radius) / cell);
+    for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+      for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
+        const bucket = this.grid.get(this.gridKey(cellX, cellY));
+        if (!bucket) continue;
+        for (const index of bucket) {
+          const card = this.cards[index];
+          const distance = Math.hypot(card.x - cameraX, card.y - cameraY);
+          if (distance > radius) continue;
+          this.distanceByCard[index] = distance;
+          this.candidateMask[index] = 1;
+          this.candidates.push(index);
+        }
+      }
+    }
+    return this.candidates.length;
+  }
+
+  /**
+   * Widens the search ring until enough neighbouring cards are found. Every
+   * card inside the accepted ring is closer than any card outside it, so the
+   * nearest set is exactly the same one a full-library sort produced.
+   */
+  private collectWithin(cameraX: number, cameraY: number, radius: number, minimum: number) {
+    let current = radius;
+    let found = this.collectNearby(cameraX, cameraY, current);
+    while (found < minimum && current < 12000) {
+      this.clearCandidates();
+      current *= 1.7;
+      found = this.collectNearby(cameraX, cameraY, current);
+      if (found >= this.cards.length) break;
+    }
+    return found;
+  }
+
+  private clearCandidates() {
+    for (const index of this.candidates) this.candidateMask[index] = 0;
+    this.candidates.length = 0;
+    this.candidateDistances.length = 0;
+  }
+
   private wallSpacing() {
     const stageWidth = this.el.clientWidth || 1280;
     const stageHeight = this.el.clientHeight || 720;
@@ -823,6 +960,7 @@ export class MemoryReelController {
       card.card.style.transformOrigin = `${card.width / 2}px ${card.height / 2}px`;
     });
     this.lastLayoutShot = -1;
+    this.gridDirty = true;
   }
 
   private rebuildWall(loaded: LoadedMedia[], preserveProgress: boolean, previousElapsed: number, wasPlaying: boolean) {
@@ -879,6 +1017,7 @@ export class MemoryReelController {
     });
     this.layoutWall(0);
     this.lastLayoutShot = -1;
+    this.gridDirty = true;
 
     this.recalculateTotal();
     this.elapsed = preserveProgress ? Math.min(previousElapsed, this.total) : 0;
@@ -916,9 +1055,19 @@ export class MemoryReelController {
     card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
     card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
     this.world.appendChild(card);
-    this.cards.splice(Math.min(insertIndex, this.cards.length), 0, { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video });
+    const insertedAt = Math.min(insertIndex, this.cards.length);
+    const reelCard: ReelCard = { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video };
+    this.cards.splice(insertedAt, 0, reelCard);
     this.recalculateTotal();
-    this.lastLayoutShot = -1;
+    this.gridDirty = true;
+    // Style only the card that was just inserted. Resetting lastLayoutShot
+    // forced the whole wall through a reposition pass on every streamed append,
+    // which is what made a large story hitch while it was still loading.
+    const shot = this.shotIndexAt(this.elapsed);
+    const relative = insertedAt - shot;
+    card.classList.toggle('is-active', insertedAt === shot);
+    card.classList.toggle('is-neighbor', Math.abs(relative) > 0 && Math.abs(relative) <= 2);
+    this.applyReelCardVars(reelCard, insertedAt, shot);
     this.render(this.elapsed);
   }
 
@@ -945,18 +1094,49 @@ export class MemoryReelController {
     this.render(this.elapsed);
   }
 
-  private shotIndexAt(time: number) {
-    let remaining = Math.max(0, time);
-    for (let index = 0; index < this.cards.length; index += 1) {
-      const step = this.cardHold(this.cards[index]) + this.options.move;
-      if (remaining < step || index === this.cards.length - 1) return index;
-      remaining -= step;
+  /**
+   * Rebuilds the cumulative shot timeline. Runs once per card-list change
+   * (initial wall, streamed batch, live Drive update) instead of per frame.
+   */
+  private rebuildShotTimeline() {
+    const count = this.cards.length;
+    const starts = new Float64Array(count + 1);
+    let cursor = 0;
+    for (let index = 0; index < count; index += 1) {
+      starts[index] = cursor;
+      cursor += this.cardHold(this.cards[index]) + this.options.move;
     }
-    return 0;
+    starts[count] = cursor;
+    this.shotStarts = starts;
+    this.shotStartsDirty = false;
+  }
+
+  private ensureShotTimeline() {
+    if (this.shotStartsDirty || this.shotStarts.length !== this.cards.length + 1) this.rebuildShotTimeline();
+    return this.shotStarts;
+  }
+
+  private shotIndexAt(time: number) {
+    const count = this.cards.length;
+    if (!count) return 0;
+    const starts = this.ensureShotTimeline();
+    const clamped = Math.max(0, time);
+    // Binary search for the last shot whose start time is <= time. Identical
+    // result to the previous linear scan, in O(log n) instead of O(n).
+    let low = 0;
+    let high = count - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (starts[mid] <= clamped) low = mid;
+      else high = mid - 1;
+    }
+    return low;
   }
 
   private shotStartAt(index: number) {
-    return this.cards.slice(0, index).reduce((total, card) => total + this.cardHold(card) + this.options.move, 0);
+    if (index <= 0) return 0;
+    const starts = this.ensureShotTimeline();
+    return starts[Math.min(index, this.cards.length)];
   }
 
   private recalculateTotal() {
@@ -964,6 +1144,8 @@ export class MemoryReelController {
       total + this.cardHold(card) + (index < this.cards.length - 1 ? this.options.move : 0)
     ), 0) + (this.cards.length ? 2.6 : 0);
     this.elapsed = Math.min(this.elapsed, this.total);
+    this.shotStartsDirty = true;
+    this.ensureShotTimeline();
   }
 
   private load(item: ReelSource): Promise<LoadedMedia | null> {
@@ -1649,6 +1831,24 @@ export class MemoryReelController {
     context.restore();
   }
 
+  /**
+   * Keeps the animation smooth on low-RAM devices. If a paint is consistently
+   * expensive, the loop paints less often instead of stalling mid-motion.
+   * Nothing is removed and no motion term changes - the camera path is a pure
+   * function of elapsed time, so the story looks the same, just calmer.
+   */
+  private trackPaintCost(cost: number, now: number) {
+    // Ignore absurd samples (tab wake, devtools open, GC pause).
+    const sample = Math.min(cost, 120);
+    this.paintCostEma = this.paintCostEma ? this.paintCostEma * 0.88 + sample * 0.12 : sample;
+    if (now - this.adaptivePaintedAt < 1200) return;
+    this.adaptivePaintedAt = now;
+    const budget = this.paintCostEma;
+    if (budget > 26) this.adaptivePaintInterval = 1000 / 30;
+    else if (budget > 16) this.adaptivePaintInterval = 1000 / 45;
+    else this.adaptivePaintInterval = 0;
+  }
+
   play() {
     if (!this.cards.length || this.destroyed || !this.paused && this.raf) return;
     if (this.elapsed >= this.total) this.elapsed = 0;
@@ -1686,9 +1886,13 @@ export class MemoryReelController {
         && this.shotIndexAt(this.elapsed) > this.cards.length - WALL_PRELOAD_AHEAD) {
         void this.loadNextBatch();
       }
-      const paintInterval = this.options.legacyTv ? 1000 / 30 : 0;
+      const paintInterval = this.options.legacyTv
+        ? 1000 / 30
+        : Math.max(this.adaptivePaintInterval, 0);
       if (!paintInterval || now - this.lastPaint >= paintInterval) {
+        const paintStartedAt = performance.now();
         this.render(this.elapsed);
+        this.trackPaintCost(performance.now() - paintStartedAt, now);
         this.lastPaint = now;
       }
       this.raf = requestAnimationFrame(tick);
@@ -1905,14 +2109,49 @@ export class MemoryReelController {
     return 2 + (card.video ? 0.4 : 0);
   }
 
+  private applyReelCardVars(card: ReelCard, index: number, shot: number) {
+    const relative = index - shot;
+    card.card.style.setProperty('--reel-index', String(index));
+    card.card.style.setProperty('--reel-offset', `${relative * 34}vw`);
+    card.card.style.setProperty('--reel-angle', `${((index % 5) - 2) * 3}deg`);
+    card.card.style.setProperty('--reel-depth', `${Math.min(Math.abs(relative) * 18, 120)}px`);
+    card.card.style.setProperty('--reel-collage-x', `${relative * 30}vw`);
+    card.card.style.setProperty('--reel-collage-y', `${relative % 2 === 0 ? 11 : -8}vh`);
+    card.card.style.setProperty('--reel-collage-rotate', `${relative * 5}deg`);
+    card.varsShot = shot;
+  }
+
+  /**
+   * A card is worth styling when it is mounted, not hidden by the cull pass,
+   * and close enough to the camera to be painted this frame.
+   */
+  private isCardVisible(card: ReelCard, index: number) {
+    if (card.card.parentElement !== this.world) return false;
+    if (card.card.dataset.reelHidden === 'true') return false;
+    // Before the first visibility pass the grid has not run yet, so every
+    // mounted card gets styled once (that is the original behaviour).
+    if (!this.candidateMaskActive) return true;
+    return this.candidateMask[index] === 1
+      || index === this.cachedFocusedIndex
+      || index === this.lastRenderedShot;
+  }
+
   private render(time: number) {
+    this.paintCount += 1;
     const { move } = this.options;
     const count = this.cards.length;
     if (!count) return;
     const audioMetrics = this.readAudioMetrics(time);
     const audioLevel = audioMetrics.level;
     this.renderEffects(audioMetrics, time);
-    if (!this.options.legacyTv && this.options.template !== 'orbit') this.ambient.style.opacity = (0.68 + audioLevel * 0.16).toFixed(3);
+    if (!this.options.legacyTv && this.options.template !== 'orbit') {
+      // Writing the same string still invalidates style, so compare first.
+      const ambientOpacity = (0.68 + audioLevel * 0.16).toFixed(3);
+      if (ambientOpacity !== this.lastAmbientOpacity) {
+        this.lastAmbientOpacity = ambientOpacity;
+        this.ambient.style.opacity = ambientOpacity;
+      }
+    }
     // Keep the empty space alive with a gentle music pulse. Beat and frequency
     // bands are smoothed so visuals breathe with the track instead of twitching.
     const effectLevel = audioLevel;
@@ -1970,17 +2209,15 @@ export class MemoryReelController {
       this.cards.forEach((card, index) => {
         const relative = index - shot;
         card.card.classList.toggle('is-active', index === shot);
-         card.card.classList.toggle('is-neighbor', Math.abs(relative) > 0 && Math.abs(relative) <= 2);
-        card.card.style.setProperty('--reel-index', String(index));
-        card.card.style.setProperty('--reel-offset', `${(index - shot) * 34}vw`);
-        card.card.style.setProperty('--reel-angle', `${((index % 5) - 2) * 3}deg`);
-        card.card.style.setProperty('--reel-depth', `${Math.min(Math.abs(index - shot) * 18, 120)}px`);
-        card.card.style.setProperty('--reel-collage-x', `${relative * 30}vw`);
-        card.card.style.setProperty('--reel-collage-y', `${relative % 2 === 0 ? 11 : -8}vh`);
-         card.card.style.setProperty('--reel-collage-rotate', `${relative * 5}deg`);
-       });
-       const activeCard = this.cards[shot]?.card;
-       if (activeCard && activeCard.parentElement === this.world) this.world.appendChild(activeCard);
+        card.card.classList.toggle('is-neighbor', Math.abs(relative) > 0 && Math.abs(relative) <= 2);
+        // Only the cards that can actually be seen need their position
+        // variables. Writing eight properties on all 1000 cards at once made
+        // every shot change hitch; hidden cards get their values when they are
+        // revealed (see applyReelCardVars).
+        if (this.isCardVisible(card, index)) this.applyReelCardVars(card, index, shot);
+      });
+      const activeCard = this.cards[shot]?.card;
+      if (activeCard && activeCard.parentElement === this.world) this.world.appendChild(activeCard);
     }
 
     if (shot === 0 && local < shotHold) {
@@ -2139,47 +2376,69 @@ export class MemoryReelController {
         ? `scale(${this.scale * tvZoom}) translate3d(${-camera.x}px,${-camera.y}px,0)`
         : `scale(${this.scale}) translate3d(0,0,${stabilizedCameraPush}px) rotateY(${orbitCamera ? this.parallaxX * 0.4 : -6 + sway + this.parallaxX * 1.4}deg) rotateX(${orbitCamera ? 0 : this.parallaxY * -1.1}deg) rotateZ(${orbitCamera ? 0 : -camera.rot * 0.9}deg) translate3d(${(-camera.x + this.parallaxX * 16 + handheldX).toFixed(1)}px,${(-camera.y + this.parallaxY * 12 + handheldY).toFixed(1)}px,${-camera.z}px)${parallax}`;
       const flyBlur = dip * (this.clarity === 'natural' ? 2.4 : 0.5);
-      // Recompute card-to-camera distances only when the camera moves
-      // meaningfully or the active shot changes. A full map plus sort on every
-      // frame stalls large libraries and makes the reel feel hung.
+      // Distance work is restricted to the cards near the camera. The old
+      // version measured every card in the library, allocated a 1000 element
+      // array of objects and sorted it, several times per second - that was the
+      // stutter felt on large Drive libraries. The spatial grid keeps the exact
+      // same visible set while measuring only a few dozen cards.
       const now = performance.now();
       const cameraMoved = Math.abs(camera.x - this.lastCameraX) > 2 || Math.abs(camera.y - this.lastCameraY) > 2;
       const stale = now - this.lastDistanceComputeAt > 200 || cameraMoved || this.lastLayoutShot !== shot;
-      let distances: number[];
+      const renderRadius = this.options.template === 'orbit'
+        ? 1120
+        : this.clarity === 'natural' ? 1700 : 1450;
+      const orbitVisibleLimit = this.cards.length <= 96 ? this.cards.length : 64;
+      this.lastRenderRadius = renderRadius;
       let focusedIndex: number;
       let nearestOrbitCards: Set<number> | undefined;
+      let distances: Float64Array;
       if (stale) {
-        distances = this.cards.map(card => Math.hypot(card.x - camera.x, card.y - camera.y));
-        focusedIndex = distances.reduce((closest, distance, index) => (
-          distance < distances[closest] ? index : closest
-        ), 0);
-        this.lastCameraX = camera.x;
-        this.lastCameraY = camera.y;
-        this.lastDistanceComputeAt = now;
-        this.cachedDistances = distances;
-        this.cachedFocusedIndex = focusedIndex;
+        this.clearCandidates();
+        // Orbit culls to the nearest N cards; every other template culls by
+        // radius. Both search outward from the camera only.
+        this.collectWithin(camera.x, camera.y, renderRadius, this.options.template === 'orbit' ? orbitVisibleLimit : 1);
+        let nearest = -1;
+        let nearestDistance = Infinity;
+        for (const index of this.candidates) {
+          const distance = this.distanceByCard[index];
+          if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearest = index;
+          }
+        }
+        focusedIndex = nearest >= 0 ? nearest : 0;
         if (this.options.template === 'orbit') {
-          const orbitVisibleLimit = this.cards.length <= 96 ? this.cards.length : 64;
-          nearestOrbitCards = new Set(distances
-            .map((distance, index) => ({ distance, index }))
-            .sort((left, right) => left.distance - right.distance)
-            .slice(0, orbitVisibleLimit)
-            .map(item => item.index));
+          const pool = this.candidates;
+          this.candidateDistances.length = 0;
+          const sorted = new Float64Array(pool.length);
+          for (let position = 0; position < pool.length; position += 1) sorted[position] = this.distanceByCard[pool[position]];
+          // Native numeric sort on a typed array: no object allocation, no
+          // comparator callback, no garbage for the collector to sweep.
+          sorted.sort();
+          const threshold = sorted[Math.min(sorted.length - 1, orbitVisibleLimit - 1)];
+          nearestOrbitCards = new Set<number>();
+          for (const index of pool) {
+            if (this.distanceByCard[index] <= threshold) nearestOrbitCards.add(index);
+            if (nearestOrbitCards.size >= orbitVisibleLimit) break;
+          }
           this.cachedNearestOrbitCards = nearestOrbitCards;
         } else {
           this.cachedNearestOrbitCards = undefined;
         }
+        this.lastCameraX = camera.x;
+        this.lastCameraY = camera.y;
+        this.lastDistanceComputeAt = now;
+        this.cachedFocusedIndex = focusedIndex;
+        distances = this.distanceByCard;
       } else {
-        distances = this.cachedDistances;
         focusedIndex = this.cachedFocusedIndex;
         nearestOrbitCards = this.cachedNearestOrbitCards;
+        distances = this.distanceByCard;
       }
-      const renderRadius = this.options.template === 'orbit'
-        ? 1120
-        : this.clarity === 'natural' ? 1700 : 1450;
       this.cards.forEach((card, index) => {
         const isActive = index === shot;
-        const distance = distances[index];
+        // Cards the grid never collected are outside the search radius.
+        const distance = this.candidateMask[index] ? distances[index] : Infinity;
         const shouldRender = isActive || index === focusedIndex || (nearestOrbitCards ? nearestOrbitCards.has(index) : distance <= renderRadius);
         if (!shouldRender) {
           if (this.options.template === 'orbit') {
@@ -2188,11 +2447,18 @@ export class MemoryReelController {
             card.card.dataset.reelHidden = 'true';
             card.card.style.opacity = '0';
             card.card.style.filter = 'none';
+            // Values on a hidden card are no longer authoritative.
+            card.lastOpacity = undefined;
+            card.lastFilter = undefined;
           }
           if (card.video && !card.video.paused) card.video.pause();
           return;
         }
         if (this.options.template === 'orbit' && card.card.parentElement !== this.world) this.world.appendChild(card.card);
+        // Restore the position variables for a card that was culled (or not
+        // yet visible) during the shot-change pass. One integer compare per
+        // painted card keeps this free on every other frame.
+        if (card.varsShot !== shot) this.applyReelCardVars(card, index, shot);
         delete card.card.dataset.reelHidden;
         const clarityBlurScale = this.clarity === 'natural' ? 1 : this.clarity === 'clear' ? 0.35 : 0;
         const blur = this.options.legacyTv || isActive
@@ -2260,23 +2526,38 @@ export class MemoryReelController {
             card.card.classList.add(`orbit-blur-${orbitBlurTier}`);
           }
         }
-        card.card.style.transform = `translate3d(${(card.x - card.width / 2 + driftX).toFixed(1)}px,${(card.y - card.height / 2 + driftY).toFixed(1)}px,${(card.z + driftZ + cinematicDepthBias).toFixed(1)}px) rotateX(${isActive && orbitCamera ? 0 : (stabilizedDriftRotate * 0.5).toFixed(2)}deg) rotateY(${cardRotateY.toFixed(2)}deg) rotateZ(${cardRotateZ.toFixed(2)}deg) scale(${cinematicScale.toFixed(4)})`;
-        card.card.style.opacity = this.options.legacyTv && distance > 900 ? '0.72' : '1';
-         card.card.style.zIndex = isActive ? '50' : index === focusedIndex ? '8' : '1';
+        const nextTransform = `translate3d(${(card.x - card.width / 2 + driftX).toFixed(1)}px,${(card.y - card.height / 2 + driftY).toFixed(1)}px,${(card.z + driftZ + cinematicDepthBias).toFixed(1)}px) rotateX(${isActive && orbitCamera ? 0 : (stabilizedDriftRotate * 0.5).toFixed(2)}deg) rotateY(${cardRotateY.toFixed(2)}deg) rotateZ(${cardRotateZ.toFixed(2)}deg) scale(${cinematicScale.toFixed(4)})`;
+        if (nextTransform !== card.lastTransform) {
+          card.lastTransform = nextTransform;
+          card.card.style.transform = nextTransform;
+        }
+        const nextOpacity = this.options.legacyTv && distance > 900 ? '0.72' : '1';
+        if (nextOpacity !== card.lastOpacity) {
+          card.lastOpacity = nextOpacity;
+          card.card.style.opacity = nextOpacity;
+        }
+        const nextZIndex = isActive ? '50' : index === focusedIndex ? '8' : '1';
+        if (nextZIndex !== card.lastZIndex) {
+          card.lastZIndex = nextZIndex;
+          card.card.style.zIndex = nextZIndex;
+        }
         if (isActive) {
-          card.card.style.setProperty('filter', 'none', 'important');
-          card.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m')?.style.setProperty('filter', 'none', 'important');
+          if (card.lastFilter !== 'none') {
+            card.lastFilter = 'none';
+            card.card.style.setProperty('filter', 'none', 'important');
+            card.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m')?.style.setProperty('filter', 'none', 'important');
+          }
         } else {
           const readableBlur = this.options.template === 'orbit'
             ? Math.min(0.35, blur)
             : Math.min(1.2, blur);
-          card.card.style.setProperty(
-            'filter',
-            readableBlur > 0.15
-              ? `blur(${readableBlur.toFixed(1)}px) brightness(${this.options.template === 'orbit' ? '.96' : '.92'})`
-              : 'brightness(.96)',
-            'important',
-          );
+          const nextFilter = readableBlur > 0.15
+            ? `blur(${readableBlur.toFixed(1)}px) brightness(${this.options.template === 'orbit' ? '.96' : '.92'})`
+            : 'brightness(.96)';
+          if (nextFilter !== card.lastFilter) {
+            card.lastFilter = nextFilter;
+            card.card.style.setProperty('filter', nextFilter, 'important');
+          }
         }
         if (card.video) {
           const active = near && !this.paused;
@@ -2291,8 +2572,12 @@ export class MemoryReelController {
       const heroSource = heroMedia?.currentSrc || heroMedia?.getAttribute('src') || '';
       if (heroCard && heroSource) {
         const heroImage = `url("${heroSource.replace(/"/g, '\\"')}")`;
-        heroCard.style.setProperty('--hero-image', heroImage);
-        this.el.style.setProperty('--hero-image', heroImage);
+        if (heroImage !== this.lastHeroImage || heroCard !== this.lastHeroCard) {
+          this.lastHeroCard = heroCard;
+          this.lastHeroImage = heroImage;
+          heroCard.style.setProperty('--hero-image', heroImage);
+          this.el.style.setProperty('--hero-image', heroImage);
+        }
       }
       if (this.options.template !== 'orbit' && ambientSource && ambientSource !== this.ambientSource) {
         this.ambientSource = ambientSource;
@@ -2308,7 +2593,7 @@ export class MemoryReelController {
     // Lightweight, throttled diagnostics on the stage element. It costs one
     // string compare per frame and makes "is the story still playing at the
     // same shot" verifiable from the DOM (used by the performance tests).
-    const diagnostic = `${Math.round(time)}/${Math.round(this.total)}/${shot}/${this.paused ? 'paused' : 'playing'}/${this.cards.length}/${this.wallRebuilds}`;
+    const diagnostic = `${Math.round(time)}/${Math.round(this.total)}/${shot}/${this.paused ? 'paused' : 'playing'}/${this.cards.length}/${this.wallRebuilds}/${this.paintCostEma.toFixed(2)}/${Math.round(this.adaptivePaintInterval)}/${this.paintCount}`;
     if (diagnostic !== this.lastDiagnostic) {
       this.lastDiagnostic = diagnostic;
       this.el.setAttribute('data-reel-state', diagnostic);
