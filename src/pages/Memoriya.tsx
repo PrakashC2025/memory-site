@@ -339,9 +339,19 @@ const Memoriya: React.FC = () => {
       } finally {
         driveSyncBusyRef.current = false;
         releaseDriveSyncLock();
+        lastDriveSyncAt = Date.now();
       }
     };
-    const interval = window.setInterval(() => void syncLatestDriveMedia(), 10000);
+    // Background Drive scans freeze the UI on large libraries. Poll on a long
+    // cadence with a cooldown so focus/visibility events cannot stack scans.
+    const DRIVE_SYNC_INTERVAL_MS = 60000;
+    const DRIVE_SYNC_COOLDOWN_MS = 45000;
+    let lastDriveSyncAt = 0;
+    const driveSyncDue = () => Date.now() - lastDriveSyncAt >= DRIVE_SYNC_COOLDOWN_MS;
+    const throttledSync = () => {
+      if (driveSyncDue()) void syncLatestDriveMedia();
+    };
+    const interval = window.setInterval(throttledSync, DRIVE_SYNC_INTERVAL_MS);
     return () => {
       active = false;
       window.clearInterval(interval);

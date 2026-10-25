@@ -357,7 +357,6 @@ export class MemoryReelController {
   private effectsWidth = 0;
   private effectsHeight = 0;
   private previousEffect: MemoryReelEffect = 'natural';
-  private effectChangedAt = 0;
   private effectsDebug?: HTMLDivElement;
   private cinematicCamera = { x: 0, y: 0, z: 0, rot: 0 };
   private cinematicVelocity = { x: 0, y: 0, z: 0, rot: 0 };
@@ -379,6 +378,15 @@ export class MemoryReelController {
   private paused = true;
   private total = 0;
   private lastPaint = 0;
+  // Card-to-camera distances are expensive to recompute for every frame on
+  // large libraries. Cache them and refresh only when the camera moves
+  // meaningfully or the active shot changes.
+  private lastDistanceComputeAt = 0;
+  private cachedDistances: number[] = [];
+  private cachedFocusedIndex = 0;
+  private cachedNearestOrbitCards: Set<number> | undefined;
+  private lastCameraX = 0;
+  private lastCameraY = 0;
   private audio?: HTMLAudioElement;
   private audioElement?: HTMLAudioElement;
   private analysisAudio?: HTMLAudioElement;
@@ -1097,7 +1105,7 @@ export class MemoryReelController {
   setEffect(effect: MemoryReelEffect) {
     if (this.options.effect !== effect) {
       this.previousEffect = this.options.effect || 'natural';
-      this.effectChangedAt = performance.now();
+  
     }
     this.options.effect = effect;
     MEMORY_REEL_EFFECTS.forEach(item => this.ambientEffects.classList.remove(`effect-${item.id}`));
@@ -1965,22 +1973,41 @@ export class MemoryReelController {
         ? `scale(${this.scale * tvZoom}) translate3d(${-camera.x}px,${-camera.y}px,0)`
         : `scale(${this.scale}) translate3d(0,0,${stabilizedCameraPush}px) rotateY(${orbitCamera ? this.parallaxX * 0.4 : -6 + sway + this.parallaxX * 1.4}deg) rotateX(${orbitCamera ? 0 : this.parallaxY * -1.1}deg) rotateZ(${orbitCamera ? 0 : -camera.rot * 0.9}deg) translate3d(${(-camera.x + this.parallaxX * 16 + handheldX).toFixed(1)}px,${(-camera.y + this.parallaxY * 12 + handheldY).toFixed(1)}px,${-camera.z}px)${parallax}`;
       const flyBlur = dip * (this.clarity === 'natural' ? 2.4 : 0.5);
-      const distances = this.cards.map(card => Math.hypot(card.x - camera.x, card.y - camera.y));
-      const focusedIndex = distances.reduce((closest, distance, index) => (
-        distance < distances[closest] ? index : closest
-      ), 0);
-      // Keep the full wall visible for normal-sized stories. The previous
-      // 28-card cap made the renderer remove perfectly valid memories, which
-      // left large empty areas around the hero. Very large libraries still
-      // get a bounded neighborhood so the animation remains responsive.
-      const orbitVisibleLimit = this.cards.length <= 96 ? this.cards.length : 64;
-      const nearestOrbitCards = this.options.template === 'orbit'
-        ? new Set(distances
-          .map((distance, index) => ({ distance, index }))
-          .sort((left, right) => left.distance - right.distance)
-          .slice(0, orbitVisibleLimit)
-          .map(item => item.index))
-        : undefined;
+      // Recompute card-to-camera distances only when the camera moves
+      // meaningfully or the active shot changes. A full map plus sort on every
+      // frame stalls large libraries and makes the reel feel hung.
+      const now = performance.now();
+      const cameraMoved = Math.abs(camera.x - this.lastCameraX) > 2 || Math.abs(camera.y - this.lastCameraY) > 2;
+      const stale = now - this.lastDistanceComputeAt > 200 || cameraMoved || this.lastLayoutShot !== shot;
+      let distances: number[];
+      let focusedIndex: number;
+      let nearestOrbitCards: Set<number> | undefined;
+      if (stale) {
+        distances = this.cards.map(card => Math.hypot(card.x - camera.x, card.y - camera.y));
+        focusedIndex = distances.reduce((closest, distance, index) => (
+          distance < distances[closest] ? index : closest
+        ), 0);
+        this.lastCameraX = camera.x;
+        this.lastCameraY = camera.y;
+        this.lastDistanceComputeAt = now;
+        this.cachedDistances = distances;
+        this.cachedFocusedIndex = focusedIndex;
+        if (this.options.template === 'orbit') {
+          const orbitVisibleLimit = this.cards.length <= 96 ? this.cards.length : 64;
+          nearestOrbitCards = new Set(distances
+            .map((distance, index) => ({ distance, index }))
+            .sort((left, right) => left.distance - right.distance)
+            .slice(0, orbitVisibleLimit)
+            .map(item => item.index));
+          this.cachedNearestOrbitCards = nearestOrbitCards;
+        } else {
+          this.cachedNearestOrbitCards = undefined;
+        }
+      } else {
+        distances = this.cachedDistances;
+        focusedIndex = this.cachedFocusedIndex;
+        nearestOrbitCards = this.cachedNearestOrbitCards;
+      }
       const renderRadius = this.options.template === 'orbit'
         ? 1120
         : this.clarity === 'natural' ? 1700 : 1450;
@@ -2091,9 +2118,6 @@ export class MemoryReelController {
           else if (!active && !card.video.paused) card.video.pause();
         }
       });
-      this.cards.forEach((card, index) => {
-         card.card.style.zIndex = index === shot ? '50' : index === focusedIndex ? '8' : '1';
-      });
       const focusedMedia = this.cards[focusedIndex]?.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
       const ambientSource = focusedMedia?.currentSrc || focusedMedia?.getAttribute('src') || '';
       const heroCard = this.cards[shot]?.card;
@@ -2193,9 +2217,9 @@ const readStoredMusicPlayback = (): StoredMusicPlayback | null => {
     if (!value.trackId || !Number.isFinite(value.currentTime)) return null;
     return {
       trackId: value.trackId,
-      currentTime: Math.max(0, value.currentTime),
+      currentTime: Math.max(0, value.currentTime ?? 0),
       wasPlaying: Boolean(value.wasPlaying),
-      updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
+      updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt! : Date.now(),
     };
   } catch {
     return null;

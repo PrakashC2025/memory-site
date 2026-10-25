@@ -69,6 +69,25 @@ function SplashCursor({
     const maxSplats = Math.max(16, Math.min(90, Math.round(DYE_RESOLUTION / 24)));
     let active = true;
     let lastColorUpdate = 0;
+    let lastActivityAt = Date.now();
+    const IDLE_MS = 2000;
+
+    const resume = () => {
+      active = true;
+      lastActivityAt = Date.now();
+      if (rafRef.current) return;
+      rafRef.current = requestAnimationFrame(draw);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        active = false;
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      } else {
+        resume();
+      }
+    };
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, CAPTURE_RESOLUTION > 512 ? 2 : 1.5);
@@ -140,6 +159,11 @@ function SplashCursor({
       }
 
       ctx.filter = 'none';
+      const idle = Date.now() - lastActivityAt > IDLE_MS && splatsRef.current.length === 0;
+      if (idle) {
+        rafRef.current = null;
+        return;
+      }
       rafRef.current = requestAnimationFrame(draw);
     };
 
@@ -154,12 +178,20 @@ function SplashCursor({
       addSplat(clientX, clientY, dx, dy, strong);
     };
 
-    const handlePointerMove = event => updatePointer(event.clientX, event.clientY);
-    const handlePointerDown = event => updatePointer(event.clientX, event.clientY, true);
+    const handlePointerMove = event => {
+      resume();
+      updatePointer(event.clientX, event.clientY);
+    };
+    const handlePointerDown = event => {
+      resume();
+      updatePointer(event.clientX, event.clientY, true);
+    };
     const handleTouchMove = event => {
+      resume();
       for (const touch of event.touches) updatePointer(touch.clientX, touch.clientY);
     };
     const handleTouchStart = event => {
+      resume();
       for (const touch of event.touches) updatePointer(touch.clientX, touch.clientY, true);
     };
 
@@ -169,6 +201,7 @@ function SplashCursor({
     window.addEventListener('pointerdown', handlePointerDown);
     window.addEventListener('touchmove', handleTouchMove, { passive: true });
     window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    document.addEventListener('visibilitychange', onVisibilityChange);
     rafRef.current = requestAnimationFrame(draw);
 
     return () => {
@@ -179,6 +212,7 @@ function SplashCursor({
       window.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchstart', handleTouchStart);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [
     SIM_RESOLUTION,

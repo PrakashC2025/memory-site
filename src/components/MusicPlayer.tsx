@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown, Music, Pause, Play, Search, SkipBack, SkipForward, X } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
@@ -15,6 +15,7 @@ const TRACKS = [
 
 const MusicPlayer: React.FC = () => {
   const { isMusicOn, setMusicOn, currentTrack, setCurrentTrack } = useUser();
+  const reducedMotion = useReducedMotion();
   const { config } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const [bars] = useState(() => Array.from({ length: 5 }, () => Math.random()));
@@ -156,8 +157,8 @@ const MusicPlayer: React.FC = () => {
             {bars.map((bar, index) => (
               <motion.div
                 key={index}
-                animate={{ height: ['34%', '100%', '54%', '82%', '34%'] }}
-                transition={{ duration: 0.75 + bar * 0.4, repeat: Infinity, delay: index * 0.1 }}
+                animate={reducedMotion ? undefined : { height: ['34%', '100%', '54%', '82%', '34%'] }}
+                transition={reducedMotion ? undefined : { duration: 0.75 + bar * 0.4, repeat: Infinity, delay: index * 0.1 }}
                 className="w-1 rounded-full"
                 style={{ background: config.primary, minHeight: 3, boxShadow: `0 0 10px ${config.primary}` }}
               />

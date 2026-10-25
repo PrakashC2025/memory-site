@@ -68,7 +68,9 @@ const DriveLiveSync: React.FC = () => {
     };
 
     const sync = async () => {
-      if (!active || driveAuthRequiredRef.current || readDriveAuthRequired() || !acquireDriveSyncLock()) return;
+      if (!active || !dueForSync()) return;
+      if (driveAuthRequiredRef.current || readDriveAuthRequired() || !acquireDriveSyncLock()) return;
+      lastSyncAt = Date.now();
       let accessToken = readDriveAccessToken();
       if (!accessToken) {
         releaseDriveSyncLock();
@@ -121,6 +123,15 @@ const DriveLiveSync: React.FC = () => {
       }
     };
 
+    // Drive scans are the most expensive work this page does. Keep the
+    // background reconciler on a long cadence and cooldown rapid-fire triggers
+    // (focus / online / visibility) so a large library never blocks the UI or
+    // stacks up overlapping Drive requests.
+    const SYNC_INTERVAL_MS = 60000;
+    const SYNC_COOLDOWN_MS = 45000;
+    let lastSyncAt = 0;
+    const dueForSync = () => Date.now() - lastSyncAt >= SYNC_COOLDOWN_MS;
+
     syncNow = () => void sync();
     const onFocus = () => syncNow?.();
     const onOnline = () => syncNow?.();
@@ -131,10 +142,7 @@ const DriveLiveSync: React.FC = () => {
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisibilityChange);
     void sync();
-    // Keep the app-wide reconciler at its established cadence. Story Mode has
-    // its own faster poll while it is open, so live playback stays responsive
-    // without increasing Drive traffic for every page.
-    const interval = window.setInterval(() => void sync(), 5000);
+    const interval = window.setInterval(() => void sync(), SYNC_INTERVAL_MS);
     return () => {
       active = false;
       window.clearInterval(interval);

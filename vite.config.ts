@@ -22,7 +22,8 @@ export default defineConfig({
     },
   },
   server: {
-    // Allow the app to be opened through VS Code / remote dev tunnels.
-    allowedHosts: ["ljs91hvv-5173.inc1.devtunnels.ms", ".devtunnels.ms"],
+    // Allow the app to be opened through VS Code / remote dev tunnels and the
+    // Arena live-preview proxy (port-5173-*.e2b.app).
+    allowedHosts: ["ljs91hvv-5173.inc1.devtunnels.ms", ".devtunnels.ms", ".e2b.app"],
   },
 });

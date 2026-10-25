@@ -107,12 +107,15 @@ test('video loading keeps a usable poster and caches before story reveal', async
   assert.match(story, /cacheDriveMediaFiles\(visualFiles[\s\S]*applyCached\(knownDriveMemoriesRef\.current\)/);
   assert.match(liveSync, /addEventListener\('focus'/);
   assert.match(liveSync, /addEventListener\('online'/);
-  assert.match(liveSync, /setInterval\(\(\) => void sync\(\), 5000\)/);
+  assert.match(liveSync, /setInterval\(\(\) => void sync\(\), SYNC_INTERVAL_MS\)/);
+  assert.match(liveSync, /const SYNC_COOLDOWN_MS = 45000/);
+  assert.match(liveSync, /const dueForSync =/);
   assert.match(liveSync, /refreshAccessToken\(undefined, true\)/);
   assert.match(story, /files = await googleDriveService\.listAllMedia\(token, folderId\)/);
   assert.match(story, /refreshAccessToken\(undefined, true\)/);
   assert.match(story, /window\.addEventListener\('online', retryDrive\)/);
-  assert.match(story, /window\.setInterval\(retryDrive, 5000\)/);
+  assert.match(story, /window\.setInterval\(retryDrive, SYNC_INTERVAL_MS\)/);
+  assert.match(story, /const dueForSync =/);
   assert.doesNotMatch(story, /googleDriveService\.listChanges\(/);
   assert.match(reel, /const musicQueueRef = useRef<MusicQueueItem\[\]>\(\[\]\)/);
   assert.match(reel, /const loopEnabledRef = useRef\(loop\)/);

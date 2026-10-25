@@ -60,6 +60,17 @@ const AnimatedBackground: React.FC = () => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    let active = true;
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        active = false;
+      } else {
+        active = true;
+        draw();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     const colors = [config.primary, config.secondary, config.accent, config.particle];
     let width = 0;
     let height = 0;
@@ -117,6 +128,7 @@ const AnimatedBackground: React.FC = () => {
     };
 
     const draw = () => {
+      if (!active) return;
       ctx.clearRect(0, 0, width, height);
 
       const background = ctx.createLinearGradient(0, 0, width, height);
@@ -194,7 +206,9 @@ const AnimatedBackground: React.FC = () => {
       ctx.fillRect(0, 0, width, height);
 
       tick += 1;
-      frameRef.current = window.setTimeout(() => requestAnimationFrame(draw), 1000 / 30);
+      if (active) {
+        frameRef.current = window.setTimeout(() => requestAnimationFrame(draw), 1000 / 30);
+      }
     };
 
     resize();
@@ -202,6 +216,8 @@ const AnimatedBackground: React.FC = () => {
     draw();
 
     return () => {
+      active = false;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('resize', resize);
       window.clearTimeout(frameRef.current);
     };
