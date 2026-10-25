@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { isHeavyVisualPaused, onHeavyVisualPauseChange } from '../utils/visualActivity';
 import { useTheme } from '../context/ThemeContext';
 import { isLegacyTvBrowser } from '../utils/legacyBrowser';
 
@@ -70,6 +71,13 @@ const AnimatedBackground: React.FC = () => {
       }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
+    const stopPauseWatch = onHeavyVisualPauseChange(paused => {
+      if (paused) {
+        window.clearTimeout(frameRef.current);
+        return;
+      }
+      if (active && !document.hidden && !frameRef.current) draw();
+    });
 
     const colors = [config.primary, config.secondary, config.accent, config.particle];
     let width = 0;
@@ -206,7 +214,10 @@ const AnimatedBackground: React.FC = () => {
       ctx.fillRect(0, 0, width, height);
 
       tick += 1;
-      if (active) {
+      // A Story Mode reel covers this canvas with a near-opaque overlay, so
+      // keep animating would be invisible work (and forces the overlay's
+      // backdrop blur to recompute). Skip it entirely while that is true.
+      if (active && !isHeavyVisualPaused()) {
         frameRef.current = window.setTimeout(() => requestAnimationFrame(draw), 1000 / 30);
       }
     };
@@ -217,6 +228,7 @@ const AnimatedBackground: React.FC = () => {
 
     return () => {
       active = false;
+      stopPauseWatch();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('resize', resize);
       window.clearTimeout(frameRef.current);

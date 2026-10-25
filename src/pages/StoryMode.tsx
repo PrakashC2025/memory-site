@@ -207,15 +207,17 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     // Full Drive scans block Story Mode playback. Keep them on a long cadence,
     // only while the tab is visible, and cooldown rapid triggers so the
     // cinematic reel never hangs waiting on a background sync.
-    const SYNC_INTERVAL_MS = 60000;
-    const SYNC_COOLDOWN_MS = 45000;
+    // This screen exists to watch the live folder, so it refreshes on the
+    // cheap metadata changes feed far more often than an idle gallery would.
+    // Uploads and deletions therefore join the running story within seconds.
+    const LIVE_STORY_POLL_MS = 8000;
+    const LIVE_STORY_COOLDOWN_MS = 6000;
     let lastSyncAt = 0;
-    const dueForSync = () => Date.now() - lastSyncAt >= SYNC_COOLDOWN_MS;
 
     const retryDrive = () => {
       if (document.visibilityState !== 'visible') return;
       if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-      if (!dueForSync()) return;
+      if (Date.now() - lastSyncAt < LIVE_STORY_COOLDOWN_MS) return;
       lastSyncAt = Date.now();
       void syncDrive();
     };
@@ -226,7 +228,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     window.addEventListener('focus', retryDrive);
     document.addEventListener('visibilitychange', onVisibilityChange);
     void syncDrive();
-    const interval = window.setInterval(retryDrive, SYNC_INTERVAL_MS);
+    const interval = window.setInterval(retryDrive, LIVE_STORY_POLL_MS);
     return () => {
       active = false;
       window.clearInterval(interval);

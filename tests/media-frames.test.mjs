@@ -137,8 +137,11 @@ test('video loading keeps a usable poster and caches before story reveal', async
   assert.match(story, /files = await googleDriveService\.listAllMedia\(token, folderId\)/);
   assert.match(story, /refreshAccessToken\(undefined, true\)/);
   assert.match(story, /window\.addEventListener\('online', retryDrive\)/);
-  assert.match(story, /window\.setInterval\(retryDrive, SYNC_INTERVAL_MS\)/);
-  assert.match(story, /const dueForSync =/);
+  // The Story Mode screen watches the live folder, so it polls the cheap
+  // changes feed on a short cadence while visible.
+  assert.match(story, /window\.setInterval\(retryDrive, LIVE_STORY_POLL_MS\)/);
+  assert.match(story, /const LIVE_STORY_POLL_MS = 8000/);
+  assert.match(story, /const LIVE_STORY_COOLDOWN_MS = 6000/);
   assert.doesNotMatch(story, /googleDriveService\.listChanges\(/);
   assert.match(reel, /const musicQueueRef = useRef<MusicQueueItem\[\]>\(\[\]\)/);
   assert.match(reel, /const loopEnabledRef = useRef\(loop\)/);
@@ -274,4 +277,82 @@ test('story renderer keeps large libraries smooth without changing the look', as
   assert.match(reel, /private trackPaintCost\(cost: number, now: number\)/);
   assert.match(reel, /this\.adaptivePaintInterval = 1000 \/ 30/);
   assert.match(reel, /private paintCostEma = 0/);
+});
+
+test('background visuals are parked while a story covers the screen', async () => {
+  // Load the module with a minimal document so the contract can be exercised
+  // without a browser.
+  const source = await readProjectFile('src/utils/visualActivity.ts');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2015 },
+  }).outputText;
+  const classList = new Set();
+  globalThis.document = {
+    documentElement: {
+      classList: {
+        add: name => classList.add(name),
+        remove: name => classList.delete(name),
+        contains: name => classList.has(name),
+      },
+    },
+  };
+  const activity = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
+
+  assert.equal(activity.isHeavyVisualPaused(), false);
+
+  const seen = [];
+  const unsubscribe = activity.onHeavyVisualPauseChange(paused => seen.push(paused));
+
+  const releaseOuter = activity.beginHeavyVisualPause();
+  assert.equal(activity.isHeavyVisualPaused(), true);
+  assert.ok(classList.has('heavy-visual-paused'), 'CSS hook is applied while paused');
+
+  // Nesting must not resume the background early.
+  const releaseInner = activity.beginHeavyVisualPause();
+  releaseOuter();
+  assert.equal(activity.isHeavyVisualPaused(), true, 'still paused while nested');
+
+  releaseInner();
+  assert.equal(activity.isHeavyVisualPaused(), false);
+  assert.ok(!classList.has('heavy-visual-paused'), 'CSS hook is removed afterwards');
+
+  // Releasing twice must not under-count.
+  releaseInner();
+  assert.equal(activity.isHeavyVisualPaused(), false);
+  assert.deepEqual(seen, [true, false]);
+  unsubscribe();
+});
+
+test('mobile playback avoids the expensive compositing paths', async () => {
+  const css = await readProjectFile('src/index.css');
+  const reel = await readProjectFile('src/components/MemoryReel.tsx');
+  const splash = await readProjectFile('src/components/SplashCursor.jsx');
+
+  // A per-frame world transform must not restart a 700ms CSS transition.
+  assert.match(css, /memory-reel-template-"\] \.world \{\s*transition: none;/);
+  // Hundreds of promoted filtered layers exhaust phone GPU memory.
+  assert.match(css, /memory-reel-template-"\] \.card \{\s*transition: opacity 0\.35s ease;\s*will-change: transform;/);
+  // Backdrop blur must not re-run for every repainted reel frame.
+  assert.match(css, /html\.heavy-visual-paused \.memory-reel-overlay \{[\s\S]*backdrop-filter: none;/);
+  // Hidden ambient layers stop animating (and resume) with the reel.
+  assert.match(reel, /beginHeavyVisualPause\(\)/);
+  assert.match(splash, /isHeavyVisualPaused\(\)/);
+  // Story Mode must stay scrollable: no document-level scroll lock on modern
+  // browsers, a real scroll container with reachable overflow, and scrollable
+  // panels (including the Effects/Clarity panel in landscape).
+  const reelComponent = await readProjectFile('src/components/MemoryReel.tsx');
+  assert.match(css, /html\.heavy-visual-paused \.memory-reel-overlay/);
+  assert.match(css, /\.memory-reel-overlay \{[\s\S]*align-content: safe center;/);
+  assert.match(css, /\.memory-reel-overlay \{[\s\S]*overflow-y: auto;/);
+  assert.match(css, /\.memory-reel-overlay \{[\s\S]*-webkit-overflow-scrolling: touch;/);
+  assert.match(css, /\.memory-reel-stage \{\s*touch-action: pan-y;/);
+  assert.match(css, /\.memory-reel-panel \{[\s\S]*max-height: min\(58dvh, 460px\);/);
+  assert.match(css, /orientation: landscape\) \{[\s\S]*\.memory-reel-panel \{[\s\S]*overflow-y: auto;/);
+  assert.doesNotMatch(css, /memory-reel-effects-panel|memory-reel-clarity-panel/);
+  // The document overflow lock is legacy-TV only.
+  assert.match(reelComponent, /if \(!legacyTvMode\) return undefined;/);
+
+  // Soft effect gradients are filled at most 30 times a second.
+  assert.match(reel, /effectsNow - this\.lastEffectsPaintAt >= 1000 \/ 30/);
+  assert.match(reel, /coarsePointer \? 1 : Math\.min\(1\.5, window\.devicePixelRatio \|\| 1\)/);
 });

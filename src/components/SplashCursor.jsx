@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { isHeavyVisualPaused, onHeavyVisualPauseChange } from '../utils/visualActivity';
 import './SplashCursor.css';
 
 function hexToRgb(hex) {
@@ -76,8 +77,20 @@ function SplashCursor({
       active = true;
       lastActivityAt = Date.now();
       if (rafRef.current) return;
+      // A Story Mode reel covers the cursor effect; running its fluid
+      // simulation underneath it is invisible and expensive.
+      if (isHeavyVisualPaused()) return;
       rafRef.current = requestAnimationFrame(draw);
     };
+
+    const stopPauseWatch = onHeavyVisualPauseChange(paused => {
+      if (paused) {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        return;
+      }
+      resume();
+    });
 
     const onVisibilityChange = () => {
       if (document.hidden) {
@@ -159,6 +172,10 @@ function SplashCursor({
       }
 
       ctx.filter = 'none';
+      if (isHeavyVisualPaused()) {
+        rafRef.current = null;
+        return;
+      }
       const idle = Date.now() - lastActivityAt > IDLE_MS && splatsRef.current.length === 0;
       if (idle) {
         rafRef.current = null;
@@ -213,6 +230,7 @@ function SplashCursor({
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchstart', handleTouchStart);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      stopPauseWatch();
     };
   }, [
     SIM_RESOLUTION,
