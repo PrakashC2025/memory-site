@@ -422,11 +422,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           folderId: targetFolderId,
           completedAt: Date.now(),
         });
-        await deleteCachedStoryMedia(queueId);
+        // Cleanup is deliberately non-blocking. Drive has already confirmed
+        // the upload, so the live story must be notified before IndexedDB
+        // maintenance can delay the new frame.
+        void deleteCachedStoryMedia(queueId);
         writePendingCameraUploads(readPendingCameraUploads().filter(job => job.id !== queueId));
       }
-      await writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
       onUploaded(uploaded, token, file);
+      // Keep the original locally for the sharp live preview and offline
+      // replay, but never make the UI wait for this cache transaction.
+      void writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
       setStatus('Photo saved locally and synced to Drive.');
       return true;
     } catch (uploadError) {
@@ -655,8 +660,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           const updated = await googleDriveService.updateMedia(token, uploadedFile.id, localFile);
           nextUploadedFile = { ...updated, thumbnailUrl: updated.thumbnailUrl || uploadedFile.thumbnailUrl };
         }
-        await writeCachedStoryMedia(uploadedFile.id, localFile, nextUploadedFile.mimeType || localFile.type);
         onUploaded(nextUploadedFile, token, localFile);
+        void writeCachedStoryMedia(uploadedFile.id, localFile, nextUploadedFile.mimeType || localFile.type);
       } else {
         await removeQueuedUpload(capturedPhoto.queueId);
         nextQueueId = resumeUpload(localFile);

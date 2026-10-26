@@ -1020,6 +1020,9 @@ const Memoriya: React.FC = () => {
             }
             clearDeletedDriveMedia([fileId]);
             setMemories(current => current.filter(memory => memory.driveFileId !== fileId));
+            setReelConfig(current => current?.live
+              ? { ...current, memories: current.memories.filter(memory => memory.driveFileId !== fileId) }
+              : current);
             setSelected(current => current?.driveFileId === fileId ? null : current);
             setViewerMemory(current => current?.driveFileId === fileId ? null : current);
             setMessage('Photo deleted from Drive and removed from this story.');
