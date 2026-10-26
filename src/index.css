@@ -4057,6 +4057,14 @@ html.heavy-visual-paused .memory-reel-overlay {
 
 .memoriya-camera-control-spacer { min-width: 0; }
 
+.memoriya-camera-switch-control {
+  min-width: 8.3rem;
+  color: #9bffec !important;
+  border-color: rgba(155, 255, 236, 0.4) !important;
+  background: rgba(20, 80, 92, 0.42) !important;
+  box-shadow: 0 0 20px rgba(70, 225, 211, 0.12);
+}
+
 .memoriya-camera-controls button { cursor: pointer; }
 .memoriya-camera-controls button:disabled { cursor: wait; opacity: 0.5; }
 
@@ -4461,6 +4469,8 @@ html.heavy-visual-paused .memory-reel-overlay {
   .memoriya-camera-controls > button,
   .memoriya-camera-filter { min-height: 3.15rem; padding: 0.55rem 0.7rem; border-color: rgba(255, 255, 255, 0.22); background: rgba(3, 5, 12, 0.68); backdrop-filter: blur(12px); pointer-events: auto; }
   .memoriya-camera-controls > button { font-size: 0.72rem; }
+  .memoriya-camera-switch-control { min-width: 3.15rem; width: 3.15rem; padding: 0.55rem !important; }
+  .memoriya-camera-switch-control span { display: none; }
   .memoriya-camera-shutter { width: 5.15rem; height: 5.15rem; border-width: 5px !important; }
   .memoriya-camera-filter { overflow: hidden; }
   .memoriya-camera-filter select { max-width: 5.4rem; font-size: 0.72rem; }

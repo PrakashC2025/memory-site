@@ -505,6 +505,9 @@ export class MemoryReelController {
   // Counts full wall rebuilds. A live Drive change must stream cards in
   // without ever rebuilding (and therefore restarting) the current wall.
   private wallRebuilds = 0;
+  // Live additions use a short local transition so they join the nearby
+  // sequence instead of forcing a long cross-wall flight.
+  private liveAppendInProgress = false;
   private readonly lowPowerSurface: boolean;
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
@@ -513,7 +516,7 @@ export class MemoryReelController {
       // Keep the original pacing for the other templates. Template 01 uses its
       // own compact hold below so the camera keeps moving like the reference.
       hold: 6.6,
-      move: 1.2,
+      move: 0.95,
       loop: false,
       reducedMotion: false,
       legacyTv: false,
@@ -713,7 +716,12 @@ export class MemoryReelController {
       const resolvedMedia = { ...media, id: item.id };
       this.loadedMedia.set(item.id, resolvedMedia);
       if (keepCurrentWall) {
-        this.appendMediaCard(resolvedMedia, liveInsertIndex);
+        this.liveAppendInProgress = true;
+        try {
+          this.appendMediaCard(resolvedMedia, liveInsertIndex);
+        } finally {
+          this.liveAppendInProgress = false;
+        }
         liveInsertIndex += 1;
       }
       else {
@@ -1082,15 +1090,33 @@ export class MemoryReelController {
       return seeded - Math.floor(seeded);
     };
     const { sx, sy } = this.wallSpacing();
-    const x = (column - (columns - 1) / 2) * sx + (randomUnit(index + 1) - 0.5) * Math.min(110, sx * 0.22);
-    const y = (row - (rows - 1) / 2) * sy + (randomUnit(index + 31) - 0.5) * Math.min(80, sy * 0.22);
-    const z = this.options.template === 'orbit' ? -Math.round(randomUnit(index + 91) * 160) : 0;
-    const rot = (randomUnit(index + 61) - 0.5) * 16;
+    let x = (column - (columns - 1) / 2) * sx + (randomUnit(index + 1) - 0.5) * Math.min(110, sx * 0.22);
+    let y = (row - (rows - 1) / 2) * sy + (randomUnit(index + 31) - 0.5) * Math.min(80, sy * 0.22);
+    let z = this.options.template === 'orbit' ? -Math.round(randomUnit(index + 91) * 160) : 0;
+    let rot = (randomUnit(index + 61) - 0.5) * 16;
+    const insertedAt = Math.min(insertIndex, this.cards.length);
+    const activeShot = this.cards.length ? this.shotIndexAt(this.elapsed) : -1;
+    const currentCard = activeShot >= 0 ? this.cards[activeShot] : undefined;
+    const nextCard = activeShot >= 0
+      ? this.cards[Math.min(this.cards.length - 1, activeShot + 1)]
+      : undefined;
+    if (this.liveAppendInProgress && currentCard && insertedAt > activeShot && insertedAt <= activeShot + 3) {
+      const relative = insertedAt - activeShot;
+      const hasNeighbor = Boolean(nextCard && nextCard !== currentCard);
+      const targetX = hasNeighbor ? nextCard!.x : currentCard.x + 260;
+      const targetY = hasNeighbor ? nextCard!.y : currentCard.y + (relative % 2 ? -90 : 90);
+      const targetZ = hasNeighbor ? nextCard!.z : currentCard.z - 40;
+      const targetRot = hasNeighbor ? nextCard!.rot : currentCard.rot;
+      const blend = hasNeighbor ? Math.min(0.78, 0.28 + relative * 0.2) : 0.25;
+      x = lerp(currentCard.x, targetX, blend) + (randomUnit(index + 71) - 0.5) * 28;
+      y = lerp(currentCard.y, targetY, blend) + (randomUnit(index + 81) - 0.5) * 22;
+      z = lerp(currentCard.z, targetZ, blend);
+      rot = lerp(currentCard.rot, targetRot, blend) + (randomUnit(index + 91) - 0.5) * 3;
+    }
     if (this.options.template === 'orbit' && index % 6 === 0) card.classList.add('orbit-polaroid');
     card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
     card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
     this.world.appendChild(card);
-    const insertedAt = Math.min(insertIndex, this.cards.length);
     const reelCard: ReelCard = { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video };
     this.cards.splice(insertedAt, 0, reelCard);
     this.renderedCardIndices.clear();
@@ -2165,8 +2191,8 @@ export class MemoryReelController {
   }
 
   private cardHold(card: ReelCard) {
-    if (this.options.template === 'orbit') return 4;
-    return 2 + (card.video ? 0.4 : 0);
+    if (this.options.template === 'orbit') return 4 + (card.video ? 1.2 : 0);
+    return 3.6 + (card.video ? 0.8 : 0);
   }
 
   private applyReelCardVars(card: ReelCard, index: number, shot: number) {

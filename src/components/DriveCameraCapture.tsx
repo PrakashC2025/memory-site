@@ -21,7 +21,7 @@ import type { DriveMediaFile } from '../services/googleDriveService';
 import { googleDriveService, isDriveAuthorizationError } from '../services/googleDriveService';
 import { saveDriveAccessToken } from '../services/driveLibrary';
 import { deleteCachedStoryMedia, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
-import { readPendingCameraUploads, writePendingCameraUploads } from '../services/cameraUploadQueue';
+import { markCameraUploadCompleted, readCompletedCameraUploads, readPendingCameraUploads, writePendingCameraUploads } from '../services/cameraUploadQueue';
 
 interface ImageCaptureLike {
   takePhoto: () => Promise<Blob>;
@@ -167,7 +167,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   useEffect(() => {
     let cancelled = false;
     const restorePendingPhotos = async () => {
-      const savedJobs = readPendingCameraUploads();
+      const completedIds = new Set(readCompletedCameraUploads().map(item => item.id));
+      const savedJobs = readPendingCameraUploads().filter(job => !completedIds.has(job.id));
       const restored = await Promise.all(savedJobs.map(async savedJob => {
         const blob = await readCachedStoryMedia(savedJob.id);
         if (!blob) return null;
@@ -415,6 +416,12 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       setCapturedGallery(current => current.map(photo => photo.queueId === queueId ? { ...photo, uploadedFile: uploaded } : photo));
       setCapturedPhoto(current => current?.queueId === queueId ? { ...current, uploadedFile: uploaded } : current);
       if (queueId) {
+        markCameraUploadCompleted({
+          id: queueId,
+          driveFileId: uploaded.id,
+          folderId: targetFolderId,
+          completedAt: Date.now(),
+        });
         await deleteCachedStoryMedia(queueId);
         writePendingCameraUploads(readPendingCameraUploads().filter(job => job.id !== queueId));
       }
@@ -447,6 +454,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       while (uploadQueueRef.current.length) {
         const job = uploadQueueRef.current[0];
         if (!job) break;
+        if (readCompletedCameraUploads().some(upload => upload.id === job.id)) {
+          // The Drive request already succeeded before a previous tab close or
+          // callback interruption. Drop the stale local retry without sending
+          // the file again; the normal Drive sync will publish its file.
+          uploadQueueRef.current.shift();
+          await deleteCachedStoryMedia(job.id);
+          persistUploadQueue();
+          updatePendingCount();
+          continue;
+        }
         updatePendingCount();
         const uploaded = await startUpload(job.file, job.id, job.folderId);
         if (!uploaded) break;
@@ -797,7 +814,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           </div>
         )}
         <div className="memoriya-camera-controls">
-          <div className="memoriya-camera-control-spacer" aria-hidden="true" />
+          <button
+            type="button"
+            className="memoriya-camera-switch-control"
+            onClick={() => setFacingMode(value => value === 'environment' ? 'user' : 'environment')}
+            aria-label={facingMode === 'user' ? 'Switch to rear camera' : 'Switch to selfie camera'}
+            aria-pressed={facingMode === 'user'}
+          >
+            <RefreshCw size={18} />
+            <span>{facingMode === 'user' ? 'Rear camera' : 'Selfie camera'}</span>
+          </button>
           <button type="button" className="memoriya-camera-shutter" onClick={() => void capturePhoto()} disabled={!cameraReady || capturing} aria-label="Capture and upload photo">
             {capturing ? <Loader2 className="memoriya-spin-icon" size={22} /> : <Camera size={22} />}
           </button>
