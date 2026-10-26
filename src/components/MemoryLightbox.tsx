@@ -1397,8 +1397,14 @@ const MemoryLightbox: React.FC<Props> = ({
           if (event.target === event.currentTarget) onClose();
         }}
         onMouseMove={() => showChrome()}
-        onTouchStart={event => setTouchStart({ x: event.touches[0].clientX, y: event.touches[0].clientY })}
-        onTouchEnd={event => handleTouchEnd(event.changedTouches[0].clientX, event.changedTouches[0].clientY)}
+        onTouchStart={event => {
+          showChrome();
+          setTouchStart({ x: event.touches[0].clientX, y: event.touches[0].clientY });
+        }}
+        onTouchEnd={event => {
+          showChrome();
+          handleTouchEnd(event.changedTouches[0].clientX, event.changedTouches[0].clientY);
+        }}
       >
         <div className="cinema-backdrop">
           <img src={current.driveFileId ? '' : current.thumbnail || current.url} alt="" aria-hidden="true" />
@@ -1454,7 +1460,7 @@ const MemoryLightbox: React.FC<Props> = ({
             <button onClick={toggleFullscreen} aria-label="Fullscreen" title="Fullscreen">
               {isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
             </button>
-            <button onClick={onClose} aria-label="Close lightbox" title="Close">
+            <button onClick={onClose} aria-label="Close lightbox" title="Close" className="cinema-action-close">
               <X size={18} />
             </button>
           </div>
@@ -1539,7 +1545,7 @@ const MemoryLightbox: React.FC<Props> = ({
             <div className="cinema-story-camera-wall" aria-label="Cinematic photo camera">
               <div
                 className="cinema-story-camera-track"
-                style={{ transform: `translate3d(calc(50vw - ${typeof window !== 'undefined' && window.innerWidth <= 760 ? 44 : 38}vw - ${currentIdx * (typeof window !== 'undefined' && window.innerWidth <= 760 ? 93 : 82)}vw), 0, 0)` }}
+                style={{ transform: `translate3d(calc(50vw - ${typeof window !== 'undefined' && window.innerWidth <= 760 ? 44 : 38}vw - ${currentIdx * (typeof window !== 'undefined' && window.innerWidth <= 760 ? 93 : 82)}vw), -50%, 0)` }}
               >
                 {sequence.map((item, index) => {
                   const active = index === currentIdx;

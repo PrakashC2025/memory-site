@@ -8,6 +8,7 @@ let active = 0;
 type QueueWaiter = {
   grant: () => void;
   reject: (error: Error) => void;
+  priority: number;
 };
 
 const waiters: QueueWaiter[] = [];
@@ -24,7 +25,7 @@ const release = () => {
   next?.grant();
 };
 
-const acquire = (signal?: AbortSignal) =>
+const acquire = (signal?: AbortSignal, priority = 0) =>
   new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
       reject(cancelledError());
@@ -43,18 +44,20 @@ const acquire = (signal?: AbortSignal) =>
       active += 1;
       resolve();
     };
-    waiter = { grant, reject };
+    waiter = { grant, reject, priority };
 
     if (active < MAX_CONCURRENT) {
       grant();
       return;
     }
-    waiters.push(waiter);
+    const insertAt = waiters.findIndex(current => current.priority < priority);
+    if (insertAt < 0) waiters.push(waiter);
+    else waiters.splice(insertAt, 0, waiter);
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 
-export const withMediaFetch = async <T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
-  await acquire(signal);
+export const withMediaFetch = async <T>(task: () => Promise<T>, signal?: AbortSignal, priority = 0): Promise<T> => {
+  await acquire(signal, priority);
   try {
     return await task();
   } finally {

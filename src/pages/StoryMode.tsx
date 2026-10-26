@@ -164,6 +164,16 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         };
         try {
           files = await readDriveUpdates();
+          // Drive's changes feed is normally the fastest path, but an upload
+          // made directly in drive.google.com can briefly appear in the folder
+          // listing before its change record is available. While Story Mode is
+          // visible, reconcile the newest metadata page as a lightweight
+          // safety net so the new photo/video joins the live story immediately.
+          if (active && !fullSnapshot) {
+            const latestPage = await googleDriveService.listMediaPage(token, '', folderId, 100);
+            const knownFileIds = new Set(files.map(file => file.id));
+            files = [...files, ...latestPage.files.filter(file => !knownFileIds.has(file.id))];
+          }
         } catch (listError) {
           if (!isDriveAuthorizationError(listError)) throw listError;
           token = await googleDriveService.refreshAccessToken(undefined, true);
@@ -262,12 +272,17 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     // Uploads and deletions therefore join the running story within seconds.
     const LIVE_STORY_POLL_MS = 8000;
     const LIVE_STORY_COOLDOWN_MS = 6000;
+    const LIVE_STORY_FAST_POLL_MS = 2000;
+    const LIVE_STORY_ACTIVE_COOLDOWN_MS = 1000;
     let lastSyncAt = 0;
 
     const retryDrive = () => {
       if (document.visibilityState !== 'visible') return;
       if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-      if (Date.now() - lastSyncAt < LIVE_STORY_COOLDOWN_MS) return;
+      const retryCooldown = document.visibilityState === 'visible'
+        ? LIVE_STORY_ACTIVE_COOLDOWN_MS
+        : LIVE_STORY_COOLDOWN_MS;
+      if (Date.now() - lastSyncAt < retryCooldown) return;
       lastSyncAt = Date.now();
       void syncDrive();
     };
@@ -279,9 +294,14 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     document.addEventListener('visibilitychange', onVisibilityChange);
     void syncDrive();
     const interval = window.setInterval(retryDrive, LIVE_STORY_POLL_MS);
+    // Keep the legacy cadence for idle/background compatibility while the
+    // visible story uses a cheap fast changes-feed check for direct Drive
+    // uploads. No media is downloaded unless Drive reports a new file.
+    const fastInterval = window.setInterval(retryDrive, LIVE_STORY_FAST_POLL_MS);
     return () => {
       active = false;
       window.clearInterval(interval);
+      window.clearInterval(fastInterval);
       window.removeEventListener('online', retryDrive);
       window.removeEventListener('focus', retryDrive);
       document.removeEventListener('visibilitychange', onVisibilityChange);

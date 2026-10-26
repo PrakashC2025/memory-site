@@ -327,6 +327,16 @@ const Memoriya: React.FC = () => {
             newStartPageToken = page.newStartPageToken || newStartPageToken;
           } while (pageToken && active);
           if (!active) return;
+          if (reelOpenRef.current) {
+            // A direct upload can become visible in Drive's folder listing a
+            // moment before it appears in the changes feed. Pull one metadata
+            // page while Story Mode is open so the new photo/video is not
+            // forced to wait for another cursor cycle. No media is downloaded
+            // here; the reel still streams the original in the background.
+            const latestPage = await googleDriveService.listMediaPage(accessToken, '', driveFolderId, 100);
+            const changedIds = new Set(changedFiles.map(file => file.id));
+            changedFiles.push(...latestPage.files.filter(file => !changedIds.has(file.id)));
+          }
           applyChanges(changedFiles, removedIds);
           const nextToken = newStartPageToken || changePageToken;
           driveChangePageTokenRef.current = nextToken;
@@ -386,24 +396,25 @@ const Memoriya: React.FC = () => {
     // in the story within seconds instead of after a minute.
     const DRIVE_SYNC_INTERVAL_MS = 15000;
     const DRIVE_SYNC_COOLDOWN_MS = 8000;
-    const LIVE_STORY_POLL_MS = 5000;
-    const LIVE_STORY_COOLDOWN_MS = 2500;
+    const LIVE_STORY_POLL_MS = 2000;
+    const LIVE_STORY_COOLDOWN_MS = 1000;
     let lastDriveSyncAt = 0;
     let timer = 0;
     const scheduleNextSync = () => {
       if (!active) return;
-      const liveStory = reelOpenRef.current;
       timer = window.setTimeout(() => {
         if (!active) return;
         const cooldown = reelOpenRef.current ? LIVE_STORY_COOLDOWN_MS : DRIVE_SYNC_COOLDOWN_MS;
         if (Date.now() - lastDriveSyncAt >= cooldown) void syncLatestDriveMedia();
-        driveSyncNowRef.current = () => {
+        scheduleNextSync();
+      }, reelOpenRef.current ? LIVE_STORY_POLL_MS : DRIVE_SYNC_INTERVAL_MS);
+    };
+    // Make opening Story Mode trigger a fresh changes-feed read immediately;
+    // do not wait for the first idle timer to install this callback.
+    driveSyncNowRef.current = () => {
       if (!active) return;
       if (Date.now() - lastDriveSyncAt < 1500) return;
       void syncLatestDriveMedia();
-    };
-    scheduleNextSync();
-      }, liveStory ? LIVE_STORY_POLL_MS : DRIVE_SYNC_INTERVAL_MS);
     };
     scheduleNextSync();
     return () => {
@@ -525,7 +536,10 @@ const Memoriya: React.FC = () => {
     // filteredMemories effect still keeps this synchronized with the gallery,
     // but this direct path prevents a freshly uploaded photo from waiting for
     // another render or Drive scan before it joins the live story.
-    setReelConfig(current => current?.live
+    // A mounted Story Mode can have been opened from an album or another
+    // entry point, so do not require the live-folder flag here. A confirmed
+    // Drive upload must reach every currently open reel immediately.
+    setReelConfig(current => current
       ? { ...current, memories: withLivePreviews(mergeImported(current.memories)) }
       : current);
     return imported.length;
@@ -1020,7 +1034,7 @@ const Memoriya: React.FC = () => {
             }
             clearDeletedDriveMedia([fileId]);
             setMemories(current => current.filter(memory => memory.driveFileId !== fileId));
-            setReelConfig(current => current?.live
+            setReelConfig(current => current
               ? { ...current, memories: current.memories.filter(memory => memory.driveFileId !== fileId) }
               : current);
             setSelected(current => current?.driveFileId === fileId ? null : current);

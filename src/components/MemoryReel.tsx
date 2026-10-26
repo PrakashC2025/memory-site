@@ -50,6 +50,20 @@ export type MemoryReelEffect =
 
 export type MemoryReelClarity = 'natural' | 'clear' | '4k' | '8k';
 
+export type MemoryReelTiming = 'quick' | 'standard' | 'long' | 'cinema';
+
+export const MEMORY_REEL_TIMINGS: Array<{
+  id: MemoryReelTiming;
+  name: string;
+  description: string;
+  scale: number;
+}> = [
+  { id: 'quick', name: '4s', description: 'Short, energetic holds.', scale: 1 },
+  { id: 'standard', name: '6s', description: 'Balanced everyday pacing.', scale: 1.5 },
+  { id: 'long', name: '8s', description: 'More time to see each memory.', scale: 2 },
+  { id: 'cinema', name: '10s', description: 'Slow cinematic presentation.', scale: 2.5 },
+];
+
 export const MEMORY_REEL_TEMPLATES: Array<{ id: MemoryReelTemplate; name: string; description: string }> = [
   { id: 'orbit', name: 'Cinematic Camera Motion', description: 'The original camera-wall journey with depth, movement, and living frames.' },
   { id: 'polaroid-collage', name: 'Polaroid Celebration', description: 'Warm cream paper, floating polaroids, and a family-photo collage around the hero.' },
@@ -125,6 +139,7 @@ interface MemoryReelOptions {
   effect?: MemoryReelEffect;
   clarity?: MemoryReelClarity;
   zoom?: boolean;
+  holdScale?: number;
   hold?: number;
   move?: number;
   loop?: boolean;
@@ -479,6 +494,7 @@ export class MemoryReelController {
   private lastAudioActive = false;
   private clarity: MemoryReelClarity = 'clear';
   private zoomEnabled = true;
+  private holdScale = 1;
   private objectUrls = new Set<string>();
   private loadedMedia = new Map<string, LoadedMedia>();
   // A 500 image story used to download and decode every frame before the
@@ -524,6 +540,7 @@ export class MemoryReelController {
       effect: 'natural',
       clarity: 'clear',
       zoom: true,
+      holdScale: 1,
       ...options,
     };
     const coarsePointer = typeof window.matchMedia === 'function'
@@ -535,6 +552,7 @@ export class MemoryReelController {
     this.lowPowerSurface = Boolean(this.options.legacyTv || (coarsePointer && (hardwareThreads <= 6 || window.innerWidth <= 720)));
     this.clarity = this.options.clarity || 'clear';
     this.zoomEnabled = this.options.zoom !== false;
+    this.holdScale = clamp(this.options.holdScale ?? 1, 0.75, 3);
     this.world = Object.assign(document.createElement('div'), { className: 'world' });
     this.ambient = Object.assign(document.createElement('div'), { className: 'ambient' });
     this.effectsCanvas = Object.assign(document.createElement('canvas'), {
@@ -682,12 +700,15 @@ export class MemoryReelController {
       !this.loadedMedia.has(item.id) && !queuedIds.has(item.id) && !this.failedSources.has(item.id));
     this.pendingSources = [...newlyAdded, ...stillQueued];
 
+    const liveShotAtUpdate = keepCurrentWall && this.cards.length
+      ? this.shotIndexAt(this.elapsed)
+      : this.lastRenderedShot;
     let liveInsertIndex = keepCurrentWall
       // A photo uploaded to the live Drive folder becomes the very next shot.
-      // It lands immediately after the frame that is on screen right now, so
-      // the current shot is never interrupted and the new photo is not hidden
-      // behind two other photos waiting their turn.
-      ? Math.min(this.cards.length, Math.max(0, this.lastRenderedShot + 1))
+      // Use the elapsed timeline rather than the last painted index: on a
+      // throttled phone/TV the last paint can lag behind the real shot by one
+      // or more frames and make a ready upload wait unnecessarily.
+      ? Math.min(this.cards.length, Math.max(0, liveShotAtUpdate + 1))
       : this.cards.length;
     // A live update only warms a small slice; a cold start paints a full wall.
     // Original batch policy: keepCurrentWall ? WALL_LIVE_BATCH : WALL_INITIAL_BATCH.
@@ -1432,7 +1453,10 @@ export class MemoryReelController {
     if (!item.authToken || readDriveAuthRequired()) return '';
     let result: Awaited<ReturnType<typeof googleDriveService.downloadMediaFileWithReconnect>>;
     try {
-      result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(item.authToken!, item.driveFileId!));
+      // Focused story cards jump ahead of background folder warming. This is
+      // only one original at a time per visible card, so slow connections get
+      // a sharp promotion without flooding the compositor or the network.
+      result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(item.authToken!, item.driveFileId!), undefined, 10);
     } catch (error) {
       if (isDriveAuthorizationError(error)) saveDriveAuthRequired(true);
       throw error;
@@ -1541,6 +1565,29 @@ export class MemoryReelController {
 
   setZoomEnabled(enabled: boolean) {
     this.zoomEnabled = enabled;
+    this.render(this.elapsed);
+  }
+
+  setHoldScale(scale: number) {
+    const nextScale = clamp(scale, 0.75, 3);
+    if (Math.abs(nextScale - this.holdScale) < 0.001) return;
+
+    const activeIndex = this.cards.length ? this.shotIndexAt(this.elapsed) : -1;
+    const activeId = activeIndex >= 0 ? this.cards[activeIndex]?.id : undefined;
+    const activeOffset = activeIndex >= 0 ? this.elapsed - this.shotStartAt(activeIndex) : 0;
+    this.holdScale = nextScale;
+    this.recalculateTotal();
+
+    // Keep the currently visible memory in place when the user changes the
+    // chip, instead of jumping to a different card in the rebuilt timeline.
+    if (activeId) {
+      const nextIndex = this.cards.findIndex(card => card.id === activeId);
+      if (nextIndex >= 0) {
+        const nextStart = this.shotStartAt(nextIndex);
+        const nextSpan = this.cardHold(this.cards[nextIndex]) + this.options.move;
+        this.elapsed = Math.min(this.total, nextStart + clamp(activeOffset, 0, Math.max(0, nextSpan - 0.02)));
+      }
+    }
     this.render(this.elapsed);
   }
 
@@ -2191,8 +2238,9 @@ export class MemoryReelController {
   }
 
   private cardHold(card: ReelCard) {
-    if (this.options.template === 'orbit') return 4 + (card.video ? 1.2 : 0);
-    return 3.6 + (card.video ? 0.8 : 0);
+    const baseHold = this.options.template === 'orbit' ? 4 : 3.6;
+    const videoBonus = this.options.template === 'orbit' ? 1.2 : 0.8;
+    return (baseHold + (card.video ? videoBonus : 0)) * this.holdScale;
   }
 
   private applyReelCardVars(card: ReelCard, index: number, shot: number) {
@@ -2786,6 +2834,7 @@ const STORY_TEMPLATE_STORAGE_KEY = 'memoriya-story-template-v3';
 const STORY_EFFECT_STORAGE_KEY = 'memoriya-story-effect-v1';
 const STORY_CLARITY_STORAGE_KEY = 'memoriya-story-clarity-v1';
 const STORY_ZOOM_STORAGE_KEY = 'memoriya-story-zoom-v1';
+const STORY_TIMING_STORAGE_KEY = 'memoriya-story-timing-v1';
 const STORY_TITLE_STORAGE_KEY = 'memoriya-story-title-v1';
 
 interface StoredStoryMusic {
@@ -2912,6 +2961,18 @@ const readStoredStoryZoom = (fallback: boolean): boolean => {
   }
 };
 
+const readStoredStoryTiming = (fallback: MemoryReelTiming): MemoryReelTiming => {
+  try {
+    const stored = window.localStorage.getItem(STORY_TIMING_STORAGE_KEY) as MemoryReelTiming | null;
+    return stored && MEMORY_REEL_TIMINGS.some(item => item.id === stored) ? stored : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const storyTimingScale = (timing: MemoryReelTiming) =>
+  MEMORY_REEL_TIMINGS.find(item => item.id === timing)?.scale || 1;
+
 const readStoredStoryTemplate = (fallback: MemoryReelTemplate): MemoryReelTemplate => {
   try {
     const stored = window.localStorage.getItem(STORY_TEMPLATE_STORAGE_KEY) as MemoryReelTemplate | null;
@@ -2985,6 +3046,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [effect, setEffect] = useState<MemoryReelEffect>(() => readStoredStoryEffect('natural'));
   const [clarity, setClarity] = useState<MemoryReelClarity>(() => readStoredStoryClarity('clear'));
   const [zoomEnabled, setZoomEnabled] = useState(() => readStoredStoryZoom(true));
+  const [timing, setTiming] = useState<MemoryReelTiming>(() => readStoredStoryTiming('quick'));
   const [musicQuery, setMusicQuery] = useState('');
   const [musicResults, setMusicResults] = useState<OpenSourceMusicTrack[]>([]);
   const [musicLoading, setMusicLoading] = useState(false);
@@ -3367,6 +3429,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       legacyTv: legacyTvMode,
       template,
       zoom: zoomEnabled,
+      holdScale: storyTimingScale(timing),
       onProgress: (current, total) => {
         setProgress({ progress: current, total });
         const more = moreConfigRef.current;
@@ -3426,6 +3489,15 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       // Local storage is optional; the current story remains active.
     }
   }, [zoomEnabled]);
+
+  useEffect(() => {
+    controllerRef.current?.setHoldScale(storyTimingScale(timing));
+    try {
+      window.localStorage.setItem(STORY_TIMING_STORAGE_KEY, timing);
+    } catch {
+      // Local storage is optional; the current story remains active.
+    }
+  }, [timing]);
 
   useEffect(() => {
     const controller = controllerRef.current;
@@ -4339,6 +4411,23 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           {musicQueue.length > 0 && <button type="button" onClick={toggleMute} aria-pressed={audioMuted} aria-label={audioMuted ? 'Unmute music' : 'Mute music'}>{audioMuted ? <VolumeX size={16} /> : <Volume2 size={16} />} {audioMuted ? 'Unmute' : 'Mute'}</button>}
           <button type="button" className={effectsOpen ? 'is-active' : ''} aria-expanded={effectsOpen} onClick={openEffects}><WandSparkles size={16} /> Effects</button>
           <button type="button" className={zoomEnabled ? 'is-active' : ''} onClick={() => setZoomEnabled(value => !value)} aria-pressed={zoomEnabled}>Zoom {zoomEnabled ? 'On' : 'Off'}</button>
+          <div className="memory-reel-timing-control" aria-label="Choose how long each photo or video stays visible">
+            <span>Stay</span>
+            <div className="memory-reel-timing-chips">
+              {MEMORY_REEL_TIMINGS.map(option => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={timing === option.id ? 'is-active' : ''}
+                  aria-pressed={timing === option.id}
+                  title={option.description}
+                  onClick={() => setTiming(option.id)}
+                >
+                  {option.name}
+                </button>
+              ))}
+            </div>
+          </div>
           <button type="button" className={clarityOpen ? 'is-active' : ''} aria-expanded={clarityOpen} onClick={openClarity}><WandSparkles size={16} /> Clarity</button>
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
             <div className="memory-reel-folder-summary">
@@ -4398,6 +4487,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             <Volume2 size={19} />
           </button>}
           <button type="button" onClick={toggleFullscreen} aria-label="Exit fullscreen"><Minimize2 size={19} /></button>
+          {onClose && <button type="button" onClick={onClose} aria-label="Exit story mode" title="Exit story mode"><X size={19} /></button>}
         </div>
         <div className="memory-reel-progress-text">{loading ? 'Preparing your memories…' : `${Math.round(progress.progress)}s / ${Math.round(progress.total)}s`}</div>
         <div className="memory-reel-editor">

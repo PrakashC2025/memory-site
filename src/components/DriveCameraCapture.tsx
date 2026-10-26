@@ -802,59 +802,61 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
             {torchAvailable && <button type="button" onClick={toggleTorch} className={torchEnabled ? 'is-active' : ''} aria-label={torchEnabled ? 'Turn flash off' : 'Turn flash on'}><Lightbulb size={16} /></button>}
           </div>
         </div>
-        {capturedGallery.length > 0 && (
-          <div className="memoriya-camera-gallery" aria-label="Captured photo gallery">
-            {capturedGallery.map((photo, index) => (
-              <button
-                type="button"
-                key={photo.queueId}
-                className={`memoriya-camera-gallery-item${capturedPhoto?.queueId === photo.queueId ? ' is-active' : ''}`}
-                onClick={() => selectGalleryPhoto(photo)}
-                aria-label={`Review captured photo ${index + 1}`}
-              >
-                <img src={photo.url} alt={`Captured memory ${index + 1}`} />
-                <span>{index + 1}</span>
-              </button>
-            ))}
+        <div className="memoriya-camera-bottom-deck">
+          {capturedGallery.length > 0 && (
+            <div className="memoriya-camera-gallery" aria-label="Captured photo gallery">
+              {capturedGallery.map((photo, index) => (
+                <button
+                  type="button"
+                  key={photo.queueId}
+                  className={`memoriya-camera-gallery-item${capturedPhoto?.queueId === photo.queueId ? ' is-active' : ''}`}
+                  onClick={() => selectGalleryPhoto(photo)}
+                  aria-label={`Review captured photo ${index + 1}`}
+                >
+                  <img src={photo.url} alt={`Captured memory ${index + 1}`} />
+                  <span>{index + 1}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="memoriya-camera-controls">
+            <button
+              type="button"
+              className="memoriya-camera-switch-control"
+              onClick={() => setFacingMode(value => value === 'environment' ? 'user' : 'environment')}
+              aria-label={facingMode === 'user' ? 'Switch to rear camera' : 'Switch to selfie camera'}
+              aria-pressed={facingMode === 'user'}
+            >
+              <RefreshCw size={18} />
+              <span>{facingMode === 'user' ? 'Rear camera' : 'Selfie camera'}</span>
+            </button>
+            <button type="button" className="memoriya-camera-shutter" onClick={() => void capturePhoto()} disabled={!cameraReady || capturing} aria-label="Capture and upload photo">
+              {capturing ? <Loader2 className="memoriya-spin-icon" size={22} /> : <Camera size={22} />}
+            </button>
+            <label className="memoriya-camera-filter">Look
+              <select value={filter} onChange={event => setFilter(event.target.value as CameraFilter)}>
+                {Object.entries(CAMERA_FILTERS).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
+              </select>
+            </label>
           </div>
-        )}
-        <div className="memoriya-camera-controls">
-          <button
-            type="button"
-            className="memoriya-camera-switch-control"
-            onClick={() => setFacingMode(value => value === 'environment' ? 'user' : 'environment')}
-            aria-label={facingMode === 'user' ? 'Switch to rear camera' : 'Switch to selfie camera'}
-            aria-pressed={facingMode === 'user'}
-          >
-            <RefreshCw size={18} />
-            <span>{facingMode === 'user' ? 'Rear camera' : 'Selfie camera'}</span>
-          </button>
-          <button type="button" className="memoriya-camera-shutter" onClick={() => void capturePhoto()} disabled={!cameraReady || capturing} aria-label="Capture and upload photo">
-            {capturing ? <Loader2 className="memoriya-spin-icon" size={22} /> : <Camera size={22} />}
-          </button>
-          <label className="memoriya-camera-filter">Look
-            <select value={filter} onChange={event => setFilter(event.target.value as CameraFilter)}>
-              {Object.entries(CAMERA_FILTERS).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
+          <div className="memoriya-camera-settings">
+            <button type="button" onClick={() => setAutoEnhance(value => !value)} className={autoEnhance ? 'is-active' : ''} aria-pressed={autoEnhance}><Sparkles size={15} /> {autoEnhance ? 'Enhance on' : 'Enhance off'}</button>
+            <label className="memoriya-camera-quality">Quality
+              <select value={quality} onChange={event => setQuality(event.target.value as CameraQuality)}>
+                {Object.entries(CAMERA_QUALITY).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
+              </select>
+            </label>
+          </div>
+          <label className="memoriya-camera-destination">Save to Drive folder
+            <select value={folderId} onChange={event => setFolderId(event.target.value)}>
+              <option value="drive-root">My Drive root</option>
+              {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
             </select>
           </label>
+          <p className={`memoriya-camera-message ${error ? 'is-error' : ''}`}>{error || status}</p>
+          {pendingUploads > 0 && <p className="memoriya-camera-saved"><Loader2 size={15} className="memoriya-spin-icon" /> Uploading securely in the background</p>}
+          {uploadedFile && !reviewOpen && <p className="memoriya-camera-saved"><Check size={15} /> Latest photo is saved to Drive and your live story.</p>}
         </div>
-        <div className="memoriya-camera-settings">
-          <button type="button" onClick={() => setAutoEnhance(value => !value)} className={autoEnhance ? 'is-active' : ''} aria-pressed={autoEnhance}><Sparkles size={15} /> {autoEnhance ? 'Enhance on' : 'Enhance off'}</button>
-          <label className="memoriya-camera-quality">Quality
-            <select value={quality} onChange={event => setQuality(event.target.value as CameraQuality)}>
-              {Object.entries(CAMERA_QUALITY).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
-            </select>
-          </label>
-        </div>
-        <label className="memoriya-camera-destination">Save to Drive folder
-          <select value={folderId} onChange={event => setFolderId(event.target.value)}>
-            <option value="drive-root">My Drive root</option>
-            {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-          </select>
-        </label>
-        <p className={`memoriya-camera-message ${error ? 'is-error' : ''}`}>{error || status}</p>
-        {pendingUploads > 0 && <p className="memoriya-camera-saved"><Loader2 size={15} className="memoriya-spin-icon" /> Uploading securely in the background</p>}
-        {uploadedFile && !reviewOpen && <p className="memoriya-camera-saved"><Check size={15} /> Latest photo is saved to Drive and your live story.</p>}
         {reviewOpen && capturedPhoto && (
           <div className="memoriya-camera-review" role="dialog" aria-label="Review captured photo">
             <div className="memoriya-camera-review-header">
@@ -864,54 +866,58 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
               </div>
               <button type="button" onClick={closeReview} aria-label="Close photo review"><X size={19} /></button>
             </div>
-            <div className={`memoriya-camera-review-preview is-crop-${editMode ? editCrop : 'original'}`}>
-              <img src={capturedPhoto.url} alt="Captured memory preview" style={{ filter: CAMERA_FILTERS[editMode ? editFilter : 'natural'].css, transform: `rotate(${editRotation}deg)` }} />
-            </div>
-            {capturedGallery.length > 1 && (
-              <div className="memoriya-camera-review-gallery" aria-label="All captured photos">
-                {capturedGallery.map((photo, index) => (
-                  <button
-                    type="button"
-                    key={photo.queueId}
-                    className={capturedPhoto.queueId === photo.queueId ? 'is-active' : ''}
-                    onClick={() => selectGalleryPhoto(photo)}
-                    aria-label={`Open captured photo ${index + 1}`}
-                  >
-                    <img src={photo.url} alt={`Captured memory ${index + 1}`} />
-                  </button>
-                ))}
+            <div className="memoriya-camera-review-body">
+              <div className={`memoriya-camera-review-preview is-crop-${editMode ? editCrop : 'original'}`}>
+                <img src={capturedPhoto.url} alt="Captured memory preview" style={{ filter: CAMERA_FILTERS[editMode ? editFilter : 'natural'].css, transform: `rotate(${editRotation}deg)` }} />
               </div>
-            )}
-            <div className="memoriya-camera-review-actions">
-              <button type="button" onClick={() => void deletePhoto()} disabled={capturing}><Trash2 size={17} /> Delete</button>
-              <button type="button" onClick={() => { setEditMode(true); setEditFilter('natural'); setEditCrop('original'); setEditRotation(value => (value + 90) % 360); }} disabled={capturing}><RotateCcw size={17} /> Rotate</button>
-              <button type="button" onClick={() => { setEditMode(true); setEditFilter('enhance'); setEditRotation(0); setEditCrop('original'); }} disabled={capturing}><Sparkles size={17} /> Enhance</button>
-              <button type="button" onClick={() => setEditMode(value => !value)} disabled={capturing}><Edit3 size={17} /> Edit</button>
-              <button type="button" onClick={() => void sharePhoto()} disabled={capturing}><Share2 size={17} /> Share</button>
-            </div>
-            {editMode && (
-              <div className="memoriya-camera-edit-tools">
-                <label>Look
-                  <select value={editFilter} onChange={event => setEditFilter(event.target.value as CameraFilter)}>
-                    {Object.entries(CAMERA_FILTERS).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
-                  </select>
-                </label>
-                <label><Crop size={16} /> Crop
-                  <select value={editCrop} onChange={event => setEditCrop(event.target.value as CameraCrop)}>
-                    <option value="original">Original</option>
-                    <option value="square">Square 1:1</option>
-                    <option value="portrait">Portrait 4:5</option>
-                    <option value="landscape">Landscape 16:9</option>
-                  </select>
-                </label>
-                <button type="button" onClick={() => setEditRotation(value => (value + 90) % 360)}><RotateCcw size={16} /> Rotate</button>
-                <button type="button" onClick={restoreOriginalPreview}><Sparkles size={16} /> Restore original</button>
-                <button type="button" onClick={() => setEditMode(false)}>Cancel edit</button>
-                <button type="button" className="memoriya-camera-save-edit" onClick={() => void saveEdit()} disabled={capturing}><Check size={16} /> Save edit</button>
+              {capturedGallery.length > 1 && (
+                <div className="memoriya-camera-review-gallery" aria-label="All captured photos">
+                  {capturedGallery.map((photo, index) => (
+                    <button
+                      type="button"
+                      key={photo.queueId}
+                      className={capturedPhoto.queueId === photo.queueId ? 'is-active' : ''}
+                      onClick={() => selectGalleryPhoto(photo)}
+                      aria-label={`Open captured photo ${index + 1}`}
+                    >
+                      <img src={photo.url} alt={`Captured memory ${index + 1}`} />
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="memoriya-camera-review-actions">
+                <button type="button" onClick={() => void deletePhoto()} disabled={capturing}><Trash2 size={17} /> Delete</button>
+                <button type="button" onClick={() => { setEditMode(true); setEditFilter('natural'); setEditCrop('original'); setEditRotation(value => (value + 90) % 360); }} disabled={capturing}><RotateCcw size={17} /> Rotate</button>
+                <button type="button" onClick={() => { setEditMode(true); setEditFilter('enhance'); setEditRotation(0); setEditCrop('original'); }} disabled={capturing}><Sparkles size={17} /> Enhance</button>
+                <button type="button" onClick={() => setEditMode(value => !value)} disabled={capturing}><Edit3 size={17} /> Edit</button>
+                <button type="button" onClick={() => void sharePhoto()} disabled={capturing}><Share2 size={17} /> Share</button>
               </div>
-            )}
-            <p>{uploadedFile ? 'Saved to Drive. Your story is up to date.' : 'Upload is paused while you review this photo.'}</p>
-            <button type="button" className="memoriya-camera-review-done" onClick={closeReview}>{uploadedFile ? 'Done' : 'Resume upload'}</button>
+              {editMode && (
+                <div className="memoriya-camera-edit-tools">
+                  <label>Look
+                    <select value={editFilter} onChange={event => setEditFilter(event.target.value as CameraFilter)}>
+                      {Object.entries(CAMERA_FILTERS).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
+                    </select>
+                  </label>
+                  <label><Crop size={16} /> Crop
+                    <select value={editCrop} onChange={event => setEditCrop(event.target.value as CameraCrop)}>
+                      <option value="original">Original</option>
+                      <option value="square">Square 1:1</option>
+                      <option value="portrait">Portrait 4:5</option>
+                      <option value="landscape">Landscape 16:9</option>
+                    </select>
+                  </label>
+                  <button type="button" onClick={() => setEditRotation(value => (value + 90) % 360)}><RotateCcw size={16} /> Rotate</button>
+                  <button type="button" onClick={restoreOriginalPreview}><Sparkles size={16} /> Restore original</button>
+                  <button type="button" onClick={() => setEditMode(false)}>Cancel edit</button>
+                  <button type="button" className="memoriya-camera-save-edit" onClick={() => void saveEdit()} disabled={capturing}><Check size={16} /> Save edit</button>
+                </div>
+              )}
+            </div>
+            <div className="memoriya-camera-review-footer">
+              <p>{uploadedFile ? 'Saved to Drive. Your story is up to date.' : 'Upload is paused while you review this photo.'}</p>
+              <button type="button" className="memoriya-camera-review-done" onClick={closeReview}>{uploadedFile ? 'Done' : 'Resume upload'}</button>
+            </div>
           </div>
         )}
         <canvas ref={canvasRef} className="hidden" />
