@@ -1393,14 +1393,17 @@ export class MemoryReelController {
           }
           finish(null);
         };
-        if (item.driveFileId && item.src) {
-          // Paint Drive's lightweight thumbnail immediately. IndexedDB lookup
-          // and the sharper cached original must never delay the first frame.
-          if (!readDriveAuthRequired()) image.src = item.src;
+          if (item.driveFileId && item.src) {
+            // Paint Drive's lightweight thumbnail immediately. IndexedDB lookup
+            // and the sharper cached original must never delay the first frame.
+          if (!readDriveAuthRequired()) {
+            image.src = item.src;
+          }
           void this.loadAuthenticatedDrivePreview(item)
             .then(result => {
               if (!result.objectUrl) {
                 if (readDriveAuthRequired()) finish(null);
+                else promoteDriveImage();
                 return;
               }
               if (finished && !finishedWithMedia) {
@@ -1411,6 +1414,7 @@ export class MemoryReelController {
               previewResolvedFull = result.full;
               if (result.full) drivePromotionStarted = true;
               image.src = result.objectUrl;
+              if (!result.full) promoteDriveImage();
             })
             .catch(() => undefined);
         } else if (item.driveFileId) {
@@ -1463,9 +1467,16 @@ export class MemoryReelController {
     }
     if (result.accessToken !== item.authToken) saveDriveAccessToken(result.accessToken);
     const blob = result.blob;
-    if (!cached) await writeCachedStoryMedia(cacheKey, blob, item.type === 'video' ? 'video/mp4' : blob.type);
     const objectUrl = URL.createObjectURL(blob);
     this.objectUrls.add(objectUrl);
+    // Reveal the sharp original immediately. IndexedDB persistence is useful
+    // for the next visit, but must never hold the current frame in a blurry
+    // preview while the cache write is finishing.
+    if (!cached) {
+      void (async () => {
+        await writeCachedStoryMedia(cacheKey, blob, item.type === 'video' ? 'video/mp4' : blob.type);
+      })();
+    }
     return objectUrl;
   }
 
@@ -2640,7 +2651,10 @@ export class MemoryReelController {
          const zoomProgress = this.zoomEnabled && isActive ? clamp(holdProgress, 0, 1) : 0;
         const heroScale = isActive ? 1.035 : 1;
         const orbitBackgroundScale = heroScale;
-         const zoomScale = zoomProgress * 0.055;
+         // Make Zoom On visibly active while staying inside the fitted card
+         // bounds. The previous two-percent change was effectively invisible
+         // on large screens and phones.
+         const zoomScale = zoomProgress * 0.07;
          const depthBias = this.options.template === 'orbit' ? (isActive ? 180 : -380) : 0;
         const cinematicDepthBias = this.options.template === 'orbit'
           ? (isActive ? 80 : card.z - 120)
@@ -2657,7 +2671,7 @@ export class MemoryReelController {
         // applied. Start just under the fitted size and use only a restrained
         // 2% zoom while preserving a small arrival dip.
         const cinematicScale = isActive && this.options.template === 'orbit'
-          ? fitScale * (0.965 + zoomProgress * 0.02) * (1 - dip * 0.08)
+          ? fitScale * (0.95 + zoomProgress * 0.08) * (1 - dip * 0.08)
           : heroScale + zoomScale;
         const cardRotateZ = isActive && this.options.template === 'orbit'
           ? smoothNoise(time * 0.3, index + 141) * 2.5
