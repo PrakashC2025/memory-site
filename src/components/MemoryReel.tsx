@@ -310,12 +310,12 @@ const normalizeDriveAudioBlob = (blob: Blob, song: DriveAudioFile) => {
   return blob.type === playableType ? blob : new Blob([blob], { type: playableType });
 };
 
-const preparePlayableAudioBlob = async (blob: Blob, song: DriveAudioFile) => {
+const preparePlayableAudioBlob = async (blob: Blob, song: DriveAudioFile, forceConversion = false) => {
   const normalized = normalizeDriveAudioBlob(blob, song);
   const probe = document.createElement('audio');
   const extension = song.name.split(/[?#]/)[0].split('.').pop()?.toLowerCase() || '';
   const nativeFormat = extension === 'mp3' || extension === 'm4a' || extension === 'wav';
-  if (nativeFormat && probe.canPlayType(normalized.type)) return normalized;
+  if (!forceConversion && nativeFormat && probe.canPlayType(normalized.type)) return normalized;
   try {
     return await convertAudioBlobToWav(normalized);
   } catch {
@@ -3793,7 +3793,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     return token;
   };
 
-  const prepareDriveTrackForPlayback = async (track: MusicQueueItem, allowRefresh = false) => {
+  const prepareDriveTrackForPlayback = async (track: MusicQueueItem, allowRefresh = false, forceConversion = false) => {
     if (track.source !== 'drive' || !track.driveFileId) return track.src;
     const song = allDriveSongs.find(item => item.id === track.driveFileId);
     if (!song) return track.src;
@@ -3801,10 +3801,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const rememberedSource = resolvedDriveAudioSourcesRef.current.get(cacheKey);
     if (rememberedSource) return rememberedSource;
 
-    const createSource = async (token: string) => {
+    const createSource = async (token: string, forceConversion = false) => {
       const cached = await readCachedStoryMedia(cacheKey);
       const sourceBlob = cached || await withMediaFetch(() => googleDriveService.downloadMediaFile(token, song.id));
-      const playableBlob = await preparePlayableAudioBlob(sourceBlob, song);
+      const playableBlob = await preparePlayableAudioBlob(sourceBlob, song, forceConversion);
       if (!cached || playableBlob !== cached) await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
       const objectUrl = URL.createObjectURL(playableBlob);
       resolvedDriveAudioSourcesRef.current.set(cacheKey, objectUrl);
@@ -3819,7 +3819,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const cached = await readCachedStoryMedia(cacheKey);
     if (!token && !cached) throw new Error('This song is not cached on this device. Reconnect Google Drive once to download it.');
     try {
-      return await createSource(token || '');
+      return await createSource(token || '', forceConversion);
     } catch (error) {
       if (!allowRefresh || !isDriveAuthorizationError(error)) throw error;
       if (track.driveAccount === 'secondary') {
@@ -3830,7 +3830,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       } else {
         token = await reconnectDriveForPlayback();
       }
-      return createSource(token);
+      return createSource(token, forceConversion);
     }
   };
 
@@ -3885,6 +3885,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         audioPauseGuardRef.current = false;
         try {
           await playAudioWithTimeout(element);
+          if (element.error) throw new Error('Drive audio format was rejected by this browser.');
           setAudioPlaying(true);
           setMusicError('');
           return;
@@ -4200,6 +4201,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         applyPendingMusicResume();
         try {
           await playAudioWithTimeout(element);
+          if (element.error) throw new Error('Drive audio format was rejected by this browser.');
           setAudioPlaying(true);
           setMusicError('');
           return true;
@@ -4208,7 +4210,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           // object URL fallback below.
         }
       }
-      const playableSource = await prepareDriveTrackForPlayback(sourceTrack, fromUserGesture);
+      // If the authenticated Drive stream was rejected by this browser, force
+      // a conversion of the downloaded file instead of retrying the same
+      // unsupported MP3/container. The converted source is cached for later.
+      const playableSource = await prepareDriveTrackForPlayback(sourceTrack, fromUserGesture, true);
       if (element.src !== playableSource) {
         audioPauseGuardRef.current = true;
         element.pause();
