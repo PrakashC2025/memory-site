@@ -3001,6 +3001,14 @@ const buildDriveAudioUrl = (song: DriveAudioFile, token: string) =>
 
 const FULLSCREEN_CONTROLS_HIDE_DELAY = 3600;
 
+const formatStoryTime = (seconds: number) => {
+  const safeSeconds = Math.max(0, Math.round(seconds));
+  if (safeSeconds < 60) return `${safeSeconds}s`;
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = String(safeSeconds % 60).padStart(2, '0');
+  return `${minutes}:${remainingSeconds}`;
+};
+
 const shouldStartCinemaView = () => {
   if (typeof window === 'undefined') return false;
   return isLegacyTvBrowser() || (window.innerWidth <= 900 && window.innerWidth > window.innerHeight);
@@ -4503,7 +4511,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           <button type="button" onClick={toggleFullscreen} aria-label="Exit fullscreen"><Minimize2 size={19} /></button>
           {onClose && <button type="button" onClick={onClose} aria-label="Exit story mode" title="Exit story mode"><X size={19} /></button>}
         </div>
-        <div className="memory-reel-progress-text">{loading ? 'Preparing your memories…' : `${Math.round(progress.progress)}s / ${Math.round(progress.total)}s`}</div>
+        <div className="memory-reel-progress-text">{loading ? 'Preparing your memories…' : `${formatStoryTime(progress.progress)} / ${formatStoryTime(progress.total)}`}</div>
         <div className="memory-reel-editor">
           <input aria-label="Story title line" value={titleDraft.line || ''} onChange={event => setTitleDraft(current => ({ ...current, line: event.target.value }))} placeholder="Title line" />
           <input aria-label="Story big text" value={titleDraft.big || ''} onChange={event => setTitleDraft(current => ({ ...current, big: event.target.value }))} placeholder="Big text" />

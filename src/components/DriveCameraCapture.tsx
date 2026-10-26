@@ -3,16 +3,10 @@ import {
   ArrowLeft,
   Camera,
   Check,
-  Crop,
-  Edit3,
   Grid3X3,
-  Image as ImageIcon,
   Lightbulb,
   Loader2,
   RefreshCw,
-  RotateCcw,
-  RotateCw,
-  Share2,
   Sparkles,
   Trash2,
   X,
@@ -756,7 +750,10 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     <div className="memoriya-camera-overlay" role="dialog" aria-modal="true" aria-label="Drive camera">
       <section className="memoriya-camera-panel">
         <header>
-          <div><span className="memoriya-kicker"><Camera size={15} /> Mobile camera</span><h2>Capture a new memory</h2></div>
+          <div className="memoriya-camera-header-copy">
+            <button type="button" className="memoriya-camera-back" onClick={onClose} aria-label="Back from camera"><ArrowLeft size={18} /> <span>Back</span></button>
+            <div><span className="memoriya-kicker"><Camera size={15} /> Mobile camera</span><h2>Capture a new memory</h2></div>
+          </div>
           <button type="button" onClick={onClose} aria-label="Close camera"><X size={20} /></button>
         </header>
         <div className="memoriya-camera-viewfinder" onTouchStart={handlePinchStart} onTouchMove={handlePinchMove} onTouchEnd={handlePinchEnd} onTouchCancel={handlePinchEnd}>
@@ -790,12 +787,6 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
               <RefreshCw size={18} />
               <span aria-hidden="true">{facingMode === 'user' ? 'Rear' : 'Selfie'}</span>
             </button>
-            {previewUrl && <button type="button" onClick={() => setShowLastShot(value => !value)} aria-label={showLastShot ? 'Show live camera' : 'Show captured preview'}>
-              <ImageIcon size={17} />
-            </button>}
-            {previewUrl && <button type="button" onClick={() => { setEditMode(true); setEditFilter('natural'); setEditCrop('original'); setEditRotation(value => (value + 90) % 360); setReviewOpen(true); }} aria-label="Rotate captured photo">
-              <RotateCw size={17} />
-            </button>}
           </div>
           <div className="memoriya-camera-viewfinder-tools">
             <button type="button" onClick={() => setGridEnabled(value => !value)} className={gridEnabled ? 'is-active' : ''} aria-label="Toggle camera grid"><Grid3X3 size={16} /></button>
