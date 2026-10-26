@@ -159,6 +159,8 @@ interface ReelCard {
   lastZIndex?: string;
   lastOpacity?: string;
   lastTransform?: string;
+  lastImageFilter?: string;
+  lastImageRendering?: string;
   varsShot?: number;
 }
 
@@ -186,6 +188,22 @@ const smoothNoise = (time: number, seed: number) => {
   };
   return lerp(sample(index), sample(index + 1), eased);
 };
+
+// CSS cannot recover detail that is not present in the source file, but these
+// display grades make the selected frame look cleaner and more defined. Keep
+// them as compositor-friendly filters so Clarity can change immediately while
+// the story is playing.
+const clarityImageFilter = (clarity: MemoryReelClarity) => {
+  switch (clarity) {
+    case '8k': return 'contrast(1.24) saturate(1.16) brightness(1.035)';
+    case '4k': return 'contrast(1.18) saturate(1.12) brightness(1.025)';
+    case 'clear': return 'contrast(1.10) saturate(1.07) brightness(1.015)';
+    default: return 'none';
+  }
+};
+
+const clarityImageRendering = (clarity: MemoryReelClarity) =>
+  clarity === '4k' || clarity === '8k' ? '-webkit-optimize-contrast' : 'auto';
 const escapeHtml = (value: string) => String(value).replace(/[&<>\"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[character] || character));
 
 const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
@@ -428,6 +446,7 @@ export class MemoryReelController {
   private lastRenderRadius = 0;
   private paintCount = 0;
   private candidateDistances: number[] = [];
+  private renderedCardIndices = new Set<number>();
   private audio?: HTMLAudioElement;
   private audioElement?: HTMLAudioElement;
   private analysisAudio?: HTMLAudioElement;
@@ -486,6 +505,7 @@ export class MemoryReelController {
   // Counts full wall rebuilds. A live Drive change must stream cards in
   // without ever rebuilding (and therefore restarting) the current wall.
   private wallRebuilds = 0;
+  private readonly lowPowerSurface: boolean;
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
@@ -503,6 +523,13 @@ export class MemoryReelController {
       zoom: true,
       ...options,
     };
+    const coarsePointer = typeof window.matchMedia === 'function'
+      && window.matchMedia('(pointer: coarse)').matches;
+    const hardwareThreads = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 8 : 8;
+    // Screen-mirroring phones and older TV WebViews have a much smaller
+    // compositor budget. Keep the same template and camera path, but stream
+    // fewer cards at a time and paint the ambient layer less often.
+    this.lowPowerSurface = Boolean(this.options.legacyTv || (coarsePointer && (hardwareThreads <= 6 || window.innerWidth <= 720)));
     this.clarity = this.options.clarity || 'clear';
     this.zoomEnabled = this.options.zoom !== false;
     this.world = Object.assign(document.createElement('div'), { className: 'world' });
@@ -660,7 +687,10 @@ export class MemoryReelController {
       ? Math.min(this.cards.length, Math.max(0, this.lastRenderedShot + 1))
       : this.cards.length;
     // A live update only warms a small slice; a cold start paints a full wall.
-    const eagerBatch = this.pendingSources.splice(0, keepCurrentWall ? WALL_LIVE_BATCH : WALL_INITIAL_BATCH);
+    // Original batch policy: keepCurrentWall ? WALL_LIVE_BATCH : WALL_INITIAL_BATCH.
+    const eagerBatch = this.pendingSources.splice(0, keepCurrentWall
+      ? (this.lowPowerSurface ? 8 : WALL_LIVE_BATCH)
+      : (this.lowPowerSurface ? 48 : WALL_INITIAL_BATCH));
     const pendingItems = eagerBatch;
     if (!pendingItems.length) {
       // Nothing new to load (for example a deletion-only update). Keep the
@@ -754,7 +784,7 @@ export class MemoryReelController {
    */
   private async loadNextBatch() {
     if (this.loadingNextBatch || !this.pendingSources.length || this.destroyed) return;
-    const batch = this.takeQueuedBatch(WALL_NEXT_BATCH);
+    const batch = this.takeQueuedBatch(this.lowPowerSurface ? 24 : WALL_NEXT_BATCH);
     if (!batch.length) {
       // Everything queued is already loaded or broken: stop retrying.
       this.pendingSources = this.pendingSources.filter(item =>
@@ -781,7 +811,7 @@ export class MemoryReelController {
           // The source id is authoritative: `load()` does not know it yet.
           const resolved = { ...media, id: item.id };
           this.loadedMedia.set(item.id, resolved);
-          this.appendMediaCard(resolved);
+          this.appendMediaCard(resolved, this.cards.length, false);
           // Give layout, input, and painting a chance between frames.
           await new Promise<void>(resolve => window.setTimeout(resolve, 0));
         }
@@ -980,6 +1010,7 @@ export class MemoryReelController {
     this.cards.forEach(card => card.video?.pause());
     this.world.innerHTML = '';
     this.cards = [];
+    this.renderedCardIndices.clear();
     const wallCards = loaded.map((media, index) => {
       const row = Math.floor(index / columns);
       const column = index % columns;
@@ -1030,7 +1061,7 @@ export class MemoryReelController {
     if (wasPlaying) this.play();
   }
 
-  private appendMediaCard(media: LoadedMedia, insertIndex = this.cards.length) {
+  private appendMediaCard(media: LoadedMedia, insertIndex = this.cards.length, renderNow = true) {
     if (this.cards.some(card => card.id === media.id)) return;
     const index = this.cards.length;
     const columns = Math.max(3, Math.ceil(Math.sqrt((index + 1) * 1.25)));
@@ -1062,6 +1093,17 @@ export class MemoryReelController {
     const insertedAt = Math.min(insertIndex, this.cards.length);
     const reelCard: ReelCard = { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video };
     this.cards.splice(insertedAt, 0, reelCard);
+    this.renderedCardIndices.clear();
+    if (!renderNow) {
+      // The batch will be painted once it is complete. Keep newly downloaded
+      // cards out of the compositor until then so a large Drive import never
+      // flashes half-positioned frames between animation frames.
+      card.dataset.reelHidden = 'true';
+      card.style.opacity = '0';
+      card.style.pointerEvents = 'none';
+      this.gridDirty = true;
+      return;
+    }
     this.recalculateTotal();
     this.gridDirty = true;
     // Style only the card that was just inserted. Resetting lastLayoutShot
@@ -1095,6 +1137,7 @@ export class MemoryReelController {
       if (nextIndex >= 0) this.elapsed = Math.min(this.total, this.shotStartAt(nextIndex) + activeOffset);
     }
     this.lastLayoutShot = -1;
+    this.renderedCardIndices.clear();
     this.render(this.elapsed);
   }
 
@@ -1416,7 +1459,9 @@ export class MemoryReelController {
     this.effectsCanvas.style.width = `${width}px`;
     this.effectsCanvas.style.height = `${height}px`;
     if (this.effectsContext) this.effectsContext.setTransform(this.effectsDpr, 0, 0, this.effectsDpr, 0, 0);
-    const particleCount = width < 640 ? 60 : Math.min(96, Math.max(60, Math.round(width / 12)));
+    const particleCount = this.lowPowerSurface
+      ? 28
+      : width < 640 ? 60 : Math.min(96, Math.max(60, Math.round(width / 12)));
     while (this.dustParticles.length < particleCount) {
       this.dustParticles.push({
         x: Math.random() * this.dustWidth,
@@ -1873,7 +1918,14 @@ export class MemoryReelController {
       this.elapsed += Math.min(0.12, Math.max(0, (now - this.last) / 1000));
       this.last = now;
       if (this.elapsed >= this.total) {
-        if (this.options.loop) this.elapsed = 0;
+        if (this.pendingSources.length) {
+          // Never finish or loop the visible subset while the rest of a large
+          // Drive folder is still queued. Hold the last loaded frame while a
+          // background batch arrives, then continue with the newly extended
+          // timeline. This guarantees a 300+ photo folder is not truncated.
+          if (!this.loadingNextBatch) void this.loadNextBatch();
+          this.elapsed = Math.max(0, this.total - 0.01);
+        } else if (this.options.loop) this.elapsed = 0;
         else {
           this.elapsed = this.total;
           this.render(this.elapsed);
@@ -2155,7 +2207,8 @@ export class MemoryReelController {
     // second halves full-screen canvas fill on phones with no visible change,
     // while the cards above it keep painting every frame.
     const effectsNow = performance.now();
-    if (effectsNow - this.lastEffectsPaintAt >= 1000 / 30) {
+    if (effectsNow - this.lastEffectsPaintAt >= 1000 / 30
+      && (!this.lowPowerSurface || effectsNow - this.lastEffectsPaintAt >= 1000 / 20)) {
       this.lastEffectsPaintAt = effectsNow;
       this.renderEffects(audioMetrics, time);
     }
@@ -2202,16 +2255,12 @@ export class MemoryReelController {
     }
     this.renderDust(audioMetrics, audioActive);
 
-    let shot = 0;
-    let local = Math.max(0, time);
-    for (let index = 0; index < count; index += 1) {
-      const step = this.cardHold(this.cards[index]) + move;
-      if (local < step || index === count - 1) {
-        shot = index;
-        break;
-      }
-      local -= step;
-    }
+    // The cumulative timeline is rebuilt only when the card list changes, so
+    // use its binary search here instead of walking every card on every frame.
+    // This is the other large-library hitch: 1000 cards meant 1000 additions
+    // per animation frame before this path was indexed.
+    let shot = this.shotIndexAt(time);
+    const local = Math.max(0, time - this.shotStartAt(shot));
     const shotHold = this.cardHold(this.cards[shot]);
     let from = this.target(shot);
     let to = from;
@@ -2221,7 +2270,16 @@ export class MemoryReelController {
     if (this.lastLayoutShot !== shot) {
       this.lastLayoutShot = shot;
       this.el.style.setProperty('--reel-active', String(shot));
-      this.cards.forEach((card, index) => {
+      // Hidden orbit cards are removed or opacity-zero, so their active and
+      // neighbour classes do not need to be touched at every shot boundary.
+      // Keep the full pass only for the legacy/reduced-motion paths that
+      // intentionally style every card.
+      const layoutIndices = this.options.legacyTv || this.options.reducedMotion
+        ? new Set(this.cards.map((_, index) => index))
+        : new Set([...this.renderedCardIndices, shot]);
+      layoutIndices.forEach(index => {
+        const card = this.cards[index];
+        if (!card) return;
         const relative = index - shot;
         card.card.classList.toggle('is-active', index === shot);
         card.card.classList.toggle('is-neighbor', Math.abs(relative) > 0 && Math.abs(relative) <= 2);
@@ -2450,31 +2508,44 @@ export class MemoryReelController {
         nearestOrbitCards = this.cachedNearestOrbitCards;
         distances = this.distanceByCard;
       }
-      this.cards.forEach((card, index) => {
+      // Only cards in this small visible set receive compositor/style work.
+      // The previous implementation still visited every loaded card here,
+      // which made a 300-1000 photo Drive folder feel like it was hanging.
+      const visibleIndices = new Set<number>(
+        nearestOrbitCards || this.candidates,
+      );
+      visibleIndices.add(shot);
+      visibleIndices.add(focusedIndex);
+      this.renderedCardIndices.forEach(index => {
+        if (visibleIndices.has(index)) return;
+        const card = this.cards[index];
+        if (!card) return;
+        if (this.options.template === 'orbit') {
+          card.card.remove();
+        } else if (card.card.dataset.reelHidden !== 'true') {
+          card.card.dataset.reelHidden = 'true';
+          card.card.style.opacity = '0';
+          card.card.style.filter = 'none';
+          // Values on a hidden card are no longer authoritative.
+          card.lastOpacity = undefined;
+          card.lastFilter = undefined;
+        }
+        if (card.video && !card.video.paused) card.video.pause();
+      });
+      this.renderedCardIndices = visibleIndices;
+      visibleIndices.forEach(index => {
+        const card = this.cards[index];
+        if (!card) return;
         const isActive = index === shot;
         // Cards the grid never collected are outside the search radius.
         const distance = this.candidateMask[index] ? distances[index] : Infinity;
-        const shouldRender = isActive || index === focusedIndex || (nearestOrbitCards ? nearestOrbitCards.has(index) : distance <= renderRadius);
-        if (!shouldRender) {
-          if (this.options.template === 'orbit') {
-            card.card.remove();
-          } else if (card.card.dataset.reelHidden !== 'true') {
-            card.card.dataset.reelHidden = 'true';
-            card.card.style.opacity = '0';
-            card.card.style.filter = 'none';
-            // Values on a hidden card are no longer authoritative.
-            card.lastOpacity = undefined;
-            card.lastFilter = undefined;
-          }
-          if (card.video && !card.video.paused) card.video.pause();
-          return;
-        }
         if (this.options.template === 'orbit' && card.card.parentElement !== this.world) this.world.appendChild(card.card);
         // Restore the position variables for a card that was culled (or not
         // yet visible) during the shot-change pass. One integer compare per
         // painted card keeps this free on every other frame.
         if (card.varsShot !== shot) this.applyReelCardVars(card, index, shot);
         delete card.card.dataset.reelHidden;
+        card.card.style.pointerEvents = '';
         const clarityBlurScale = this.clarity === 'natural' ? 1 : this.clarity === 'clear' ? 0.35 : 0;
         const blur = this.options.legacyTv || isActive
           ? 0
@@ -2560,9 +2631,24 @@ export class MemoryReelController {
           if (card.lastFilter !== 'none') {
             card.lastFilter = 'none';
             card.card.style.setProperty('filter', 'none', 'important');
-            card.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m')?.style.setProperty('filter', 'none', 'important');
+          }
+          const activeMedia = card.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
+          const activeImageFilter = clarityImageFilter(this.clarity);
+          if (activeMedia && card.lastImageFilter !== activeImageFilter) {
+            card.lastImageFilter = activeImageFilter;
+            activeMedia.style.setProperty('filter', activeImageFilter, 'important');
+          }
+          const activeImageRendering = clarityImageRendering(this.clarity);
+          if (activeMedia && card.lastImageRendering !== activeImageRendering) {
+            card.lastImageRendering = activeImageRendering;
+            activeMedia.style.setProperty('image-rendering', activeImageRendering);
           }
         } else {
+          const inactiveMedia = card.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
+          if (inactiveMedia && card.lastImageFilter !== undefined) {
+            card.lastImageFilter = undefined;
+            inactiveMedia.style.removeProperty('filter');
+          }
           // Quantise to half-pixel steps. Blur values differ by well under a
           // pixel at these radii, but every distinct string forces the browser
           // to re-rasterise that layer, so coarser steps cut the work without
@@ -2826,6 +2912,14 @@ type LegacyFullscreenElement = HTMLElement & {
 
 const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, template: initialTemplate = 'orbit', autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onDriveReconnect, onClose }) => {
   const visualMemories = useMemo(() => memories.filter(isVisualMemory), [memories]);
+  const storyPhotoCount = useMemo(
+    () => visualMemories.filter(memory => !isVideoMemory(memory)).length,
+    [visualMemories],
+  );
+  const storyVideoCount = useMemo(
+    () => visualMemories.filter(isVideoMemory).length,
+    [visualMemories],
+  );
   const storedStoryMusic = useMemo(() => readStoredStoryMusic(driveFolderId || ''), [driveFolderId]);
   const storedStoryTitle = useMemo(
     () => readStoredStoryTitle(driveFolderId || '', title),
@@ -2873,6 +2967,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [driveUploadLoading, setDriveUploadLoading] = useState(false);
   const [musicError, setMusicError] = useState('');
   const [audioLoading, setAudioLoading] = useState(false);
+  const [driveCacheProgress, setDriveCacheProgress] = useState({ completed: 0, total: 0 });
   const [trackLoadingId, setTrackLoadingId] = useState('');
   const [musicName, setMusicName] = useState('');
   const [musicQueue, setMusicQueue] = useState<MusicQueueItem[]>(() => audio ? [{ id: 'initial-audio', src: audio, label: 'Background music' }] : []);
@@ -2901,6 +2996,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   loopEnabledRef.current = loopEnabled;
   const audioPauseGuardRef = useRef(false);
   const musicHydratedRef = useRef(false);
+  const screenHiddenRef = useRef(false);
+  const driveCacheTasksRef = useRef(new Map<string, Promise<void>>());
   moreConfigRef.current = { hasMore, loadingMore, onNeedMore };
   const allDriveSongs = useMemo(() => [...driveSongs, ...secondaryDriveSongs], [driveSongs, secondaryDriveSongs]);
 
@@ -3099,7 +3196,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               directDriveSource = buildDriveAudioUrl(song, driveAccessToken);
             }
           }
-          if ((!blob && !directDriveSource) || !active) return null;
+          // Keep uncached Drive entries in the queue too. They can finish
+          // downloading when the connection returns instead of disappearing
+          // from the playlist during a temporary offline period.
+          if ((!blob && !directDriveSource && !savedTrack.driveFileId) || !active) return null;
           const src = blob ? URL.createObjectURL(blob) : directDriveSource;
           if (blob) audioObjectUrlsRef.current.push(src);
           return { ...savedTrack, src } satisfies MusicQueueItem;
@@ -3517,6 +3617,48 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     }
   };
 
+  const warmDriveAudioCacheOnce = (song: DriveAudioFile, cacheKey: string, token: string) => {
+    const existing = driveCacheTasksRef.current.get(cacheKey);
+    if (existing) return existing;
+    const task = warmDriveAudioCache(song, cacheKey, token);
+    const trackedTask = task.finally(() => {
+      if (driveCacheTasksRef.current.get(cacheKey) === trackedTask) driveCacheTasksRef.current.delete(cacheKey);
+    });
+    driveCacheTasksRef.current.set(cacheKey, trackedTask);
+    return trackedTask;
+  };
+
+  const warmDriveAudioCacheSequentially = async (songs: DriveAudioFile[], token: string) => {
+    setDriveCacheProgress({ completed: 0, total: songs.length });
+    for (let index = 0; index < songs.length; index += 1) {
+      await warmDriveAudioCacheOnce(songs[index], driveAudioCacheKey(songs[index]), token);
+      setDriveCacheProgress({ completed: index + 1, total: songs.length });
+    }
+  };
+
+  const queueDriveSongs = (songs: DriveAudioFile[], token: string, account: 'primary' | 'secondary' = 'primary') => {
+    const existingIds = new Set(musicQueueRef.current.map(track => track.driveFileId).filter(Boolean));
+    const additions = songs
+      .filter(song => !existingIds.has(song.id))
+      .map(song => ({
+        id: `drive-audio-${account}-${song.id}`,
+        src: token ? driveAudioUrl(song, token) : '',
+        label: song.name,
+        source: 'drive' as const,
+        driveFileId: song.id,
+        cacheKey: driveAudioCacheKey(song),
+        driveAccount: account,
+      }));
+    if (!additions.length) return;
+    const nextQueue = [...musicQueueRef.current, ...additions];
+    musicQueueRef.current = nextQueue;
+    setMusicQueue(nextQueue);
+    if (!currentMusicIdRef.current) {
+      setCurrentMusic(additions[0].id);
+      setMusicName(additions[0].label);
+    }
+  };
+
   const reconnectDriveForPlayback = async () => {
     const token = onDriveReconnect
       ? await onDriveReconnect()
@@ -3549,6 +3691,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     let token = track.driveAccount === 'secondary'
       ? secondaryDriveAccessTokenRef.current
       : driveAccessTokenRef.current || driveAccessToken;
+    await driveCacheTasksRef.current.get(cacheKey);
     const cached = await readCachedStoryMedia(cacheKey);
     if (!token && !cached) throw new Error('This song is not cached on this device. Reconnect Google Drive once to download it.');
     try {
@@ -3699,14 +3842,16 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         const songs = await googleDriveService.listAudioFiles(token, musicDriveFolderId);
         setDriveSongs(songs);
         setDriveSongsLoaded(true);
-        await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), token)));
+        queueDriveSongs(songs, token);
+        await warmDriveAudioCacheSequentially(songs, token);
       } catch (error) {
         if (!isDriveAuthorizationError(error)) throw error;
         token = await reconnectDriveForPlayback();
         const songs = await googleDriveService.listAudioFiles(token, musicDriveFolderId);
         setDriveSongs(songs);
         setDriveSongsLoaded(true);
-        await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), token)));
+        queueDriveSongs(songs, token);
+        await warmDriveAudioCacheSequentially(songs, token);
       }
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'Drive songs could not be loaded.');
@@ -3730,7 +3875,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       secondaryDriveAccessTokenRef.current = token;
       const songs = await googleDriveService.listAudioFiles(token, '');
       setSecondaryDriveSongs(songs);
-      await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), token)));
+      queueDriveSongs(songs, token, 'secondary');
+      await warmDriveAudioCacheSequentially(songs, token);
       setMusicName(songs.length ? `${songs.length} songs from the second Drive` : 'No audio files found in the second Drive');
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'The second Google Drive could not be connected.');
@@ -3750,7 +3896,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         const songs = await googleDriveService.listAudioFiles(driveAccessTokenRef.current || driveAccessToken, musicDriveFolderId);
         if (!active) return;
         setDriveSongs(songs);
-        await Promise.all(songs.map(song => warmDriveAudioCache(song, driveAudioCacheKey(song), driveAccessTokenRef.current || driveAccessToken)));
+        queueDriveSongs(songs, driveAccessTokenRef.current || driveAccessToken);
+        await warmDriveAudioCacheSequentially(songs, driveAccessTokenRef.current || driveAccessToken);
       } catch {
         // Keep the last song list and cached playback available while offline.
       } finally {
@@ -3803,8 +3950,13 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     audioPauseGuardRef.current = false;
     setAudioPlaying(false);
     setMusicName(song.name);
-    setMusicQueue(current => [selectedTrack, ...current.filter(item => item.driveFileId !== song.id && item.id !== trackId)]);
-    if (token) void warmDriveAudioCache(song, cacheKey, token);
+    const nextQueue = [selectedTrack, ...musicQueueRef.current.filter(item => item.driveFileId !== song.id && item.id !== trackId)];
+    musicQueueRef.current = nextQueue;
+    setMusicQueue(nextQueue);
+    setCurrentMusic(selectedTrack.id);
+    audioManuallyStoppedRef.current = false;
+    void playStoryAudio(true);
+    if (token) void warmDriveAudioCacheOnce(song, cacheKey, token);
   };
 
   const uploadSongsToDrive = async (files: FileList | File[]) => {
@@ -3903,8 +4055,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const playStoryAudio = async (fromUserGesture = false) => {
     const element = audioPlayerRef.current;
     const sourceTrack = musicQueue.find(track => track.id === currentMusicIdRef.current) || musicQueue[0];
-    const source = sourceTrack?.src;
-    if (!element || !source || audioManuallyStoppedRef.current) return false;
+    const source = sourceTrack?.src || '';
+    if (!element || (!source && sourceTrack?.source !== 'drive') || audioManuallyStoppedRef.current) return false;
     failedMusicIdsRef.current.delete(sourceTrack.id);
     setCurrentMusic(sourceTrack.id);
     setAudioLoading(true);
@@ -3963,6 +4115,55 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       setAudioLoading(false);
     }
   };
+
+  useEffect(() => {
+    let active = true;
+    const recoverMusicAfterScreenReturn = async () => {
+      if (document.hidden) {
+        screenHiddenRef.current = true;
+        persistMusicPlayback(Boolean(audioPlayerRef.current && !audioPlayerRef.current.paused), true);
+        return;
+      }
+      screenHiddenRef.current = false;
+      const element = audioPlayerRef.current;
+      const track = musicQueueRef.current.find(item => item.id === currentMusicIdRef.current) || musicQueueRef.current[0];
+      const shouldResume = Boolean(track && !audioManuallyStoppedRef.current && (
+        (element && !element.paused) || storedMusicPlaybackRef.current?.wasPlaying
+      ));
+      if (!active || !track || !shouldResume) return;
+
+      if (track.source === 'drive' && navigator.onLine) {
+        try {
+          const refreshedToken = await googleDriveService.refreshAccessToken(undefined, true);
+          if (refreshedToken) {
+            driveAccessTokenRef.current = refreshedToken;
+            saveDriveAccessToken(refreshedToken);
+          }
+        } catch {
+          // The local audio cache remains usable while offline or when silent
+          // Google re-authentication is unavailable in this browser.
+        }
+      }
+      if (!active) return;
+      pendingMusicResumeRef.current = {
+        trackId: track.id,
+        currentTime: Number.isFinite(element?.currentTime) ? Math.max(0, element?.currentTime || 0) : storedMusicPlaybackRef.current?.currentTime || 0,
+      };
+      audioManuallyStoppedRef.current = false;
+      void playStoryAudio(false);
+    };
+    const onVisibilityChange = () => { void recoverMusicAfterScreenReturn(); };
+    const onOnline = () => { void recoverMusicAfterScreenReturn(); };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pageshow', onVisibilityChange);
+    window.addEventListener('online', onOnline);
+    return () => {
+      active = false;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pageshow', onVisibilityChange);
+      window.removeEventListener('online', onOnline);
+    };
+  }, []);
 
   const toggleStoryPlayback = () => {
     const controller = controllerRef.current;
@@ -4090,7 +4291,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           <button type="button" className={zoomEnabled ? 'is-active' : ''} onClick={() => setZoomEnabled(value => !value)} aria-pressed={zoomEnabled}>Zoom {zoomEnabled ? 'On' : 'Off'}</button>
           <button type="button" className={clarityOpen ? 'is-active' : ''} aria-expanded={clarityOpen} onClick={openClarity}><WandSparkles size={16} /> Clarity</button>
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
-            <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+            <div className="memory-reel-folder-summary">
+              <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+              <span className="memory-reel-folder-count" aria-live="polite">{storyPhotoCount} photos · {storyVideoCount} videos</span>
+            </div>
           )}
           <button type="button" onClick={() => setLoopEnabled(value => !value)} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
           {onClose && <button type="button" className="memory-reel-close" onClick={onClose}><X size={17} /> Close</button>}
@@ -4118,7 +4322,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           onVolumeChange={() => setAudioMuted(Boolean(audioPlayerRef.current?.muted))}
           onPause={() => {
             setAudioPlaying(false);
-            if (!audioPauseGuardRef.current) {
+            if (!audioPauseGuardRef.current && !screenHiddenRef.current) {
               audioManuallyStoppedRef.current = true;
               persistMusicPlayback(false, true);
             }
@@ -4193,6 +4397,13 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               <button type="button" onClick={() => void connectAdditionalMusicDrive()} disabled={secondaryDriveSongsLoading}><HardDrive size={15} /> {secondaryDriveSongsLoading ? 'Connecting second Drive...' : 'Add music from another Drive'}</button>
             </div>
             <p className="memory-reel-music-note">Drive songs download locally for offline playback. The second Drive option asks you to choose another Gmail account and is used only for Story Mode music.</p>
+            {driveCacheProgress.total > 0 && (
+              <p className="memory-reel-music-note" aria-live="polite">
+                {driveCacheProgress.completed < driveCacheProgress.total
+                  ? `Saving Drive audio locally: ${driveCacheProgress.completed}/${driveCacheProgress.total}`
+                  : `Drive audio is ready offline: ${driveCacheProgress.total} song${driveCacheProgress.total === 1 ? '' : 's'}`}
+              </p>
+            )}
             {musicError && <div className="memory-reel-music-error" role="alert">
               <p>{musicError}</p>
               {onDriveReconnect && /authorization expired|access was denied|reconnect(?: google)? drive|drive audio could not play/i.test(musicError) && <button type="button" onClick={() => void onDriveReconnect()}>Reconnect Drive</button>}

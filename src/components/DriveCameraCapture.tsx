@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   Camera,
   Check,
   Crop,
@@ -29,7 +30,7 @@ interface ImageCaptureLike {
 interface Props {
   accessToken: string;
   initialFolderId?: string;
-  onUploaded: (file: DriveMediaFile) => void;
+  onUploaded: (file: DriveMediaFile, accessToken?: string) => void;
   onDeleted?: (fileId: string) => void;
   onClose: () => void;
 }
@@ -67,6 +68,15 @@ const CAMERA_FILTERS = {
 
 type CameraFilter = keyof typeof CAMERA_FILTERS;
 
+const CAMERA_QUALITY = {
+  standard: { label: 'Standard', css: 'none' },
+  auto: { label: 'Auto light', css: 'brightness(1.12) contrast(1.04) saturate(1.04)' },
+  bright: { label: 'Bright', css: 'brightness(1.2) contrast(1.05) saturate(1.06)' },
+  crisp: { label: 'Crisp', css: 'brightness(1.06) contrast(1.12) saturate(1.08)' },
+} as const;
+
+type CameraQuality = keyof typeof CAMERA_QUALITY;
+
 const fileName = () => `memoriya-${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
 
 const blobToFile = (blob: Blob) => new File([blob], fileName(), { type: 'image/jpeg' });
@@ -102,6 +112,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const processUploadQueueRef = useRef<(() => void) | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [filter, setFilter] = useState<CameraFilter>('natural');
+  const [quality, setQuality] = useState<CameraQuality>('auto');
   const [autoEnhance, setAutoEnhance] = useState(false);
   const [previewUrl, setPreviewUrl] = useState('');
   const [capturedPhoto, setCapturedPhoto] = useState<CapturedPhoto | null>(null);
@@ -203,7 +214,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       }
       setCameraReady(false);
       setError('');
-      streamRef.current?.getTracks().forEach(track => track.stop());
+      setStatus(facingMode === 'user' ? 'Starting selfie camera...' : 'Starting rear camera...');
+      const previousStream = streamRef.current;
+      let nextStream: MediaStream | null = null;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
@@ -214,15 +227,20 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
             frameRate: { ideal: 30, max: 60 },
           },
         });
+        nextStream = stream;
         if (cancelled) {
           stream.getTracks().forEach(track => track.stop());
           return;
         }
-        streamRef.current = stream;
         const video = videoRef.current;
-        if (!video) return;
+        if (!video) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+        streamRef.current = stream;
         video.srcObject = stream;
         await video.play();
+        previousStream?.getTracks().forEach(track => track.stop());
         const track = stream.getVideoTracks()[0];
         trackRef.current = track;
         const capabilities = track.getCapabilities() as MediaTrackCapabilities & {
@@ -246,16 +264,27 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         setCameraReady(true);
         setStatus('Ready — tap the shutter to save a photo');
       } catch (captureError) {
-        if (!cancelled) setError(captureError instanceof Error ? captureError.message : 'Camera permission was denied.');
+        if (cancelled) {
+          if (nextStream && nextStream !== previousStream) nextStream.getTracks().forEach(track => track.stop());
+          return;
+        }
+        if (!cancelled) {
+          if (nextStream && nextStream !== previousStream) nextStream.getTracks().forEach(track => track.stop());
+          if (previousStream && videoRef.current) {
+            streamRef.current = previousStream;
+            videoRef.current.srcObject = previousStream;
+            await videoRef.current.play().catch(() => undefined);
+            setCameraReady(true);
+            setError('Could not switch camera. The current camera is still active.');
+          } else {
+            setError(captureError instanceof Error ? captureError.message : 'Camera permission was denied.');
+          }
+        }
       }
     };
     void start();
     return () => {
       cancelled = true;
-      streamRef.current?.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-      trackRef.current = null;
-      setTorchEnabled(false);
       if (zoomApplyFrameRef.current !== null) cancelAnimationFrame(zoomApplyFrameRef.current);
       zoomApplyFrameRef.current = null;
     };
@@ -268,6 +297,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     capturedGalleryRef.current.forEach(photo => URL.revokeObjectURL(photo.url));
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     if (originalPreviewUrlRef.current) URL.revokeObjectURL(originalPreviewUrlRef.current);
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current = null;
+    trackRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -342,11 +374,11 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     canvas.height = video.videoHeight;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Could not prepare the photo canvas.');
-    context.filter = 'none';
-    if (facingMode === 'user') {
-      context.translate(canvas.width, 0);
-      context.scale(-1, 1);
-    }
+    // Mirror only the live selfie preview. Saved files stay in normal
+    // orientation so faces and text are not reversed.
+    context.filter = [CAMERA_FILTERS[filter].css, CAMERA_QUALITY[quality].css, autoEnhance ? 'brightness(1.08) contrast(1.06) saturate(1.08)' : 'none']
+      .filter(value => value !== 'none')
+      .join(' ') || 'none';
     const captureZoom = zoomRef.current;
     const sourceWidth = video.videoWidth / (hardwareZoomRef.current ? 1 : captureZoom);
     const sourceHeight = video.videoHeight / (hardwareZoomRef.current ? 1 : captureZoom);
@@ -387,7 +419,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         writePendingCameraUploads(readPendingCameraUploads().filter(job => job.id !== queueId));
       }
       await writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
-      onUploaded(uploaded);
+      onUploaded(uploaded, token);
       setStatus('Photo saved locally and synced to Drive.');
       return true;
     } catch (uploadError) {
@@ -607,7 +639,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           nextUploadedFile = { ...updated, thumbnailUrl: updated.thumbnailUrl || uploadedFile.thumbnailUrl };
         }
         await writeCachedStoryMedia(uploadedFile.id, localFile, nextUploadedFile.mimeType || localFile.type);
-        onUploaded(nextUploadedFile);
+        onUploaded(nextUploadedFile, token);
       } else {
         await removeQueuedUpload(capturedPhoto.queueId);
         nextQueueId = resumeUpload(localFile);
@@ -706,7 +738,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           <button type="button" onClick={onClose} aria-label="Close camera"><X size={20} /></button>
         </header>
         <div className="memoriya-camera-viewfinder" onTouchStart={handlePinchStart} onTouchMove={handlePinchMove} onTouchEnd={handlePinchEnd} onTouchCancel={handlePinchEnd}>
-          <video ref={videoRef} muted playsInline autoPlay style={{ filter: CAMERA_FILTERS[filter].css, transform: `${facingMode === 'user' ? 'scaleX(-1)' : ''}${!hardwareZoomRef.current ? ` scale(${zoom})` : ''}`.trim() || undefined }} />
+          <video
+            ref={videoRef}
+            muted
+            playsInline
+            autoPlay
+            style={{
+              filter: [CAMERA_FILTERS[filter].css, CAMERA_QUALITY[quality].css, autoEnhance ? 'brightness(1.08) contrast(1.06) saturate(1.08)' : 'none'].filter(value => value !== 'none').join(' ') || 'none',
+              transform: [facingMode === 'user' ? 'scaleX(-1)' : '', !hardwareZoomRef.current ? `scale(${zoom})` : ''].filter(Boolean).join(' ') || undefined,
+            }}
+          />
           {!cameraReady && <div className="memoriya-camera-status"><Loader2 className="memoriya-spin-icon" size={28} /><span>{error || status}</span></div>}
           {previewUrl && showLastShot && (
             <button type="button" className="memoriya-camera-last-shot-button" onClick={openReview} aria-label="Review last captured photo">
@@ -716,8 +757,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           )}
           {gridEnabled && <div className="memoriya-camera-grid" aria-hidden="true" />}
           <div className="memoriya-camera-corner-tools">
-            <button type="button" className="memoriya-camera-switch-button" onClick={() => setFacingMode(value => value === 'environment' ? 'user' : 'environment')} aria-label="Switch camera">
+            <button
+              type="button"
+              className="memoriya-camera-switch-button"
+              onClick={() => setFacingMode(value => value === 'environment' ? 'user' : 'environment')}
+              aria-label={facingMode === 'user' ? 'Switch to rear camera' : 'Switch to selfie camera'}
+              aria-pressed={facingMode === 'user'}
+              title={facingMode === 'user' ? 'Switch to rear camera' : 'Switch to selfie camera'}
+            >
               <RefreshCw size={18} />
+              <span aria-hidden="true">{facingMode === 'user' ? 'Rear' : 'Selfie'}</span>
             </button>
             {previewUrl && <button type="button" onClick={() => setShowLastShot(value => !value)} aria-label={showLastShot ? 'Show live camera' : 'Show captured preview'}>
               <ImageIcon size={17} />
@@ -760,6 +809,11 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         </div>
         <div className="memoriya-camera-settings">
           <button type="button" onClick={() => setAutoEnhance(value => !value)} className={autoEnhance ? 'is-active' : ''} aria-pressed={autoEnhance}><Sparkles size={15} /> {autoEnhance ? 'Enhance on' : 'Enhance off'}</button>
+          <label className="memoriya-camera-quality">Quality
+            <select value={quality} onChange={event => setQuality(event.target.value as CameraQuality)}>
+              {Object.entries(CAMERA_QUALITY).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}
+            </select>
+          </label>
         </div>
         <label className="memoriya-camera-destination">Save to Drive folder
           <select value={folderId} onChange={event => setFolderId(event.target.value)}>
@@ -773,12 +827,30 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         {reviewOpen && capturedPhoto && (
           <div className="memoriya-camera-review" role="dialog" aria-label="Review captured photo">
             <div className="memoriya-camera-review-header">
-              <div><span className="memoriya-kicker">Memory review</span><strong>Keep this moment?</strong></div>
+              <div className="memoriya-camera-review-back-row">
+                <button type="button" className="memoriya-camera-review-back" onClick={closeReview} aria-label="Back to camera preview"><ArrowLeft size={17} /> Back</button>
+                <div><span className="memoriya-kicker">Memory review</span><strong>Keep this moment?</strong></div>
+              </div>
               <button type="button" onClick={closeReview} aria-label="Close photo review"><X size={19} /></button>
             </div>
             <div className={`memoriya-camera-review-preview is-crop-${editMode ? editCrop : 'original'}`}>
               <img src={capturedPhoto.url} alt="Captured memory preview" style={{ filter: CAMERA_FILTERS[editMode ? editFilter : 'natural'].css, transform: `rotate(${editRotation}deg)` }} />
             </div>
+            {capturedGallery.length > 1 && (
+              <div className="memoriya-camera-review-gallery" aria-label="All captured photos">
+                {capturedGallery.map((photo, index) => (
+                  <button
+                    type="button"
+                    key={photo.queueId}
+                    className={capturedPhoto.queueId === photo.queueId ? 'is-active' : ''}
+                    onClick={() => selectGalleryPhoto(photo)}
+                    aria-label={`Open captured photo ${index + 1}`}
+                  >
+                    <img src={photo.url} alt={`Captured memory ${index + 1}`} />
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="memoriya-camera-review-actions">
               <button type="button" onClick={() => void deletePhoto()} disabled={capturing}><Trash2 size={17} /> Delete</button>
               <button type="button" onClick={() => { setEditMode(true); setEditFilter('natural'); setEditCrop('original'); setEditRotation(value => (value + 90) % 360); }} disabled={capturing}><RotateCcw size={17} /> Rotate</button>

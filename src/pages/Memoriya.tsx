@@ -337,6 +337,25 @@ const Memoriya: React.FC = () => {
         // An expired token must not trigger a background OAuth popup. Stop this
         // poller until the user explicitly reconnects from the Drive button.
         if (isDriveAuthorizationError(syncError)) {
+          // A screen lock or a long offline period can outlive the short-lived
+          // access token. Refresh silently first so returning to the story does
+          // not make Drive look disconnected or require a manual reconnect.
+          try {
+            const refreshedToken = await googleDriveService.refreshAccessToken(undefined, true);
+            if (refreshedToken) {
+              driveAuthRequiredRef.current = false;
+              saveDriveAccessToken(refreshedToken);
+              setAccessToken(refreshedToken);
+              driveChangePageTokenRef.current = '';
+              setDriveChangePageToken('');
+              clearDriveChangePageToken();
+              if (active) setError('');
+              return;
+            }
+          } catch {
+            // Keep the cached Drive library visible and fall through to the
+            // reconnect message only when silent refresh is unavailable.
+          }
           driveAuthRequiredRef.current = true;
           saveDriveAuthRequired(true);
           // A changes cursor belongs to the previous authorized Drive
@@ -974,8 +993,10 @@ const Memoriya: React.FC = () => {
         <DriveCameraCapture
           accessToken={accessToken}
           initialFolderId={driveFolderId || 'drive-root'}
-          onUploaded={file => {
-            const added = appendDriveFiles([file], accessToken);
+          onUploaded={(file, uploadedToken) => {
+            const activeToken = uploadedToken || accessToken;
+            if (uploadedToken && uploadedToken !== accessToken) setAccessToken(uploadedToken);
+            const added = appendDriveFiles([file], activeToken);
             setMessage(added ? 'Photo uploaded to Drive and added to the live story.' : 'Photo uploaded to Drive. Sync again if it is not visible yet.');
           }}
           onDeleted={fileId => {
