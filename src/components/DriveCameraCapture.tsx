@@ -71,6 +71,8 @@ const CAMERA_QUALITY = {
 
 type CameraQuality = keyof typeof CAMERA_QUALITY;
 
+type CameraUploadStatus = 'queued' | 'uploading' | 'paused' | 'failed' | 'cancelled' | 'uploaded';
+
 const fileName = () => `memoriya-${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
 
 const blobToFile = (blob: Blob) => new File([blob], fileName(), { type: 'image/jpeg' });
@@ -113,6 +115,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const [capturedGallery, setCapturedGallery] = useState<CapturedPhoto[]>([]);
   const [uploadedFile, setUploadedFile] = useState<DriveMediaFile | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [landscape, setLandscape] = useState(() => typeof window !== 'undefined' && window.innerWidth > window.innerHeight);
   const [editMode, setEditMode] = useState(false);
   const [editFilter, setEditFilter] = useState<CameraFilter>('natural');
   const [editRotation, setEditRotation] = useState(0);
@@ -129,8 +132,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const [folderId, setFolderId] = useState(initialFolderId || 'drive-root');
   const [folders, setFolders] = useState<DriveFolderChoice[]>([]);
   const [pendingUploads, setPendingUploads] = useState(0);
+  const [uploadStatuses, setUploadStatuses] = useState<Record<string, CameraUploadStatus>>({});
+  const [uploadingQueueId, setUploadingQueueId] = useState('');
   const capturedGalleryRef = useRef<CapturedPhoto[]>([]);
+  const cancelledUploadIdsRef = useRef(new Set<string>());
   capturedGalleryRef.current = capturedGallery;
+
+  const updateUploadStatus = (queueId: string, status: CameraUploadStatus) => {
+    if (!queueId) return;
+    setUploadStatuses(current => ({ ...current, [queueId]: status }));
+  };
 
   const persistUploadQueue = () => {
     writePendingCameraUploads(uploadQueueRef.current.map(job => ({
@@ -149,6 +160,17 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     return () => {
       document.body.classList.remove('memoriya-camera-active');
       document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  useEffect(() => {
+    const updateOrientation = () => setLandscape(window.innerWidth > window.innerHeight);
+    updateOrientation();
+    window.addEventListener('resize', updateOrientation, { passive: true });
+    window.screen?.orientation?.addEventListener?.('change', updateOrientation);
+    return () => {
+      window.removeEventListener('resize', updateOrientation);
+      window.screen?.orientation?.removeEventListener?.('change', updateOrientation);
     };
   }, []);
 
@@ -186,6 +208,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       const currentIds = new Set(uploadQueueRef.current.map(job => job.id));
       const recoveredJobs = validItems.map(item => item.job).filter(job => !currentIds.has(job.id));
       uploadQueueRef.current = [...recoveredJobs, ...uploadQueueRef.current];
+      recoveredJobs.forEach(job => updateUploadStatus(job.id, 'queued'));
       if (validItems.length) {
         setCapturedGallery(current => [...validItems.map(item => item.photo), ...current]);
         setCapturedPhoto(current => current || validItems[validItems.length - 1].photo);
@@ -217,8 +240,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           audio: false,
           video: {
             facingMode: { ideal: facingMode },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            width: { ideal: landscape ? 1920 : 1080 },
+            height: { ideal: landscape ? 1080 : 1920 },
             frameRate: { ideal: 30, max: 60 },
           },
         });
@@ -283,7 +306,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       if (zoomApplyFrameRef.current !== null) cancelAnimationFrame(zoomApplyFrameRef.current);
       zoomApplyFrameRef.current = null;
     };
-  }, [facingMode]);
+  }, [facingMode, landscape]);
 
   useEffect(() => () => {
     // Do not abort a pending upload when the camera panel closes. The queue is
@@ -301,7 +324,11 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     const resumeWhenOnline = () => {
       if (navigator.onLine) processUploadQueueRef.current?.();
     };
-    const pauseWhenOffline = () => uploadAbortRef.current?.abort();
+    const pauseWhenOffline = () => {
+      if (uploadingQueueId) updateUploadStatus(uploadingQueueId, 'paused');
+      setStatus('Offline — current upload paused safely. It will resume when internet returns.');
+      uploadAbortRef.current?.abort();
+    };
     window.addEventListener('online', resumeWhenOnline);
     window.addEventListener('offline', pauseWhenOffline);
     const retryTimer = window.setInterval(resumeWhenOnline, 5000);
@@ -310,7 +337,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       window.removeEventListener('offline', pauseWhenOffline);
       window.clearInterval(retryTimer);
     };
-  }, []);
+  }, [uploadingQueueId]);
 
   const renderPhotoBlob = async (blob: Blob, nextFilter: CameraFilter, rotation = 0, crop: CameraCrop = 'original') => {
     if (nextFilter === 'natural' && rotation % 360 === 0 && crop === 'original') return blob;
@@ -365,8 +392,20 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) throw new Error('Camera is still preparing.');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const viewfinder = video.closest('.memoriya-camera-viewfinder');
+    const viewfinderAspect = viewfinder && viewfinder.clientHeight > 0
+      ? viewfinder.clientWidth / viewfinder.clientHeight
+      : video.videoWidth / video.videoHeight;
+    const zoomFactor = hardwareZoomRef.current ? 1 : Math.max(1, zoomRef.current);
+    let sourceWidth = video.videoWidth / zoomFactor;
+    let sourceHeight = video.videoHeight / zoomFactor;
+    const sourceAspect = sourceWidth / sourceHeight;
+    if (sourceAspect > viewfinderAspect) sourceWidth = sourceHeight * viewfinderAspect;
+    else sourceHeight = sourceWidth / viewfinderAspect;
+    const sourceX = (video.videoWidth - sourceWidth) / 2;
+    const sourceY = (video.videoHeight - sourceHeight) / 2;
+    canvas.width = Math.max(1, Math.round(sourceWidth));
+    canvas.height = Math.max(1, Math.round(sourceHeight));
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Could not prepare the photo canvas.');
     // Mirror only the live selfie preview. Saved files stay in normal
@@ -374,11 +413,6 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     context.filter = [CAMERA_FILTERS[filter].css, CAMERA_QUALITY[quality].css, autoEnhance ? 'brightness(1.08) contrast(1.06) saturate(1.08)' : 'none']
       .filter(value => value !== 'none')
       .join(' ') || 'none';
-    const captureZoom = zoomRef.current;
-    const sourceWidth = video.videoWidth / (hardwareZoomRef.current ? 1 : captureZoom);
-    const sourceHeight = video.videoHeight / (hardwareZoomRef.current ? 1 : captureZoom);
-    const sourceX = (video.videoWidth - sourceWidth) / 2;
-    const sourceY = (video.videoHeight - sourceHeight) / 2;
     context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
     return canvasToJpegBlob(canvas);
   };
@@ -392,6 +426,10 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     const controller = new AbortController();
     uploadAbortRef.current = controller;
     uploadInFlightRef.current = true;
+    if (queueId) {
+      setUploadingQueueId(queueId);
+      updateUploadStatus(queueId, 'uploading');
+    }
     setError('');
     setStatus('Uploading securely to Drive…');
     try {
@@ -406,6 +444,10 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         uploaded = await googleDriveService.uploadMedia(token, file, targetFolderId, controller.signal);
       }
       if (controller.signal.aborted) return false;
+      if (queueId) {
+        cancelledUploadIdsRef.current.delete(queueId);
+        updateUploadStatus(queueId, 'uploaded');
+      }
       if (latestQueueIdRef.current === queueId) setUploadedFile(uploaded);
       setCapturedGallery(current => current.map(photo => photo.queueId === queueId ? { ...photo, uploadedFile: uploaded } : photo));
       setCapturedPhoto(current => current?.queueId === queueId ? { ...current, uploadedFile: uploaded } : current);
@@ -429,6 +471,23 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       setStatus('Photo saved locally and synced to Drive.');
       return true;
     } catch (uploadError) {
+      const wasCancelled = Boolean(queueId && cancelledUploadIdsRef.current.has(queueId));
+      if (wasCancelled) {
+        updateUploadStatus(queueId, 'cancelled');
+        setStatus('Upload canceled. The photo is still safe on this device. Tap Retry to upload it again.');
+      } else if (controller.signal.aborted) {
+        if (queueId) updateUploadStatus(queueId, 'paused');
+        setStatus('Upload paused. The photo remains safe locally.');
+      } else if (!navigator.onLine || uploadError instanceof TypeError || /network|offline|taking too long|failed to fetch/i.test(uploadError instanceof Error ? uploadError.message : '')) {
+        if (queueId) updateUploadStatus(queueId, 'paused');
+        setStatus('Offline — upload queued safely until internet returns.');
+      } else {
+        if (queueId) updateUploadStatus(queueId, 'failed');
+        setError(uploadError instanceof Error ? `Drive upload failed: ${uploadError.message}` : 'Drive upload failed.');
+        setStatus('Photo is safe locally. Tap Retry to upload again.');
+      }
+      return false;
+      /*
       if (controller.signal.aborted) {
         setStatus(navigator.onLine ? 'Upload paused. The photo remains safe locally.' : 'Offline — upload queued safely until internet returns.');
       } else if (!navigator.onLine || uploadError instanceof TypeError || /network|offline|taking too long|failed to fetch/i.test(uploadError instanceof Error ? uploadError.message : '')) {
@@ -438,9 +497,11 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         setStatus('Photo is safe locally. Upload will retry automatically.');
       }
       return false;
+      */
     } finally {
       uploadInFlightRef.current = false;
       uploadAbortRef.current = null;
+      if (uploadingQueueId === queueId) setUploadingQueueId('');
       updatePendingCount();
     }
   };
@@ -480,6 +541,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     const id = `camera-pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     latestQueueIdRef.current = id;
     uploadQueueRef.current.push({ id, file, folderId });
+    updateUploadStatus(id, 'queued');
     persistUploadQueue();
     updatePendingCount();
     // Finish the local IndexedDB write before starting Drive. A sudden
@@ -495,7 +557,36 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     persistUploadQueue();
     await deleteCachedStoryMedia(queueId);
     if (latestQueueIdRef.current === queueId && uploadAbortRef.current) uploadAbortRef.current.abort();
+    setUploadStatuses(current => {
+      const next = { ...current };
+      delete next[queueId];
+      return next;
+    });
     updatePendingCount();
+  };
+
+  const cancelUpload = (photo: CapturedPhoto) => {
+    if (photo.uploadedFile) return;
+    cancelledUploadIdsRef.current.add(photo.queueId);
+    if (uploadingQueueId === photo.queueId) uploadAbortRef.current?.abort();
+    uploadQueueRef.current = uploadQueueRef.current.filter(job => job.id !== photo.queueId);
+    persistUploadQueue();
+    updateUploadStatus(photo.queueId, 'cancelled');
+    setStatus('Upload canceled. The photo is still safe on this device. Tap Retry to upload it again.');
+    updatePendingCount();
+  };
+
+  const retryUpload = (photo: CapturedPhoto) => {
+    if (photo.uploadedFile || uploadingQueueId === photo.queueId) return;
+    cancelledUploadIdsRef.current.delete(photo.queueId);
+    if (!uploadQueueRef.current.some(job => job.id === photo.queueId)) {
+      uploadQueueRef.current.push({ id: photo.queueId, file: photo.file, folderId });
+    }
+    persistUploadQueue();
+    updateUploadStatus(photo.queueId, 'queued');
+    setStatus('Upload queued again. The camera stays ready while it retries.');
+    updatePendingCount();
+    void processUploadQueue();
   };
 
   const pauseUpload = () => {
@@ -747,7 +838,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   };
 
   return (
-    <div className="memoriya-camera-overlay" role="dialog" aria-modal="true" aria-label="Drive camera">
+    <div className={`memoriya-camera-overlay${landscape ? ' is-landscape' : ' is-portrait'}`} role="dialog" aria-modal="true" aria-label="Drive camera">
       <section className="memoriya-camera-panel">
         <header>
           <div className="memoriya-camera-header-copy">
@@ -847,6 +938,24 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           <p className={`memoriya-camera-message ${error ? 'is-error' : ''}`}>{error || status}</p>
           {pendingUploads > 0 && <p className="memoriya-camera-saved"><Loader2 size={15} className="memoriya-spin-icon" /> Uploading securely in the background</p>}
           {uploadedFile && !reviewOpen && <p className="memoriya-camera-saved"><Check size={15} /> Latest photo is saved to Drive and your live story.</p>}
+          {capturedGallery.length > 0 && (
+            <div className="memoriya-camera-upload-list" aria-label="Camera upload status" aria-live="polite">
+              {capturedGallery.map((photo, index) => {
+                const status = photo.uploadedFile
+                  ? 'uploaded'
+                  : uploadStatuses[photo.queueId] || (uploadQueueRef.current.some(job => job.id === photo.queueId) ? 'queued' : 'paused');
+                const statusLabel = status === 'uploaded' ? 'Uploaded' : status === 'uploading' ? 'Uploading' : status === 'paused' ? 'Paused' : status === 'cancelled' ? 'Canceled' : status === 'failed' ? 'Failed' : 'Waiting';
+                return (
+                  <div className={`memoriya-camera-upload-item is-${status}`} key={photo.queueId}>
+                    <span><b>Photo {index + 1}</b><small>{statusLabel}</small></span>
+                    {status === 'uploaded' && <Check size={14} aria-label="Uploaded" />}
+                    {(status === 'queued' || status === 'uploading') && <button type="button" onClick={() => cancelUpload(photo)}>{status === 'uploading' ? 'Cancel' : 'Cancel'}</button>}
+                    {(status === 'paused' || status === 'failed' || status === 'cancelled') && <button type="button" onClick={() => retryUpload(photo)}><RefreshCw size={13} /> Retry</button>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
         {reviewOpen && capturedPhoto && (
           <div className="memoriya-camera-review" role="dialog" aria-label="Review captured photo">

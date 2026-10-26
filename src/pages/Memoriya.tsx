@@ -118,6 +118,7 @@ const Memoriya: React.FC = () => {
   const [error, setError] = useState('');
   const folderRequestRef = useRef(0);
   const driveSyncBusyRef = useRef(false);
+  const drivePageLoadingRef = useRef(false);
   const driveChangePageTokenRef = useRef(driveChangePageToken);
   const driveAuthRequiredRef = useRef(readDriveAuthRequired());
   const loaderRef = useRef<HTMLDivElement | null>(null);
@@ -292,7 +293,15 @@ const Memoriya: React.FC = () => {
                   ? `${fresh.length} new Drive ${fresh.length === 1 ? 'memory is' : 'memories are'} now in your story.`
                   : `Drive memories refreshed.`);
             }
-            return [...replaced, ...fresh].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            const merged = [...replaced, ...fresh].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            // This poll runs in the same page as Story Mode. Update the
+            // mounted reel in the same state transaction so a root upload or
+            // camera capture appears immediately instead of waiting for a
+            // secondary derived-list effect.
+            setReelConfig(currentConfig => currentConfig?.live
+              ? { ...currentConfig, memories: withLivePreviews(merged.filter(isVisualMemory)) }
+              : currentConfig);
+            return merged;
           });
         };
 
@@ -462,6 +471,7 @@ const Memoriya: React.FC = () => {
         && left.date === right.date
         && left.type === right.type
         && left.mimeType === right.mimeType
+        && left.modifiedTime === right.modifiedTime
         && left.thumbnail === right.thumbnail
         && left.url === right.url;
 
@@ -498,7 +508,15 @@ const Memoriya: React.FC = () => {
         setSelected(selectedMemory => selectedMemory?.driveFileId && removedIds.has(selectedMemory.driveFileId) ? null : selectedMemory);
         setViewerMemory(viewer => viewer?.driveFileId && removedIds.has(viewer.driveFileId) ? null : viewer);
       }
-      setMemories([...next, ...added].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+      const merged = [...next, ...added].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setMemories(merged);
+      // DriveLiveSync can publish a root-folder upload while Story Mode is
+      // already open. Push the same snapshot directly into the mounted reel
+      // so it appears on the next live reconciliation, without waiting for a
+      // separate filteredMemories render cycle.
+      setReelConfig(currentConfig => currentConfig?.live
+        ? { ...currentConfig, memories: withLivePreviews(merged.filter(isVisualMemory)) }
+        : currentConfig);
     };
     window.addEventListener(DRIVE_MEMORIES_UPDATED_EVENT, reconcileFromDrive);
     return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, reconcileFromDrive);
@@ -546,7 +564,11 @@ const Memoriya: React.FC = () => {
   };
 
   const loadDrivePage = async (token = accessToken, pageToken = nextPageToken) => {
-    if (!token || loading) return;
+    // React state updates are asynchronous. Story Mode and the gallery can
+    // request the next page in the same turn, so use a synchronous lock to
+    // guarantee one Drive page is fetched exactly once at a time.
+    if (!token || loading || drivePageLoadingRef.current) return;
+    drivePageLoadingRef.current = true;
     setLoading(true);
     setError('');
     setMessage(pageToken ? 'Loading more memories from Drive...' : 'Reading your photos and videos from Google Drive...');
@@ -571,9 +593,22 @@ const Memoriya: React.FC = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load Drive memories.');
     } finally {
+      drivePageLoadingRef.current = false;
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    // Story Mode should not wait for the playhead or a gallery scroll to
+    // request the next Drive page. Drain pagination one page at a time in the
+    // background so the reel can keep its first frame responsive while the
+    // selected folder reaches its complete Drive count.
+    if (!reelConfig?.live || !accessToken || !nextPageToken || loading) return undefined;
+    const timer = window.setTimeout(() => {
+      void loadDrivePage();
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [accessToken, loading, nextPageToken, reelConfig?.live]);
 
   const connectDrive = async (): Promise<string | undefined> => {
     setLoading(true);

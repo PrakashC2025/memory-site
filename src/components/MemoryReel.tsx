@@ -108,6 +108,7 @@ interface ReelSource {
   poster?: string;
   driveFileId?: string;
   authToken?: string;
+  modifiedTime?: string;
   rotation?: number;
   type: 'image' | 'video';
   label: string;
@@ -146,6 +147,7 @@ interface MemoryReelOptions {
   reducedMotion?: boolean;
   legacyTv?: boolean;
   onProgress?: (progress: number, total: number) => void;
+  onLoadProgress?: (loaded: number, available: number) => void;
   onStateChange?: (playing: boolean) => void;
   onAudioStateChange?: (playing: boolean) => void;
 }
@@ -154,6 +156,7 @@ interface LoadedMedia {
   node: HTMLImageElement | HTMLVideoElement;
   video?: HTMLVideoElement;
   aspect: number;
+  rotation?: number;
   id?: string;
 }
 
@@ -204,6 +207,30 @@ const smoothNoise = (time: number, seed: number) => {
   return lerp(sample(index), sample(index + 1), eased);
 };
 
+const normalizeQuarterRotation = (rotation?: number) => {
+  if (!Number.isFinite(rotation)) return 0;
+  const turns = Math.round((rotation as number) / 90);
+  return (((turns % 4) + 4) % 4) * 90;
+};
+
+const applyMediaFrameOrientation = (
+  card: HTMLDivElement,
+  media: LoadedMedia,
+  width: number,
+  height: number,
+) => {
+  const rotation = normalizeQuarterRotation(media.rotation);
+  if (!(media.node instanceof HTMLImageElement) || rotation === 0) return;
+  // The frame is sized for the displayed (rotated) aspect. The image itself
+  // must use the opposite pre-rotation box, otherwise object-fit contains a
+  // landscape source inside a portrait frame and leaves a large empty border.
+  const quarterTurn = rotation === 90 || rotation === 270;
+  media.node.classList.add('media-frame-rotated');
+  card.style.setProperty('--media-rotation', `${rotation}deg`);
+  card.style.setProperty('--media-rotated-width', `${quarterTurn ? height : width}px`);
+  card.style.setProperty('--media-rotated-height', `${quarterTurn ? width : height}px`);
+};
+
 // CSS cannot recover detail that is not present in the source file, but these
 // display grades make the selected frame look cleaner and more defined. Keep
 // them as compositor-friendly filters so Clarity can change immediately while
@@ -224,6 +251,7 @@ const escapeHtml = (value: string) => String(value).replace(/[&<>\"]/g, characte
 const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
   '3gp': 'audio/3gpp',
   '3gpp': 'audio/3gpp',
+  '3g2': 'audio/3gpp2',
   aac: 'audio/aac',
   aif: 'audio/aiff',
   aiff: 'audio/aiff',
@@ -231,7 +259,12 @@ const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
   caf: 'audio/x-caf',
   flac: 'audio/flac',
   m4a: 'audio/mp4',
+  m4b: 'audio/mp4',
+  mp4: 'audio/mp4',
+  m4v: 'audio/mp4',
+  mov: 'audio/mp4',
   mka: 'audio/x-matroska',
+  mkv: 'audio/x-matroska',
   mid: 'audio/midi',
   midi: 'audio/midi',
   mp2: 'audio/mpeg',
@@ -250,7 +283,8 @@ const audioMimeType = (name: string, fallback = '') => {
 };
 
 const isAudioFile = (file: File) => file.type.startsWith('audio/')
-  || Boolean(AUDIO_MIME_BY_EXTENSION[file.name.split('.').pop()?.toLowerCase() || '']);
+  || Boolean(AUDIO_MIME_BY_EXTENSION[file.name.split('.').pop()?.toLowerCase() || ''])
+  || /\.(mp4|m4v|mov|mkv|3gp|3g2)$/i.test(file.name);
 
 const normalizeAudioFile = (file: File) => file.type.startsWith('audio/')
   && file.type === audioMimeType(file.name, file.type)
@@ -306,6 +340,16 @@ const convertAudioBlobToWav = async (blob: Blob) => {
 };
 
 const normalizeDriveAudioBlob = (blob: Blob, song: DriveAudioFile) => {
+  // A cached conversion has its own real container (usually WAV or MP3).
+  // Never relabel those bytes with the original Drive filename extension;
+  // doing that made a playable cached WAV look like an undecodable M4A/AAC
+  // file on the next playback.
+  const existingType = (blob.type || '').toLowerCase();
+  if (existingType === 'audio/wav' || existingType === 'audio/x-wav'
+    || existingType === 'audio/mpeg' || existingType === 'audio/mp4'
+    || existingType === 'audio/ogg' || existingType === 'audio/webm') {
+    return blob;
+  }
   const playableType = audioMimeType(song.name, song.mimeType || blob.type);
   return blob.type === playableType ? blob : new Blob([blob], { type: playableType });
 };
@@ -314,8 +358,19 @@ const preparePlayableAudioBlob = async (blob: Blob, song: DriveAudioFile, forceC
   const normalized = normalizeDriveAudioBlob(blob, song);
   const probe = document.createElement('audio');
   const extension = song.name.split(/[?#]/)[0].split('.').pop()?.toLowerCase() || '';
-  const nativeFormat = extension === 'mp3' || extension === 'm4a' || extension === 'wav';
-  if (!forceConversion && nativeFormat && probe.canPlayType(normalized.type)) return normalized;
+  const nativeFormat = extension === 'mp3' || extension === 'm4a' || extension === 'wav'
+    || normalized.type === 'audio/wav' || normalized.type === 'audio/mpeg' || normalized.type === 'audio/mp4';
+  // `forceConversion` is used after a failed authenticated stream. It should
+  // still reuse a known-safe cached MP3/M4A/WAV instead of converting it again.
+  const knownSafeContainer = normalized.type === 'audio/wav'
+    || normalized.type === 'audio/x-wav'
+    || normalized.type === 'audio/mpeg'
+    || normalized.type === 'audio/mp4';
+  // A WAV is already the final fallback format. For every other format,
+  // forceConversion means the previous playback attempt failed and the bytes
+  // must go through the converter before the queue gives up on this song.
+  if (knownSafeContainer && normalized.type !== 'audio/mpeg' && forceConversion) return normalized;
+  if (nativeFormat && probe.canPlayType(normalized.type) && !forceConversion) return normalized;
   try {
     return await convertAudioBlobToWav(normalized);
   } catch {
@@ -346,18 +401,31 @@ const convertAudioBlobWithFfmpeg = async (blob: Blob, song: DriveAudioFile) => {
   const ffmpeg = await loadFfmpeg();
   const extension = song.name.split(/[?#]/)[0].split('.').pop()?.toLowerCase() || 'audio';
   const inputName = `memoriya-input-${Date.now()}.${extension}`;
-  const outputName = `memoriya-output-${Date.now()}.wav`;
+  const outputName = `memoriya-output-${Date.now()}.mp3`;
+  const fallbackOutputName = outputName.replace(/\.mp3$/, '.wav');
   try {
     await ffmpeg.writeFile(inputName, await fetchFile(blob));
-    await ffmpeg.exec(['-i', inputName, '-vn', '-ac', '2', '-ar', '44100', '-c:a', 'pcm_s16le', '-f', 'wav', outputName]);
-    const output = await ffmpeg.readFile(outputName);
+    // MP3 is compact and is understood by the widest range of phones, TVs,
+    // and browser WebViews. Some older FFmpeg WASM builds do not include the
+    // MP3 encoder, so retain a universally readable PCM WAV fallback.
+    let output: Uint8Array | string;
+    let outputType = 'audio/mpeg';
+    try {
+      await ffmpeg.exec(['-i', inputName, '-vn', '-ac', '2', '-ar', '44100', '-c:a', 'libmp3lame', '-b:a', '192k', '-f', 'mp3', outputName]);
+      output = await ffmpeg.readFile(outputName);
+    } catch {
+      await ffmpeg.exec(['-i', inputName, '-vn', '-ac', '2', '-ar', '44100', '-c:a', 'pcm_s16le', '-f', 'wav', fallbackOutputName]);
+      output = await ffmpeg.readFile(fallbackOutputName);
+      outputType = 'audio/wav';
+    }
     const bytes = typeof output === 'string' ? new TextEncoder().encode(output) : new Uint8Array(output);
     const safeBuffer = new Uint8Array(bytes.byteLength);
     safeBuffer.set(bytes);
-    return new Blob([safeBuffer.buffer], { type: 'audio/wav' });
+    return new Blob([safeBuffer.buffer], { type: outputType });
   } finally {
     await ffmpeg.deleteFile(inputName).catch(() => undefined);
     await ffmpeg.deleteFile(outputName).catch(() => undefined);
+    await ffmpeg.deleteFile(fallbackOutputName).catch(() => undefined);
   }
 };
 
@@ -388,6 +456,12 @@ const playAudioWithTimeout = async (element: HTMLAudioElement, timeoutMs = 12000
   } finally {
     if (timeoutId !== undefined) window.clearTimeout(timeoutId);
   }
+};
+
+const isSkippableAudioFailure = (error: unknown) => {
+  if (isDriveAuthorizationError(error)) return false;
+  const message = error instanceof Error ? error.message : String(error || 'Audio playback failed.');
+  return /audio|playback|decode|convert|format|download|network|timeout|unsupported|supported source|empty/i.test(message);
 };
 
 /**
@@ -434,6 +508,10 @@ export class MemoryReelController {
   private elapsed = 0;
   private paused = true;
   private total = 0;
+  // The wall is streamed in bounded batches, but the progress label should
+  // represent the complete selected folder from the first frame.
+  private expectedTotal = 0;
+  private availableMediaCount = 0;
   private lastPaint = 0;
   // Card-to-camera distances are expensive to recompute for every frame on
   // large libraries. Cache them and refresh only when the camera moves
@@ -502,10 +580,11 @@ export class MemoryReelController {
   // batch first, then warm the rest as the story advances.
   private pendingSources: ReelSource[] = [];
   private loadingNextBatch = false;
-  // Sources that failed to load once are skipped so the prefetch queue can
-  // never spin on a permanently broken Drive file.
+  // A Drive/network failure is transient until proven otherwise. Keep this
+  // set for diagnostics, but never use it to permanently drop a source.
   private failedSources = new Set<string>();
   private prefetchTimer = 0;
+  private nextPrefetchDelay = 160;
   private lastDiagnostic = '';
   private lastAmbientOpacity = '';
   private lastEffectsPaintAt = 0;
@@ -525,6 +604,13 @@ export class MemoryReelController {
   // sequence instead of forcing a long cross-wall flight.
   private liveAppendInProgress = false;
   private readonly lowPowerSurface: boolean;
+
+  private notifyLoadProgress(force = false) {
+    const loaded = this.loadedMedia.size;
+    if (force || loaded > 0) {
+      this.options.onLoadProgress?.(loaded, this.availableMediaCount);
+    }
+  }
 
   constructor(el: HTMLElement, options: MemoryReelOptions) {
     this.el = el;
@@ -546,10 +632,13 @@ export class MemoryReelController {
     const coarsePointer = typeof window.matchMedia === 'function'
       && window.matchMedia('(pointer: coarse)').matches;
     const hardwareThreads = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 8 : 8;
+    const deviceMemory = typeof navigator !== 'undefined'
+      ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory || 8
+      : 8;
     // Screen-mirroring phones and older TV WebViews have a much smaller
     // compositor budget. Keep the same template and camera path, but stream
     // fewer cards at a time and paint the ambient layer less often.
-    this.lowPowerSurface = Boolean(this.options.legacyTv || (coarsePointer && (hardwareThreads <= 6 || window.innerWidth <= 720)));
+    this.lowPowerSurface = Boolean(this.options.legacyTv || (coarsePointer && (deviceMemory <= 4 || hardwareThreads <= 6 || window.innerWidth <= 720)));
     this.clarity = this.options.clarity || 'clear';
     this.zoomEnabled = this.options.zoom !== false;
     this.holdScale = clamp(this.options.holdScale ?? 1, 0.75, 3);
@@ -666,6 +755,8 @@ export class MemoryReelController {
     const wasPlaying = !this.paused;
     const previousElapsed = this.elapsed;
     const keepCurrentWall = preserveProgress && this.cards.length > 0 && uniqueItems.length > 0;
+    this.expectedTotal = this.estimateTotal(uniqueItems);
+    this.availableMediaCount = uniqueItems.length;
     // A live Drive update is loaded beside the current wall. Do not pause the
     // story/audio or clear the stage while the replacement images arrive.
     const wantedIds = new Set(uniqueItems.map(item => item.id));
@@ -682,8 +773,10 @@ export class MemoryReelController {
     } else {
       this.removeMissingMedia(wantedIds);
     }
+    this.notifyLoadProgress(true);
     if (!uniqueItems.length) {
       this.pendingSources = [];
+      this.expectedTotal = 0;
       this.options.onProgress?.(0, 0);
       return;
     }
@@ -695,9 +788,10 @@ export class MemoryReelController {
     // shots instead of after the whole library.
     const queuedIds = new Set(this.pendingSources.map(item => item.id));
     const stillQueued = this.pendingSources.filter(item =>
-      wantedIds.has(item.id) && !this.loadedMedia.has(item.id) && !this.failedSources.has(item.id));
+      wantedIds.has(item.id) && !this.loadedMedia.has(item.id));
     const newlyAdded = uniqueItems.filter(item =>
-      !this.loadedMedia.has(item.id) && !queuedIds.has(item.id) && !this.failedSources.has(item.id));
+      !this.loadedMedia.has(item.id) && !queuedIds.has(item.id));
+    this.failedSources.clear();
     this.pendingSources = [...newlyAdded, ...stillQueued];
 
     const liveShotAtUpdate = keepCurrentWall && this.cards.length
@@ -736,6 +830,7 @@ export class MemoryReelController {
       }
       const resolvedMedia = { ...media, id: item.id };
       this.loadedMedia.set(item.id, resolvedMedia);
+      this.notifyLoadProgress();
       if (keepCurrentWall) {
         this.liveAppendInProgress = true;
         try {
@@ -751,7 +846,14 @@ export class MemoryReelController {
         // full wall rebuild here reshuffles the active card every time a
         // thumbnail finishes and makes the story appear to skip suddenly.
         if (loaded.length === 1) this.rebuildWall(loaded, preserveProgress, previousElapsed, wasPlaying);
-        else this.appendMediaCard(resolvedMedia);
+        else {
+          // Keep the first frame responsive while the rest of the eager batch
+          // decodes. Rendering every completed image here forced a full
+          // timeline/render pass per file and caused the first transition to
+          // hitch on large Drive folders.
+          // else this.appendMediaCard(resolvedMedia); (intentionally batched)
+          this.appendMediaCard(resolvedMedia, this.cards.length, false);
+        }
       }
       if (!ready) {
         ready = true;
@@ -761,13 +863,26 @@ export class MemoryReelController {
 
     let nextItemIndex = 0;
     const workerCount = Math.min(8, eagerBatch.length);
-    const workers = Array.from({ length: workerCount }, async () => {
+    // Keep Drive decoding serial. The browser still paints and animates while
+    // each image loads, but a large folder never creates a decode burst.
+    const workerLimit = 1;
+    const workers = Array.from({ length: workerCount }, async (_, workerIndex) => {
+      if (workerIndex >= workerLimit) return;
       while (nextItemIndex < eagerBatch.length) {
         const item = eagerBatch[nextItemIndex];
         nextItemIndex += 1;
-        const media = await this.load(item);
+        const media = await this.load(item).catch(() => null);
+        if (this.destroyed || generation !== this.loadGeneration) {
+          if (media) this.releaseObjectUrl(media.node instanceof HTMLImageElement ? media.node.src : '');
+          return;
+        }
         if (media) reveal(item, media);
-        else this.failedSources.add(item.id);
+        else {
+          this.failedSources.add(item.id);
+          // Put failed items at the end so a temporary Drive/network failure
+          // cannot stop the queue at the initial wall boundary.
+          if (!this.pendingSources.some(source => source.id === item.id)) this.pendingSources.push(item);
+        }
         // Let layout, input, and painting run between media jobs. This keeps
         // a large Drive story responsive while its remaining frames warm.
         await new Promise<void>(resolve => window.setTimeout(resolve, 0));
@@ -776,6 +891,8 @@ export class MemoryReelController {
     void Promise.all(workers).then(() => {
       if (generation !== this.loadGeneration) return;
       this.recalculateTotal();
+      if (!this.pendingSources.length) this.expectedTotal = this.total;
+      this.notifyLoadProgress(true);
       if (this.cards.length) this.layoutWall(this.shotIndexAt(this.elapsed));
       this.render(this.elapsed);
       // Never leave a live story paused because an update landed mid-shot.
@@ -800,7 +917,7 @@ export class MemoryReelController {
     const batch: ReelSource[] = [];
     for (const item of this.pendingSources) {
       if (batch.length >= limit) break;
-      if (this.loadedMedia.has(item.id) || this.failedSources.has(item.id)) continue;
+      if (this.loadedMedia.has(item.id)) continue;
       batch.push(item);
     }
     return batch;
@@ -813,11 +930,13 @@ export class MemoryReelController {
    */
   private async loadNextBatch() {
     if (this.loadingNextBatch || !this.pendingSources.length || this.destroyed) return;
-    const batch = this.takeQueuedBatch(this.lowPowerSurface ? 24 : WALL_NEXT_BATCH);
+    const batch = this.takeQueuedBatch(this.lowPowerSurface ? 12 : WALL_NEXT_BATCH);
     if (!batch.length) {
-      // Everything queued is already loaded or broken: stop retrying.
+      // Failed items stay queued and are retried on the next turn. Only an
+      // empty queue means the selected Drive set is fully loaded.
       this.pendingSources = this.pendingSources.filter(item =>
-        !this.loadedMedia.has(item.id) && !this.failedSources.has(item.id));
+        !this.loadedMedia.has(item.id));
+      if (!this.pendingSources.length) this.expectedTotal = this.total;
       return;
     }
     const generation = this.loadGeneration;
@@ -825,16 +944,22 @@ export class MemoryReelController {
     const wasPlaying = !this.paused;
     let cursor = 0;
     try {
-      const workerCount = Math.min(6, batch.length);
+      // Download one Drive item at a time. This keeps the browser responsive
+      // while guaranteeing that the queue continues past every batch size.
+      const workerCount = Math.min(1, batch.length);
       await Promise.all(Array.from({ length: workerCount }, async () => {
         while (cursor < batch.length) {
           const item = batch[cursor];
           cursor += 1;
           if (!item) return;
-          const media = await this.load(item);
+          const media = await this.load(item).catch(() => null);
           if (this.destroyed || generation !== this.loadGeneration) return;
           if (!media) {
             this.failedSources.add(item.id);
+            // Move a failed item behind the rest of the queue so one bad or
+            // temporarily offline file cannot block every later Drive image.
+            this.pendingSources = this.pendingSources.filter(source => source.id !== item.id);
+            this.pendingSources.push(item);
             continue;
           }
           // The source id is authoritative: `load()` does not know it yet.
@@ -850,12 +975,16 @@ export class MemoryReelController {
     }
     if (this.destroyed || generation !== this.loadGeneration) return;
     this.pendingSources = this.pendingSources.filter(item =>
-      !this.loadedMedia.has(item.id) && !this.failedSources.has(item.id));
+      !this.loadedMedia.has(item.id));
     this.recalculateTotal();
+    if (!this.pendingSources.length) this.expectedTotal = this.total;
+    this.notifyLoadProgress(true);
     this.render(this.elapsed);
     // An append must never leave the story stopped.
     if (wasPlaying && this.paused) this.play();
-    this.schedulePrefetch(160);
+    const nextDelay = this.nextPrefetchDelay;
+    this.nextPrefetchDelay = 160;
+    this.schedulePrefetch(nextDelay);
   }
 
   private clearPrefetchTimer() {
@@ -884,12 +1013,22 @@ export class MemoryReelController {
         return;
       }
       const framesAhead = this.cards.length - this.shotIndexAt(this.elapsed);
-      if (framesAhead >= WALL_MAX_AHEAD) {
-        // The wall is warm enough; wait for the story to consume some of it.
-        this.schedulePrefetch(900);
-        return;
-      }
-      void this.loadNextBatch();
+      const maxAhead = this.lowPowerSurface ? 72 : WALL_MAX_AHEAD;
+      const backgroundOnly = framesAhead >= maxAhead;
+      // Keep the current wall bounded in the foreground, but continue draining
+      // the Drive queue in the background. The old early return stopped at the
+      // first warm window (about 87 cards on low-power phones), so the visible
+      // loaded count could never reach the selected Drive folder count.
+      this.nextPrefetchDelay = backgroundOnly ? (this.lowPowerSurface ? 320 : 450) : 100;
+      void this.loadNextBatch().catch(() => {
+        // A single decoder or DOM failure must not stop the remaining Drive
+        // queue. Continue with the next bounded batch after a short idle gap.
+        this.loadingNextBatch = false;
+        if (!this.destroyed && this.pendingSources.length) {
+          this.nextPrefetchDelay = this.lowPowerSurface ? 650 : 450;
+          this.schedulePrefetch(this.nextPrefetchDelay);
+        }
+      });
     }, delay);
   }
 
@@ -1054,6 +1193,7 @@ export class MemoryReelController {
       card.style.width = `${width}px`;
       card.style.height = `${height}px`;
       card.appendChild(media.node);
+      applyMediaFrameOrientation(card, media, width, height);
       // Use a calm, balanced grid with only a small organic offset. The
       // cards stay distributed around the hero instead of collapsing into a
       // single pile when portrait and landscape sizes are mixed.
@@ -1106,6 +1246,7 @@ export class MemoryReelController {
     card.style.width = `${width}px`;
     card.style.height = `${height}px`;
     card.appendChild(media.node);
+    applyMediaFrameOrientation(card, media, width, height);
     const randomUnit = (value: number) => {
       const seeded = Math.sin(value * 12.9898) * 43758.5453;
       return seeded - Math.floor(seeded);
@@ -1311,7 +1452,11 @@ export class MemoryReelController {
           // Start with the lightweight Drive source/poster. A full local
           // original, when cached, replaces it in the background instead of
           // delaying the first visible frame behind an auth/download request.
-          if (!readDriveAuthRequired() && item.src) {
+          // The source already contains the current Drive access token. Let
+          // the lightweight poster start even if an older auth flag is still
+          // set; otherwise every uncached video waits for the timeout while
+          // locally cached videos continue to work.
+          if (item.src) {
             video.src = item.src;
             video.load();
           }
@@ -1357,15 +1502,14 @@ export class MemoryReelController {
         };
         image.onload = () => {
           const aspect = image.naturalWidth / image.naturalHeight || 1.5;
-          const isQuarterTurn = ((item.rotation || 0) / 90) % 2 === 1;
-          if (item.rotation) {
-            // The individual `rotate` property is unavailable on older TV
-            // Chromium, so use the widely supported transform there.
-            // Use the widely supported transform property on every browser.
-            // The individual `rotate` property is missing on older TV WebViews.
-            image.style.transform = `rotate(${item.rotation}deg)`;
-          }
-          finish({ node: image, aspect: isQuarterTurn ? 1 / aspect : aspect });
+          const rotation = normalizeQuarterRotation(item.rotation);
+          const isQuarterTurn = rotation === 90 || rotation === 270;
+          // Drive supplies the authoritative rotation separately from the
+          // bitmap. Disable browser EXIF auto-orientation when we apply that
+          // normalized rotation ourselves; otherwise some files are rotated
+          // twice and receive the wrong portrait/landscape frame.
+          image.style.imageOrientation = rotation ? 'none' : 'from-image';
+          finish({ node: image, aspect: isQuarterTurn ? 1 / aspect : aspect, rotation });
           promoteDriveImage();
         };
         image.onerror = () => {
@@ -1396,7 +1540,9 @@ export class MemoryReelController {
           if (item.driveFileId && item.src) {
             // Paint Drive's lightweight thumbnail immediately. IndexedDB lookup
             // and the sharper cached original must never delay the first frame.
-          if (!readDriveAuthRequired()) {
+          // Start the Drive thumbnail immediately. A stale auth-required flag
+          // must not turn every uncached image into a 12-second timeout.
+          if (item.src) {
             image.src = item.src;
           }
           void this.loadAuthenticatedDrivePreview(item)
@@ -1434,7 +1580,7 @@ export class MemoryReelController {
             })
             .catch(() => finish(null));
         } else {
-          if (!readDriveAuthRequired()) image.src = item.src;
+          image.src = item.src;
         }
         timer = window.setTimeout(() => finish(null), 12000);
       }
@@ -1448,7 +1594,10 @@ export class MemoryReelController {
       readCachedDriveMedia(item.driveFileId),
       readCachedStoryMedia(cacheKey),
     ]);
-    const cached = driveCached?.blob || storyCached;
+    const validDriveCache = driveCached && (!item.modifiedTime || driveCached.modifiedTime === item.modifiedTime)
+      ? driveCached.blob
+      : null;
+    const cached = validDriveCache || (!item.modifiedTime ? storyCached : null);
     if (cached) {
       const objectUrl = URL.createObjectURL(cached);
       this.objectUrls.add(objectUrl);
@@ -1486,7 +1635,10 @@ export class MemoryReelController {
       readCachedDriveMedia(item.driveFileId),
       readCachedStoryMedia(item.driveFileId),
     ]);
-    const cached = driveCached?.blob || storyCached;
+    const validDriveCache = driveCached && (!item.modifiedTime || driveCached.modifiedTime === item.modifiedTime)
+      ? driveCached.blob
+      : null;
+    const cached = validDriveCache || (!item.modifiedTime ? storyCached : null);
     if (cached) {
       const objectUrl = URL.createObjectURL(cached);
       this.objectUrls.add(objectUrl);
@@ -1975,6 +2127,12 @@ export class MemoryReelController {
    * function of elapsed time, so the story looks the same, just calmer.
    */
   private trackPaintCost(cost: number, now: number) {
+    // Desktop browsers have enough compositor headroom to keep sampling the
+    // continuous camera path at the display rate. Artificially switching a
+    // PC between 60/45/30fps made an otherwise short render spike feel like
+    // a visible pause. Adaptive sampling remains enabled for the constrained
+    // phone/TV path only.
+    if (!this.lowPowerSurface && !this.options.legacyTv) return;
     // Ignore absurd samples (tab wake, devtools open, GC pause).
     const sample = Math.min(cost, 120);
     this.paintCostEma = this.paintCostEma ? this.paintCostEma * 0.88 + sample * 0.12 : sample;
@@ -2009,7 +2167,15 @@ export class MemoryReelController {
           // timeline. This guarantees a 300+ photo folder is not truncated.
           if (!this.loadingNextBatch) void this.loadNextBatch();
           this.elapsed = Math.max(0, this.total - 0.01);
-        } else if (this.options.loop) this.elapsed = 0;
+        } else if (this.options.loop) {
+          // Wrap the visual timeline explicitly at the boundary. Rendering
+          // frame zero here prevents the last frame from lingering for one
+          // more paint and keeps the next loop in sync with the first card.
+          this.elapsed = 0;
+          this.titleEl.classList.remove('on');
+          this.lastLayoutShot = -1;
+          this.render(0);
+        }
         else {
           this.elapsed = this.total;
           this.render(this.elapsed);
@@ -2032,7 +2198,7 @@ export class MemoryReelController {
       }
       const paintInterval = this.options.legacyTv
         ? 1000 / 30
-        : Math.max(this.adaptivePaintInterval, 0);
+        : this.lowPowerSurface ? Math.max(this.adaptivePaintInterval, 0) : 0;
       if (!paintInterval || now - this.lastPaint >= paintInterval) {
         const paintStartedAt = performance.now();
         this.render(this.elapsed);
@@ -2254,6 +2420,16 @@ export class MemoryReelController {
     return (baseHold + (card.video ? videoBonus : 0)) * this.holdScale;
   }
 
+  private estimateTotal(items: ReelSource[]) {
+    const baseHold = this.options.template === 'orbit' ? 4 : 3.6;
+    const videoBonus = this.options.template === 'orbit' ? 1.2 : 0.8;
+    return items.reduce((total, item, index) => (
+      total
+      + (baseHold + (item.type === 'video' ? videoBonus : 0)) * this.holdScale
+      + (index < items.length - 1 ? this.options.move : 0)
+    ), 0) + (items.length ? 2.6 : 0);
+  }
+
   private applyReelCardVars(card: ReelCard, index: number, shot: number) {
     const relative = index - shot;
     card.card.style.setProperty('--reel-index', String(index));
@@ -2374,8 +2550,11 @@ export class MemoryReelController {
         // revealed (see applyReelCardVars).
         if (this.isCardVisible(card, index)) this.applyReelCardVars(card, index, shot);
       });
+      // z-index already controls the focused card's stacking order. Reparenting
+      // it on every shot boundary forced a synchronous style/layout pass and
+      // was the visible hitch at the start and end of each flight.
       const activeCard = this.cards[shot]?.card;
-      if (activeCard && activeCard.parentElement === this.world) this.world.appendChild(activeCard);
+      void activeCard;
     }
 
     if (shot === 0 && local < shotHold) {
@@ -2502,7 +2681,11 @@ export class MemoryReelController {
           z: lerp(from.z, to.z, flightEase) - dip * 36,
           rot: lerp(from.rot, to.rot, flightEase) * (1 - dip * 0.65),
         };
-        camera = this.springCamera(springTarget);
+        // The eased target is already continuous: at the end of a flight it
+        // equals the next card's target exactly. A spring adds a second clock
+        // driven by frame timing, so a delayed frame can leave the camera
+        // chasing the shot and make the beginning/end feel sticky or shaky.
+        camera = springTarget;
       } else if (this.options.template !== 'orbit') {
         this.cinematicCameraReady = false;
       }
@@ -2792,7 +2975,7 @@ export class MemoryReelController {
       this.lastDiagnostic = diagnostic;
       this.el.setAttribute('data-reel-state', diagnostic);
     }
-    this.options.onProgress?.(time, this.total);
+    this.options.onProgress?.(time, Math.max(this.total, this.expectedTotal));
   }
 }
 
@@ -2819,6 +3002,7 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal, drive
       fallbackSrc: !video && driveMediaUrl && driveMediaUrl !== preview ? driveMediaUrl : undefined,
       driveFileId: memory.driveFileId,
       authToken: driveAccessToken || memory.authToken,
+      modifiedTime: memory.modifiedTime,
       rotation: memory.orientation,
       type: video ? 'video' : 'image',
       poster: video ? memory.thumbnail : undefined,
@@ -3003,7 +3187,6 @@ const FULLSCREEN_CONTROLS_HIDE_DELAY = 3600;
 
 const formatStoryTime = (seconds: number) => {
   const safeSeconds = Math.max(0, Math.round(seconds));
-  if (safeSeconds < 60) return `${safeSeconds}s`;
   const minutes = Math.floor(safeSeconds / 60);
   const remainingSeconds = String(safeSeconds % 60).padStart(2, '0');
   return `${minutes}:${remainingSeconds}`;
@@ -3056,6 +3239,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   const [progress, setProgress] = useState({ progress: 0, total: 0 });
+  const [storyLoadedCount, setStoryLoadedCount] = useState(0);
+  const [storyAvailableCount, setStoryAvailableCount] = useState(visualMemories.length);
   const [fullscreen, setFullscreen] = useState(shouldStartCinemaView);
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [titleDraft, setTitleDraft] = useState<MemoryReelTitle>({ line: storedStoryTitle?.line || '', big: storedStoryTitle?.big || '' });
@@ -3101,7 +3286,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const secondaryDriveSongsRequestRef = useRef(false);
   const driveMusicFolderRef = useRef(storedStoryMusic?.musicFolderId || '');
   const audioManuallyStoppedRef = useRef(false);
+  const musicAdvanceInFlightRef = useRef(false);
   const failedMusicIdsRef = useRef(new Set<string>());
+  const audioRecoveryRef = useRef(new Set<string>());
   const storedMusicPlaybackRef = useRef<StoredMusicPlayback | null>(readStoredMusicPlayback());
   const pendingMusicResumeRef = useRef<{ trackId: string; currentTime: number } | null>(null);
   const playbackPersistTimerRef = useRef<number | null>(null);
@@ -3111,7 +3298,13 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const audioPauseGuardRef = useRef(false);
   const musicHydratedRef = useRef(false);
   const screenHiddenRef = useRef(false);
-  const driveCacheTasksRef = useRef(new Map<string, Promise<void>>());
+  const driveCacheTasksRef = useRef(new Map<string, Promise<boolean>>());
+  const driveCacheProgressKeyRef = useRef('');
+  // All Drive audio downloads/conversions share one chain. This keeps a
+  // refresh, a newly selected song, and the initial folder load from starting
+  // separate FFmpeg jobs at the same time on a phone or TV.
+  const driveAudioSerialRef = useRef<Promise<boolean | void>>(Promise.resolve());
+  const driveCacheWarmBatchRef = useRef<Promise<void>>(Promise.resolve());
   moreConfigRef.current = { hasMore, loadingMore, onNeedMore };
   const allDriveSongs = useMemo(() => [...driveSongs, ...secondaryDriveSongs], [driveSongs, secondaryDriveSongs]);
 
@@ -3387,6 +3580,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     memory.driveFileId || memory.id,
     memory.type,
     memory.mimeType || '',
+    memory.modifiedTime || '',
     memory.date,
     memory.driveFileId
       ? (memory.url?.startsWith('blob:') || memory.thumbnail?.startsWith('blob:') ? 'cached-local' : '')
@@ -3411,8 +3605,15 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     void (async () => {
       const photoSources = await resolveReelSources(photos, controller.signal, driveAccessToken);
       if (controller.signal.aborted) return;
-      setResolvedSources(photoSources);
-      if (photoSources.length) setLoading(false);
+      // During a live update, do not publish this temporary photo-only list.
+      // The previous version briefly removed every existing video source,
+      // which made the controller reconcile twice and could repeat the active
+      // card while the new Drive item was being inserted. Cold start can still
+      // reveal photos immediately because there is no playing wall to protect.
+      if (!liveUpdate) {
+        setResolvedSources(photoSources);
+        if (photoSources.length) setLoading(false);
+      }
 
       // Videos are intentionally appended after the photo wall is ready so a
       // large video cannot delay the first visual sequence.
@@ -3459,6 +3660,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           moreRequestedRef.current = true;
           more.onNeedMore?.();
         }
+      },
+      onLoadProgress: (loaded, available) => {
+        setStoryLoadedCount(loaded);
+        setStoryAvailableCount(available);
       },
       onStateChange: setPlaying,
       onAudioStateChange: setAudioPlaying,
@@ -3565,18 +3770,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
   useEffect(() => {
     if (!playing || !musicQueue.length || audioManuallyStoppedRef.current) return;
-    const element = audioPlayerRef.current;
-    const activeTrack = musicQueue.find(track => track.id === currentMusicIdRef.current) || musicQueue[0];
-    const source = activeTrack.src;
-    if (!element || !source) return;
-    if (element.src !== source) {
-      audioPauseGuardRef.current = true;
-      element.pause();
-      element.src = source;
-      element.load();
-      audioPauseGuardRef.current = false;
-    }
-    void playAudioWithTimeout(element)
+    // Use the same Drive fallback path as the Music button. The old direct
+    // `audio.play()` here could reject on a TV without ever trying the cached
+    // converted source.
+    void playStoryAudio(false)
       .then(() => setAudioPlaying(true))
       .catch(() => setAudioPlaying(false));
   }, [playing, musicQueue]);
@@ -3732,19 +3929,33 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const warmDriveAudioCache = async (song: DriveAudioFile, cacheKey: string, token: string) => {
     try {
       const cached = await readCachedStoryMedia(cacheKey);
-      const sourceBlob = cached || (await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id))).blob;
+      const downloaded = cached
+        ? null
+        : await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id));
+      if (downloaded?.accessToken && downloaded.accessToken !== token) {
+        driveAccessTokenRef.current = downloaded.accessToken;
+        saveDriveAccessToken(downloaded.accessToken);
+      }
+      const sourceBlob = cached || downloaded?.blob;
+      if (!sourceBlob) throw new Error('Drive returned an empty audio file.');
       const playableBlob = await preparePlayableAudioBlob(sourceBlob, song);
-      if (cached && playableBlob === cached) return;
+      if (cached && playableBlob === cached) return true;
       await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
+      return true;
     } catch {
       // Cache warming is best-effort; playback retries conversion on demand.
+      return false;
     }
   };
 
   const warmDriveAudioCacheOnce = (song: DriveAudioFile, cacheKey: string, token: string) => {
     const existing = driveCacheTasksRef.current.get(cacheKey);
     if (existing) return existing;
-    const task = warmDriveAudioCache(song, cacheKey, token);
+    // Always append to the same chain. `finally` keeps the chain usable even
+    // if a future cache implementation throws instead of swallowing a single
+    // file failure.
+    const task = driveAudioSerialRef.current.then(() => warmDriveAudioCache(song, cacheKey, token));
+    driveAudioSerialRef.current = task.catch(() => undefined);
     const trackedTask = task.finally(() => {
       if (driveCacheTasksRef.current.get(cacheKey) === trackedTask) driveCacheTasksRef.current.delete(cacheKey);
     });
@@ -3753,15 +3964,58 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   };
 
   const warmDriveAudioCacheSequentially = async (songs: DriveAudioFile[], token: string) => {
-    setDriveCacheProgress({ completed: 0, total: songs.length });
+    const progressKey = songs.map(song => driveAudioCacheKey(song)).join('|');
+    const sameBatch = driveCacheProgressKeyRef.current === progressKey;
+    const previousCompleted = sameBatch ? driveCacheProgress.completed : 0;
+    driveCacheProgressKeyRef.current = progressKey;
+    setDriveCacheProgress(current => sameBatch
+      ? { completed: Math.min(current.completed, songs.length), total: songs.length }
+      : { completed: 0, total: songs.length });
+    let completed = 0;
     for (let index = 0; index < songs.length; index += 1) {
-      await warmDriveAudioCacheOnce(songs[index], driveAudioCacheKey(songs[index]), token);
-      setDriveCacheProgress({ completed: index + 1, total: songs.length });
+      const cachedSuccessfully = await warmDriveAudioCacheOnce(songs[index], driveAudioCacheKey(songs[index]), token);
+      if (cachedSuccessfully) completed += 1;
+      setDriveCacheProgress({
+        completed: Math.max(previousCompleted, completed),
+        total: songs.length,
+      });
     }
   };
 
+  const queueDriveAudioWarm = (songs: DriveAudioFile[], token: string) => {
+    // Keep the UI responsive after Drive returns the list. The first track can
+    // play immediately while this background chain stores the remaining
+    // tracks one at a time; a refresh can queue behind it but never start a
+    // second download batch in parallel.
+    const task = driveCacheWarmBatchRef.current.then(() => warmDriveAudioCacheSequentially(songs, token));
+    const safeTask = task.catch(() => undefined);
+    driveCacheWarmBatchRef.current = safeTask;
+    return safeTask;
+  };
+
   const queueDriveSongs = (songs: DriveAudioFile[], token: string, account: 'primary' | 'secondary' = 'primary') => {
-    const existingIds = new Set(musicQueueRef.current.map(track => track.driveFileId).filter(Boolean));
+    const incoming = new Map(songs.map(song => [song.id, song]));
+    const accountTracks = musicQueueRef.current.filter(track => track.source === 'drive'
+      && (track.driveAccount || 'primary') === account);
+    const existingIds = new Set(accountTracks.map(track => track.driveFileId).filter(Boolean));
+    const reconciledQueue = musicQueueRef.current
+      .filter(track => !(track.source === 'drive'
+        && (track.driveAccount || 'primary') === account
+        && (!track.driveFileId || !incoming.has(track.driveFileId))))
+      .map(track => {
+        if (track.source !== 'drive' || (track.driveAccount || 'primary') !== account || !track.driveFileId) return track;
+        const song = incoming.get(track.driveFileId);
+        if (!song) return track;
+        const nextCacheKey = driveAudioCacheKey(song);
+        if (track.cacheKey !== nextCacheKey) failedMusicIdsRef.current.delete(track.id);
+        return {
+          ...track,
+          src: token ? driveAudioUrl(song, token) : track.src,
+          label: song.name,
+          cacheKey: nextCacheKey,
+          driveAccount: account,
+        };
+      });
     const additions = songs
       .filter(song => !existingIds.has(song.id))
       .map(song => ({
@@ -3773,13 +4027,21 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         cacheKey: driveAudioCacheKey(song),
         driveAccount: account,
       }));
-    if (!additions.length) return;
-    const nextQueue = [...musicQueueRef.current, ...additions];
+    const nextQueue = [...reconciledQueue, ...additions];
+    const changed = nextQueue.length !== musicQueueRef.current.length
+      || nextQueue.some((track, index) => {
+        const previous = musicQueueRef.current[index];
+        return !previous || track.id !== previous.id || track.cacheKey !== previous.cacheKey
+          || track.label !== previous.label || track.src !== previous.src;
+      });
+    if (!changed) return;
     musicQueueRef.current = nextQueue;
     setMusicQueue(nextQueue);
-    if (!currentMusicIdRef.current) {
-      setCurrentMusic(additions[0].id);
-      setMusicName(additions[0].label);
+    const currentStillExists = nextQueue.some(track => track.id === currentMusicIdRef.current);
+    if (!currentStillExists) {
+      const nextCurrent = nextQueue[0];
+      setCurrentMusic(nextCurrent?.id || '');
+      setMusicName(nextCurrent?.label || '');
     }
   };
 
@@ -3860,6 +4122,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const track = musicQueue[index];
     if (!track) return;
     failedMusicIdsRef.current.delete(track.id);
+    audioRecoveryRef.current.delete(track.id);
     audioManuallyStoppedRef.current = false;
     if (pendingMusicResumeRef.current?.trackId !== track.id) pendingMusicResumeRef.current = null;
     setCurrentMusic(track.id);
@@ -3886,6 +4149,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         try {
           await playAudioWithTimeout(element);
           if (element.error) throw new Error('Drive audio format was rejected by this browser.');
+          audioRecoveryRef.current.delete(track.id);
           setAudioPlaying(true);
           setMusicError('');
           return;
@@ -3902,11 +4166,18 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       }
       audioPauseGuardRef.current = false;
       await playAudioWithTimeout(element);
+      audioRecoveryRef.current.delete(track.id);
       setAudioPlaying(true);
       setMusicError('');
     } catch (error) {
       audioPauseGuardRef.current = false;
       setAudioPlaying(false);
+      if (musicQueue.length > 1 && isSkippableAudioFailure(error)) {
+        failedMusicIdsRef.current.add(track.id);
+        setMusicError(`Skipped unavailable song: ${track.label}`);
+        void advanceMusic();
+        return;
+      }
       setMusicError(track.source === 'drive'
         ? (error instanceof Error && /authorization|access denied|reconnect/i.test(error.message)
           ? 'Google Drive authorization expired. Tap Reconnect Drive, then play the queued song again.'
@@ -3968,7 +4239,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         setDriveSongs(songs);
         setDriveSongsLoaded(true);
         queueDriveSongs(songs, token);
-        await warmDriveAudioCacheSequentially(songs, token);
+        void queueDriveAudioWarm(songs, token);
       } catch (error) {
         if (!isDriveAuthorizationError(error)) throw error;
         token = await reconnectDriveForPlayback();
@@ -3976,7 +4247,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         setDriveSongs(songs);
         setDriveSongsLoaded(true);
         queueDriveSongs(songs, token);
-        await warmDriveAudioCacheSequentially(songs, token);
+        void queueDriveAudioWarm(songs, token);
       }
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'Drive songs could not be loaded.');
@@ -4001,7 +4272,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       const songs = await googleDriveService.listAudioFiles(token, '');
       setSecondaryDriveSongs(songs);
       queueDriveSongs(songs, token, 'secondary');
-      await warmDriveAudioCacheSequentially(songs, token);
+      void queueDriveAudioWarm(songs, token);
       setMusicName(songs.length ? `${songs.length} songs from the second Drive` : 'No audio files found in the second Drive');
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'The second Google Drive could not be connected.');
@@ -4022,7 +4293,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         if (!active) return;
         setDriveSongs(songs);
         queueDriveSongs(songs, driveAccessTokenRef.current || driveAccessToken);
-        await warmDriveAudioCacheSequentially(songs, driveAccessTokenRef.current || driveAccessToken);
+        void queueDriveAudioWarm(songs, driveAccessTokenRef.current || driveAccessToken);
       } catch {
         // Keep the last song list and cached playback available while offline.
       } finally {
@@ -4069,6 +4340,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       driveAccount: isSecondaryDriveSong ? 'secondary' : 'primary',
     } satisfies MusicQueueItem;
     pendingMusicResumeRef.current = null;
+    audioRecoveryRef.current.delete(trackId);
     audioManuallyStoppedRef.current = true;
     audioPauseGuardRef.current = true;
     audioPlayerRef.current?.pause();
@@ -4202,6 +4474,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         try {
           await playAudioWithTimeout(element);
           if (element.error) throw new Error('Drive audio format was rejected by this browser.');
+          audioRecoveryRef.current.delete(sourceTrack.id);
           setAudioPlaying(true);
           setMusicError('');
           return true;
@@ -4223,6 +4496,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       }
       applyPendingMusicResume();
       await playAudioWithTimeout(element);
+      audioRecoveryRef.current.delete(sourceTrack.id);
       setAudioPlaying(true);
       setMusicError('');
       return true;
@@ -4234,8 +4508,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           ? 'Google Drive authorization expired. Tap Reconnect Drive, then play the queued song again.'
           : 'Drive audio could not be downloaded for playback. Check the file format and try again.')
         : 'Tap Play music once to allow audio on this device.');
-      const decoderFailure = error instanceof Error && /decode|conversion|not supported|not_supported|cannot play/i.test(error.message);
-      if (decoderFailure && sourceTrack && musicQueue.length > 1) {
+      if (sourceTrack && musicQueue.length > 1 && isSkippableAudioFailure(error)) {
         failedMusicIdsRef.current.add(sourceTrack.id);
         void advanceMusic();
       }
@@ -4329,10 +4602,20 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     void playStoryAudio(true);
   };
 
-  const advanceMusic = async () => {
+  const toggleLoop = () => {
+    // Update the ref and controller in the same click as the label. The
+    // visual timeline and the audio queue must see the new loop state before
+    // either one reaches its end boundary.
+    const next = !loopEnabledRef.current;
+    loopEnabledRef.current = next;
+    setLoopEnabled(next);
+    controllerRef.current?.setLoop(next);
+  };
+
+  const advanceMusicStep = async (): Promise<boolean> => {
     const currentQueue = musicQueueRef.current;
     const element = audioPlayerRef.current;
-    if (!currentQueue.length || !element) return;
+    if (!currentQueue.length || !element) return false;
     const previousTrackId = currentMusicIdRef.current;
     const currentIndex = currentQueue.findIndex(track => track.id === previousTrackId);
     const activeIndex = currentIndex >= 0 ? currentIndex : 0;
@@ -4349,16 +4632,17 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     }
     if (nextIndex < 0) {
       setAudioPlaying(false);
-      return;
+      return false;
     }
 
     const nextTrack = currentQueue[nextIndex];
     if (!nextTrack) {
       setAudioPlaying(false);
-      return;
+      return false;
     }
     setCurrentMusic(nextTrack.id);
     setMusicName(nextTrack.label);
+    audioRecoveryRef.current.delete(nextTrack.id);
     audioManuallyStoppedRef.current = false;
     setAudioLoading(true);
     try {
@@ -4372,34 +4656,71 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         audioPauseGuardRef.current = false;
         await playAudioWithTimeout(element);
         setAudioPlaying(true);
-        return;
+        return false;
       }
-      const source = await prepareDriveTrackForPlayback(nextTrack);
-      const sourceChanged = element.src !== source;
-      audioPauseGuardRef.current = true;
-      element.pause();
-      if (sourceChanged) {
-        element.src = source;
-        element.load();
-      } else {
-        // A one-song loop should start the same element again, without a
-        // source reload that can briefly stop or reset playback elsewhere.
-        element.currentTime = 0;
+      const startTrack = async (source: string) => {
+        const sourceChanged = element.src !== source;
+        audioPauseGuardRef.current = true;
+        element.pause();
+        if (sourceChanged) {
+          element.src = source;
+          element.load();
+        } else {
+          // A one-song loop should start the same element again, without a
+          // source reload that can briefly stop or reset playback elsewhere.
+          element.currentTime = 0;
+        }
+        audioPauseGuardRef.current = false;
+        applyPendingMusicResume();
+        await playAudioWithTimeout(element);
+        if (element.error) throw new Error('Audio format was rejected by this browser.');
+      };
+
+      let firstError: unknown;
+      let firstAttemptFailed = false;
+      try {
+        const source = await prepareDriveTrackForPlayback(nextTrack);
+        await startTrack(source);
+      } catch (error) {
+        firstAttemptFailed = true;
+        firstError = error;
       }
-      audioPauseGuardRef.current = false;
-      applyPendingMusicResume();
-      await playAudioWithTimeout(element);
+      if (firstAttemptFailed) {
+        if (nextTrack.source !== 'drive') throw firstError;
+        // The first cache/native attempt failed. Convert this one item before
+        // marking it bad; only a second failure advances the queue.
+        const convertedSource = await prepareDriveTrackForPlayback(nextTrack, false, true);
+        await startTrack(convertedSource);
+      }
+      audioRecoveryRef.current.delete(nextTrack.id);
       setAudioPlaying(true);
     } catch (error) {
       audioPauseGuardRef.current = false;
       setAudioPlaying(false);
-      if (error instanceof Error && /decode|conversion|not supported|not_supported|cannot play/i.test(error.message) && currentQueue.length > 1) {
+      if (currentQueue.length > 1 && isSkippableAudioFailure(error)) {
         failedMusicIdsRef.current.add(nextTrack.id);
-        void advanceMusic();
+        setMusicError(`Skipped unavailable song: ${nextTrack.label}`);
+        // Let the guarded wrapper start the next item after this attempt has
+        // fully released the audio element. Calling advanceMusic directly
+        // here could race a native `ended`/`error` event and skip two tracks.
+        return true;
       }
     } finally {
       setAudioLoading(false);
     }
+    return false;
+  };
+
+  const advanceMusic = async () => {
+    if (musicAdvanceInFlightRef.current) return;
+    musicAdvanceInFlightRef.current = true;
+    let retryNext = false;
+    try {
+      retryNext = await advanceMusicStep();
+    } finally {
+      musicAdvanceInFlightRef.current = false;
+    }
+    if (retryNext) void advanceMusic();
   };
 
   const toggleMusic = async () => {
@@ -4459,10 +4780,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
             <div className="memory-reel-folder-summary">
               <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
-              <span className="memory-reel-folder-count" aria-live="polite">{storyPhotoCount} photos · {storyVideoCount} videos</span>
+              <span className="memory-reel-folder-count" aria-live="polite">{storyLoadedCount}/{storyAvailableCount} loaded · {storyPhotoCount} photos · {storyVideoCount} videos</span>
             </div>
           )}
-          <button type="button" onClick={() => setLoopEnabled(value => !value)} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
+          <button type="button" onClick={toggleLoop} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
           {onClose && <button type="button" className="memory-reel-close" onClick={onClose}><X size={17} /> Close</button>}
         </div>
         <audio
@@ -4497,7 +4818,17 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           onError={() => {
             setAudioLoading(false);
             setAudioPlaying(false);
-            setMusicError(musicQueue[0]?.source === 'drive'
+            const activeTrack = musicQueue.find(track => track.id === currentMusicIdRef.current) || musicQueue[0];
+            // A native stream can report its codec failure after play() has
+            // already resolved. Retry that Drive item once through the local
+            // converted cache before showing the error to the user.
+            if (activeTrack?.source === 'drive' && !audioRecoveryRef.current.has(activeTrack.id)) {
+              audioRecoveryRef.current.add(activeTrack.id);
+              setAudioLoading(true);
+              void playStoryAudio(false).finally(() => setAudioLoading(false));
+              return;
+            }
+            setMusicError(activeTrack?.source === 'drive'
               ? 'This Drive song is cached, but this browser or TV cannot decode its format. MP3 or AAC/M4A works on the widest range of phones and TVs.'
               : 'This audio file was downloaded, but this browser or TV cannot decode its format. MP3 or AAC/M4A works on the widest range of phones and TVs.');
           }}

@@ -53,6 +53,7 @@ const DriveLiveSync: React.FC = () => {
             existing.date !== memory.date ||
             existing.type !== memory.type ||
             existing.mimeType !== memory.mimeType ||
+            existing.modifiedTime !== memory.modifiedTime ||
             existing.thumbnail !== memory.thumbnail;
         });
       const importedIds = new Set(imported.map(memory => memory.driveFileId).filter(Boolean));

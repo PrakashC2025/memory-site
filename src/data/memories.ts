@@ -10,6 +10,7 @@ export interface Memory {
   thumbnail: string;
   authToken?: string;
   driveFileId?: string;
+  modifiedTime?: string;
   orientation?: number;
   width?: number;
   height?: number;

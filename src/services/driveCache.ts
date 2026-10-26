@@ -41,7 +41,7 @@ const readCached = async (id: string) => {
 export const readCachedDriveMedia = async (id: string) => {
   if (!id) return null;
   const cached = await readCached(id);
-  return cached ? { blob: cached.blob, mimeType: cached.mimeType } : null;
+  return cached ? { blob: cached.blob, mimeType: cached.mimeType, modifiedTime: cached.modifiedTime } : null;
 };
 
 const writeCached = async (item: CachedDriveMedia) => {

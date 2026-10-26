@@ -3877,8 +3877,19 @@ html.heavy-visual-paused .memory-reel-overlay {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
-  background: rgba(0, 0, 0, 0.88);
-  backdrop-filter: blur(18px);
+  background: transparent;
+  backdrop-filter: none;
+}
+
+/* The camera is a full-screen task. Keep the app navigation and mobile dock
+   out of the camera surface so they cannot cover the viewfinder or shutter. */
+body.memoriya-camera-active .memoriya-navbar,
+body.memoriya-camera-active .memoriya-mobile-dock {
+  display: none !important;
+}
+
+body.memoriya-camera-active {
+  overflow: hidden !important;
 }
 
 .memoriya-camera-panel {
@@ -4212,6 +4223,58 @@ html.heavy-visual-paused .memory-reel-overlay {
 .memoriya-camera-message.is-error { color: #ff9cae; }
 .memoriya-camera-saved { color: #9bffec; }
 
+.memoriya-camera-upload-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  max-height: 7rem;
+  padding: 0.35rem;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.75rem;
+  background: rgba(3, 5, 12, 0.38);
+}
+
+.memoriya-camera-upload-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 1.7rem;
+  padding: 0.2rem 0.35rem;
+  border-radius: 0.5rem;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.68rem;
+}
+
+.memoriya-camera-upload-item > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.memoriya-camera-upload-item small { color: rgba(255, 255, 255, 0.58); }
+.memoriya-camera-upload-item.is-uploaded { color: #9bffec; }
+.memoriya-camera-upload-item.is-paused,
+.memoriya-camera-upload-item.is-failed,
+.memoriya-camera-upload-item.is-cancelled { color: #ffd08a; }
+
+.memoriya-camera-upload-item button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  min-height: 1.5rem;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid rgba(155, 255, 236, 0.3);
+  border-radius: 999px;
+  background: rgba(155, 255, 236, 0.08);
+  color: #9bffec;
+  font-size: 0.64rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
 .memoriya-camera-settings {
   display: flex;
   align-items: center;
@@ -4505,7 +4568,7 @@ html.heavy-visual-paused .memory-reel-overlay {
     padding: 0;
     margin: 0;
     overflow: hidden;
-    background: #020307;
+    background: transparent;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -4522,9 +4585,9 @@ html.heavy-visual-paused .memory-reel-overlay {
     align-items: center;
     border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: 999px;
-    background: rgba(3, 5, 12, 0.75);
+    background: rgba(3, 5, 12, 0.38);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(18px);
+    backdrop-filter: none;
   }
 
   .memoriya-camera-panel header h2 { display: none; }
@@ -4590,7 +4653,7 @@ html.heavy-visual-paused .memory-reel-overlay {
     z-index: 25;
     padding: 0.75rem 0.9rem max(0.9rem, env(safe-area-inset-bottom)) 0.9rem;
     background: linear-gradient(0deg, rgba(2, 3, 7, 0.97) 0%, rgba(2, 3, 7, 0.88) 78%, transparent 100%);
-    backdrop-filter: blur(16px);
+    backdrop-filter: none;
     display: flex;
     flex-direction: column;
     gap: 0.55rem;
@@ -4639,6 +4702,97 @@ html.heavy-visual-paused .memory-reel-overlay {
   .memoriya-camera-review {
     padding-top: max(0.75rem, env(safe-area-inset-top));
     padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+}
+
+/* A rotated phone gets a shorter, two-row control deck so the horizontal
+   viewfinder remains usable instead of keeping the portrait-sized controls. */
+@media (max-width: 899px) and (orientation: landscape) {
+  .memoriya-camera-panel header {
+    top: max(0.35rem, env(safe-area-inset-top));
+    left: 0.55rem;
+    right: 0.55rem;
+    padding: 0.28rem 0.55rem;
+  }
+
+  .memoriya-camera-panel header .memoriya-kicker {
+    font-size: 0.62rem;
+  }
+
+  .memoriya-camera-corner-tools,
+  .memoriya-camera-viewfinder-tools {
+    top: max(0.45rem, env(safe-area-inset-top));
+  }
+
+  .memoriya-camera-bottom-deck {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(17rem, 24rem);
+    grid-template-areas:
+      'gallery controls'
+      'settings destination'
+      'message message'
+      'status status';
+    align-items: center;
+    gap: 0.3rem 0.7rem;
+    padding: 0.35rem 0.7rem max(0.4rem, env(safe-area-inset-bottom)) 0.7rem;
+    background: linear-gradient(0deg, rgba(2, 3, 7, 0.98), rgba(2, 3, 7, 0.9) 82%, transparent 100%);
+  }
+
+  .memoriya-camera-gallery {
+    grid-area: gallery;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .memoriya-camera-controls {
+    grid-area: controls;
+    width: 100%;
+    margin: 0;
+    gap: 0.45rem;
+  }
+
+  .memoriya-camera-shutter {
+    width: 3.55rem;
+    height: 3.55rem;
+  }
+
+  .memoriya-camera-settings {
+    grid-area: settings;
+    min-width: 0;
+    margin: 0;
+    gap: 0.35rem;
+    flex-wrap: nowrap;
+  }
+
+  .memoriya-camera-settings label {
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .memoriya-camera-destination {
+    grid-area: destination;
+    min-width: 0;
+    margin: 0;
+    padding: 0.25rem 0.55rem 0.25rem 0.7rem;
+  }
+
+  .memoriya-camera-destination select {
+    min-width: 0;
+    max-width: 65%;
+  }
+
+  .memoriya-camera-message,
+  .memoriya-camera-saved {
+    grid-area: message;
+    min-height: 1rem;
+    margin: 0;
+    font-size: 0.65rem;
+  }
+
+  .memoriya-camera-upload-list {
+    grid-area: status;
+    max-height: 3.8rem;
+    padding: 0.2rem;
   }
 }
 
@@ -11583,6 +11737,24 @@ html.legacy-tv-browser .memory-reel-stage[class*="memory-reel-template-"]:not(.m
   }
 }
 
+/* Correct EXIF/Drive quarter-turns without shrinking the photo inside the
+   frame. The card uses the displayed aspect ratio; this inner box uses the
+   source aspect and is rotated around its centre, so faces and full edges
+   remain straight and visible. */
+.memory-reel-stage .card > .m.media-frame-rotated {
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  width: var(--media-rotated-width) !important;
+  height: var(--media-rotated-height) !important;
+  max-width: none !important;
+  max-height: none !important;
+  object-fit: contain !important;
+  object-position: center center !important;
+  transform: translate3d(-50%, -50%, 0) rotate(var(--media-rotation)) !important;
+  transform-origin: center center !important;
+}
+
 html.legacy-tv-browser .memory-reel-overlay {
   display: block;
   overflow: hidden;
@@ -12573,7 +12745,10 @@ html:not(.legacy-tv-browser) .page-hero button {
   overflow: visible;
   border-radius: 16px;
   will-change: transform, opacity;
-  transition: filter 180ms ease;
+  /* Blur is quantised by the renderer. A CSS filter transition would keep
+     old and new rasters alive at every camera sample and causes a hitch at
+     the start/end of each flight. */
+  transition: none;
 }
 
 .memory-reel-stage.memory-reel-template-orbit .card.frame {

@@ -409,7 +409,7 @@ export class GoogleDriveService {
       );
       files.push(...(payload.files || []).filter(file =>
         file.mimeType.toLowerCase().startsWith('audio/') ||
-        /\.(mp3|m4a|aac|ogg|oga|wav|flac|opus|webm|aiff|aif|amr|mka|wma)$/i.test(file.name)
+        /\.(mp3|m4a|m4b|aac|ogg|oga|wav|flac|opus|webm|aiff|aif|amr|mka|wma|mp4|m4v|mov|mkv|3gp|3g2)$/i.test(file.name)
       ));
       pageToken = payload.nextPageToken || '';
     } while (pageToken);
@@ -617,6 +617,7 @@ export class GoogleDriveService {
       thumbnail: previewUrl,
       authToken: accessToken,
       driveFileId: file.id,
+      modifiedTime: file.modifiedTime,
       orientation: normalizeDriveRotation(file.imageMediaMetadata?.rotation),
       width: dimensions?.width,
       height: dimensions?.height,
