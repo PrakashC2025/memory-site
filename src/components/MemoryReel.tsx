@@ -2740,9 +2740,13 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal, drive
   const sources = memories.flatMap(memory => {
     const video = isVideoMemory(memory);
     const driveBacked = Boolean(memory.driveFileId);
-    const driveMediaUrl = driveBacked && driveAccessToken
+    // A just-captured photo is temporarily backed by a local blob URL. Prefer
+    // it over Drive's thumbnail/original URL so the live reel can show the
+    // full camera frame immediately while Drive sync catches up.
+    const localMediaUrl = [memory.url, memory.thumbnail].find(url => url?.startsWith('blob:')) || '';
+    const driveMediaUrl = localMediaUrl || (driveBacked && driveAccessToken
       ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(memory.driveFileId!)}?alt=media&access_token=${encodeURIComponent(driveAccessToken)}`
-      : memory.url;
+      : memory.url);
     // Drive thumbnails are safe, fast first paint. Originals are fetched by
     // the controller after the thumbnail is visible.
     const preview = video ? driveMediaUrl || memory.thumbnail : memory.thumbnail || driveMediaUrl;
@@ -4190,6 +4194,26 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       window.removeEventListener('online', onOnline);
     };
   }, []);
+
+  // Mobile browsers may reject the automatic resume after a page return or a
+  // Drive cache restore because it is no longer inside a user gesture. Keep
+  // the saved playback intent and retry on the next real tap without making
+  // the user select the song again.
+  useEffect(() => {
+    const retryAudioFromGesture = () => {
+      const element = audioPlayerRef.current;
+      const savedPlayback = storedMusicPlaybackRef.current;
+      if (!element || !element.paused || audioManuallyStoppedRef.current || (!savedPlayback?.wasPlaying && !playing)) return;
+      audioManuallyStoppedRef.current = false;
+      void playStoryAudio(true);
+    };
+    window.addEventListener('pointerdown', retryAudioFromGesture, { passive: true });
+    window.addEventListener('touchstart', retryAudioFromGesture, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', retryAudioFromGesture);
+      window.removeEventListener('touchstart', retryAudioFromGesture);
+    };
+  }, [musicQueue.length, playing]);
 
   const toggleStoryPlayback = () => {
     const controller = controllerRef.current;

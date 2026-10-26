@@ -30,7 +30,7 @@ interface ImageCaptureLike {
 interface Props {
   accessToken: string;
   initialFolderId?: string;
-  onUploaded: (file: DriveMediaFile, accessToken?: string) => void;
+  onUploaded: (file: DriveMediaFile, accessToken?: string, localFile?: File) => void;
   onDeleted?: (fileId: string) => void;
   onClose: () => void;
 }
@@ -426,7 +426,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         writePendingCameraUploads(readPendingCameraUploads().filter(job => job.id !== queueId));
       }
       await writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
-      onUploaded(uploaded, token);
+      onUploaded(uploaded, token, file);
       setStatus('Photo saved locally and synced to Drive.');
       return true;
     } catch (uploadError) {
@@ -656,7 +656,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           nextUploadedFile = { ...updated, thumbnailUrl: updated.thumbnailUrl || uploadedFile.thumbnailUrl };
         }
         await writeCachedStoryMedia(uploadedFile.id, localFile, nextUploadedFile.mimeType || localFile.type);
-        onUploaded(nextUploadedFile, token);
+        onUploaded(nextUploadedFile, token, localFile);
       } else {
         await removeQueuedUpload(capturedPhoto.queueId);
         nextQueueId = resumeUpload(localFile);

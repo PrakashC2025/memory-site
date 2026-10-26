@@ -122,6 +122,7 @@ const Memoriya: React.FC = () => {
   const driveAuthRequiredRef = useRef(readDriveAuthRequired());
   const loaderRef = useRef<HTMLDivElement | null>(null);
   const localObjectUrlsRef = useRef<string[]>([]);
+  const livePreviewUrlsRef = useRef(new Map<string, string>());
   const folderInputRef = useRef<HTMLInputElement>(null);
   const folderHandleRef = useRef<LocalDirectoryHandle | null>(null);
   const folderPollRef = useRef<number | null>(null);
@@ -160,6 +161,7 @@ const Memoriya: React.FC = () => {
     return () => {
       localObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
       localObjectUrlsRef.current = [];
+      livePreviewUrlsRef.current.clear();
       if (folderPollRef.current) window.clearInterval(folderPollRef.current);
       folderPollRef.current = null;
     };
@@ -180,6 +182,11 @@ const Memoriya: React.FC = () => {
         .some(value => String(value).toLowerCase().includes(needle))
     );
   }, [memories, query]);
+
+  const withLivePreviews = (items: Memory[]) => items.map(memory => {
+    const preview = memory.driveFileId ? livePreviewUrlsRef.current.get(memory.driveFileId) : '';
+    return preview ? { ...memory, url: preview, thumbnail: preview } : memory;
+  });
 
   const bestMemories = filteredMemories.slice(0, 8);
   const locations = useMemo(() => Object.entries(groupBy(filteredMemories, memory => memory.location || 'No location metadata')), [filteredMemories]);
@@ -420,7 +427,7 @@ const Memoriya: React.FC = () => {
 
   useEffect(() => {
     if (!reelConfig?.live) return;
-    setReelConfig(current => current?.live ? { ...current, memories: filteredMemories } : current);
+    setReelConfig(current => current?.live ? { ...current, memories: withLivePreviews(filteredMemories) } : current);
   }, [filteredMemories]);
 
   // DriveLiveSync reconciles Drive in the background (additions and deletions)
@@ -486,12 +493,19 @@ const Memoriya: React.FC = () => {
     return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, reconcileFromDrive);
   }, []);
 
-  const appendDriveFiles = (files: DriveMediaFile[], token: string) => {
+  const appendDriveFiles = (files: DriveMediaFile[], token: string, localFile?: File) => {
     void cacheDriveMediaFiles(files, token);
     const imported = files
       .filter(isVisualDriveFile)
       .map(file => enrichDriveMemory(googleDriveService.toMemory(file, token), file));
     if (!imported.length) return 0;
+    if (localFile && imported[0]?.driveFileId) {
+      const previousPreview = livePreviewUrlsRef.current.get(imported[0].driveFileId);
+      if (previousPreview) URL.revokeObjectURL(previousPreview);
+      const preview = URL.createObjectURL(localFile);
+      livePreviewUrlsRef.current.set(imported[0].driveFileId, preview);
+      localObjectUrlsRef.current.push(preview);
+    }
     const mergeImported = (current: Memory[]) => {
       const importedByDriveId = new Map(imported.map(memory => [memory.driveFileId || memory.id, memory]));
       const replaced = current.map(memory => importedByDriveId.get(memory.driveFileId || memory.id) || memory);
@@ -512,7 +526,7 @@ const Memoriya: React.FC = () => {
     // but this direct path prevents a freshly uploaded photo from waiting for
     // another render or Drive scan before it joins the live story.
     setReelConfig(current => current?.live
-      ? { ...current, memories: mergeImported(current.memories) }
+      ? { ...current, memories: withLivePreviews(mergeImported(current.memories)) }
       : current);
     return imported.length;
   };
@@ -992,13 +1006,18 @@ const Memoriya: React.FC = () => {
         <DriveCameraCapture
           accessToken={accessToken}
           initialFolderId={driveFolderId || 'drive-root'}
-          onUploaded={(file, uploadedToken) => {
+          onUploaded={(file, uploadedToken, localFile) => {
             const activeToken = uploadedToken || accessToken;
             if (uploadedToken && uploadedToken !== accessToken) setAccessToken(uploadedToken);
-            const added = appendDriveFiles([file], activeToken);
+            const added = appendDriveFiles([file], activeToken, localFile);
             setMessage(added ? 'Photo uploaded to Drive and added to the live story.' : 'Photo uploaded to Drive. Sync again if it is not visible yet.');
           }}
           onDeleted={fileId => {
+            const preview = livePreviewUrlsRef.current.get(fileId);
+            if (preview) {
+              URL.revokeObjectURL(preview);
+              livePreviewUrlsRef.current.delete(fileId);
+            }
             clearDeletedDriveMedia([fileId]);
             setMemories(current => current.filter(memory => memory.driveFileId !== fileId));
             setSelected(current => current?.driveFileId === fileId ? null : current);

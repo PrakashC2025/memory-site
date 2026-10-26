@@ -215,7 +215,15 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
             .then(() => applyCached(knownDriveMemoriesRef.current));
         }
         if (removed.size || imported.length) {
-          saveDriveMemories(known, token, folderId);
+          // Preserve a photo published by the camera while this Drive scan
+          // was in flight. The scan's metadata may be older than the upload.
+          const latestShared = readDriveMemories();
+          const knownIds = new Set(known.map(memory => memory.driveFileId || memory.id));
+          const freshPublished = latestShared.filter(memory => {
+            const key = memory.driveFileId || memory.id;
+            return !knownIds.has(key) && (!memory.driveFileId || !removed.has(memory.driveFileId));
+          });
+          saveDriveMemories([...known, ...freshPublished], token, folderId);
           setDriveMemories(current => {
             const currentById = new Map(current.map(memory => [memory.driveFileId || memory.id, memory]));
             known.forEach(memory => currentById.set(memory.driveFileId || memory.id, memory));

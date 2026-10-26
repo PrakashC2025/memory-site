@@ -100,7 +100,13 @@ const DriveLiveSync: React.FC = () => {
         const cachePromise = filesToCache.length
           ? cacheDriveMediaFiles(filesToCache, accessToken)
           : Promise.resolve();
-        if (removed.size || imported.length) saveDriveMemories(next, accessToken, folderId);
+        if (removed.size || imported.length) {
+          // A camera upload can publish between the snapshot request and this
+          // write. Re-read the shared snapshot immediately before publishing
+          // so an older background scan cannot erase that fresh photo.
+          const latest = mergeDriveMemories(readDriveMemories(), imported, removed);
+          saveDriveMemories(latest, accessToken, folderId);
+        }
         if (filesToCache.length) {
           // The first event makes the new metadata visible immediately. The
           // second event swaps the new item to its local blob after the
