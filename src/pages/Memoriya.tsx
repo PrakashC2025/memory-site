@@ -377,10 +377,10 @@ const Memoriya: React.FC = () => {
     // folder, so poll only the cheap metadata changes feed (no downloads, no
     // folder snapshot) on a short cadence: an upload or a deletion then lands
     // in the story within seconds instead of after a minute.
-    const DRIVE_SYNC_INTERVAL_MS = 60000;
-    const DRIVE_SYNC_COOLDOWN_MS = 45000;
-    const LIVE_STORY_POLL_MS = 8000;
-    const LIVE_STORY_COOLDOWN_MS = 6000;
+    const DRIVE_SYNC_INTERVAL_MS = 15000;
+    const DRIVE_SYNC_COOLDOWN_MS = 8000;
+    const LIVE_STORY_POLL_MS = 5000;
+    const LIVE_STORY_COOLDOWN_MS = 2500;
     let lastDriveSyncAt = 0;
     let timer = 0;
     const scheduleNextSync = () => {
@@ -435,7 +435,6 @@ const Memoriya: React.FC = () => {
     );
     const reconcileFromDrive = () => {
       const stored = readDriveMemories().filter(memory => memory.driveFileId);
-      if (!stored.length) return;
       const storedById = new Map(stored.map(memory => [memory.driveFileId as string, memory]));
       const knownIds = driveSnapshotIdsRef.current;
       const current = memoriesRef.current;

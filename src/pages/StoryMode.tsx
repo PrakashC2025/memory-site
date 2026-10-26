@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
 import { isVisualMemory, type Memory } from '../data/memories';
 import { acquireDriveSyncLock, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, clearDriveChangePageToken, readDriveAccessToken, readDriveAuthRequired, readDriveChangePageToken, readDriveFolderId, readDriveFolders, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveAuthRequired, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
@@ -28,7 +28,13 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const cacheHydrationGenerationRef = useRef(0);
   const knownDriveMemoriesRef = useRef<Memory[]>([]);
   const driveAuthRequiredRef = useRef(readDriveAuthRequired());
-  const storyMemories = localMemories.length ? localMemories : driveMemories;
+  const storyMemories = useMemo(() => {
+    const byKey = new Map<string, Memory>();
+    [...driveMemories, ...localMemories].forEach(memory => {
+      byKey.set(memory.driveFileId || memory.id, memory);
+    });
+    return Array.from(byKey.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [driveMemories, localMemories]);
 
   useEffect(() => {
     return () => {
@@ -56,8 +62,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   }, []);
 
   useEffect(() => {
-      const onMemoriesUpdated = async () => {
-        if (localMemories.length) return;
+    const onMemoriesUpdated = async () => {
       const generation = ++cacheHydrationGenerationRef.current;
       const next = readDriveMemories().filter(memory => isVisualMemory(memory) && (!selectedFolderId || memory.driveFileId));
       knownDriveMemoriesRef.current = next;
@@ -77,7 +82,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     };
     window.addEventListener(DRIVE_MEMORIES_UPDATED_EVENT, onMemoriesUpdated);
     return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, onMemoriesUpdated);
-  }, [localMemories.length, selectedFolderId]);
+  }, [selectedFolderId]);
 
   useEffect(() => {
     const token = readDriveAccessToken();
