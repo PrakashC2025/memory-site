@@ -1,11 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Play } from 'lucide-react';
 import type { Memory } from '../data/memories';
-import { readCachedDriveMedia } from '../services/driveCache';
-import { googleDriveService } from '../services/googleDriveService';
+import { ensureCachedDriveMedia, readCachedDriveMedia } from '../services/driveCache';
 import { saveDriveAccessToken } from '../services/driveLibrary';
 import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
-import { withMediaFetch } from '../utils/mediaQueue';
 import { observeNearViewport } from '../utils/visibilityGate';
 
 interface Props {
@@ -110,7 +108,14 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
         const cached = driveCached?.blob || await readCachedStoryMedia(cacheKey);
         const result = cached
           ? { blob: cached, accessToken: memory.authToken! }
-          : await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(memory.authToken!, memory.driveFileId!, controller.signal), controller.signal);
+          : await ensureCachedDriveMedia({
+            id: memory.driveFileId!,
+            name: memory.title,
+            mimeType: memory.mimeType || (memory.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+            thumbnailUrl: memory.thumbnail || '',
+            modifiedTime: memory.modifiedTime,
+          }, memory.authToken!);
+        if (!result) throw new Error('Drive media could not be cached.');
         if (result.accessToken !== memory.authToken) saveDriveAccessToken(result.accessToken);
         const blob = result.blob;
         if (cancelled) return;

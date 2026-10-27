@@ -71,6 +71,16 @@ export const isVisualDriveFile = (file: Pick<DriveMediaFile, 'mimeType'>) => {
   return mimeType.startsWith('image/') || mimeType.startsWith('video/');
 };
 
+const AUDIO_FILE_EXTENSION = /\.(mp3|m4a|m4b|aac|ogg|oga|wav|flac|opus|aiff|aif|amr|mka|wma)$/i;
+
+// Audio and video share extensions such as .webm and .mp4 in Drive. The MIME
+// type wins, so a video can never enter the Story Music list by mistake.
+export const isAudioDriveFile = (file: Pick<DriveAudioFile, 'mimeType' | 'name'>) => {
+  const mimeType = (file.mimeType || '').toLowerCase();
+  if (mimeType.startsWith('video/')) return false;
+  return mimeType.startsWith('audio/') || AUDIO_FILE_EXTENSION.test(file.name || '');
+};
+
 export const isDriveAuthorizationError = (error: unknown) =>
   error instanceof Error && /authorization expired|access was denied|unauthorized|invalid credentials/i.test(error.message);
 
@@ -79,6 +89,8 @@ export const isDriveAuthorizationError = (error: unknown) =>
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
 const GOOGLE_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 const DRIVE_REQUEST_TIMEOUT_MS = 20000;
+const DRIVE_MEDIA_TIMEOUT_MS = 90000;
+const DRIVE_MEDIA_ATTEMPTS = 4;
 const invalidDriveTokens = new Set<string>();
 
 const markDriveTokenInvalid = (accessToken: string) => {
@@ -407,10 +419,7 @@ export class GoogleDriveService {
         `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
         accessToken,
       );
-      files.push(...(payload.files || []).filter(file =>
-        file.mimeType.toLowerCase().startsWith('audio/') ||
-        /\.(mp3|m4a|m4b|aac|ogg|oga|wav|flac|opus|webm|aiff|aif|amr|mka|wma|mp4|m4v|mov|mkv|3gp|3g2)$/i.test(file.name)
-      ));
+      files.push(...(payload.files || []).filter(isAudioDriveFile));
       pageToken = payload.nextPageToken || '';
     } while (pageToken);
     return files;
@@ -435,7 +444,7 @@ export class GoogleDriveService {
       throw new Error('Google Drive authorization expired. Reconnect Google Drive and try again.');
     }
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
+    const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_MEDIA_TIMEOUT_MS);
     const abortFromParent = () => controller.abort();
     if (parentSignal) {
       if (parentSignal.aborted) controller.abort();
@@ -468,13 +477,30 @@ export class GoogleDriveService {
   }
 
   async downloadMediaFileWithReconnect(accessToken: string, fileId: string, parentSignal?: AbortSignal) {
-    try {
-      return { blob: await this.downloadMediaFile(accessToken, fileId, parentSignal), accessToken };
-    } catch (error) {
-      if (!isDriveAuthorizationError(error)) throw error;
-      const refreshedToken = await this.refreshAccessToken(undefined, true);
-      return { blob: await this.downloadMediaFile(refreshedToken, fileId, parentSignal), accessToken: refreshedToken };
+    let token = accessToken;
+    let refreshed = false;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < DRIVE_MEDIA_ATTEMPTS; attempt += 1) {
+      if (parentSignal?.aborted) {
+        const cancelled = new Error('Media request was cancelled.');
+        cancelled.name = 'AbortError';
+        throw cancelled;
+      }
+      try {
+        return { blob: await this.downloadMediaFile(token, fileId, parentSignal), accessToken: token };
+      } catch (error) {
+        lastError = error;
+        if (parentSignal?.aborted) throw error;
+        if (isDriveAuthorizationError(error) && !refreshed) {
+          token = await this.refreshAccessToken(undefined, true);
+          refreshed = true;
+          continue;
+        }
+        if (attempt + 1 >= DRIVE_MEDIA_ATTEMPTS) throw error;
+        await waitForDriveRetry(700 * (2 ** attempt));
+      }
     }
+    throw lastError instanceof Error ? lastError : new Error('Drive media could not be downloaded.');
   }
 
   async uploadMedia(accessToken: string, file: File, folderId?: string, signal?: AbortSignal): Promise<DriveMediaFile> {
@@ -643,6 +669,10 @@ export const normalizeDriveRotation = (rotation?: number) => {
   const quarterTurns = Math.round((rotation as number) / 90);
   return (((quarterTurns % 4) + 4) % 4) * 90;
 };
+
+const waitForDriveRetry = (delayMs: number) => new Promise<void>(resolve => {
+  window.setTimeout(resolve, delayMs);
+});
 
 export const normalizeDriveDate = (value?: string) => {
   if (!value) return new Date().toISOString();

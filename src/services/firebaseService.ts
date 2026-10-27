@@ -32,7 +32,9 @@ export const getFirebaseAuth = async () => {
   const { initializeApp, getAuth, setPersistence, browserLocalPersistence } = await loadFirebaseModules();
   app ||= initializeApp(firebaseConfig);
   const auth = getAuth(app);
-  void setPersistence(auth, browserLocalPersistence);
+  // Finish configuring persistence before any sign-in call starts. This keeps
+  // the Firebase session stable when the user signs in on a second device.
+  await setPersistence(auth, browserLocalPersistence);
   return auth;
 };
 
@@ -66,15 +68,13 @@ export const authService = {
     const provider = new GoogleAuthProvider();
     provider.addScope('email');
     provider.addScope('profile');
-    // Ask for Drive access as part of the same Google sign-in. The returned
-    // OAuth access token can be used by Memoriya without a second Drive button.
-    provider.addScope('https://www.googleapis.com/auth/drive.readonly');
-    provider.addScope('https://www.googleapis.com/auth/drive.file');
+    // Keep identity sign-in separate from Drive authorization. Drive scopes
+    // are sensitive and are requested only when the user explicitly taps
+    // "Connect Drive" in the app, which avoids repeated Google risk checks
+    // and makes the consent purpose clear.
     const credential = await signInWithPopup(auth, provider);
-    const googleCredential = GoogleAuthProvider.credentialFromResult(credential);
     return {
       user: credential.user,
-      driveAccessToken: googleCredential?.accessToken,
     };
   },
 

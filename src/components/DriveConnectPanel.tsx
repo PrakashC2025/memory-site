@@ -132,8 +132,8 @@ const DriveConnectPanel: React.FC = () => {
           <h2 className="font-black text-white">{state.connected ? 'Google Drive linked' : 'Connect Google Drive'}</h2>
           <p className="mt-1 text-sm leading-6 text-white/58">
             {state.connected
-              ? 'Selected folders are ready for metadata extraction and memory grouping.'
-              : 'Connect Drive or upload media to generate a private memory world.'}
+              ? 'This browser is authorized. Selected folders are ready for metadata extraction and memory grouping.'
+              : 'Connect Drive on each device you use, or upload media to generate a private memory world.'}
           </p>
           {(state.message || state.error) && (
             <p className={`mt-3 text-xs leading-5 ${state.error ? 'text-rose-200' : 'text-white/58'}`} role={state.error ? 'alert' : undefined}>

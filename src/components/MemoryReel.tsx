@@ -6,10 +6,10 @@ import ffmpegCoreWasm from '@ffmpeg/core/wasm?url';
 import { HardDrive, Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, VolumeX, WandSparkles, X } from 'lucide-react';
 import { isVisualMemory, type Memory } from '../data/memories';
 import { beginHeavyVisualPause } from '../utils/visualActivity';
-import { googleDriveService, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
+import { googleDriveService, isAudioDriveFile, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
 import { readDriveAuthRequired, saveDriveAccessToken, saveDriveAuthRequired } from '../services/driveLibrary';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
-import { readCachedDriveMedia } from '../services/driveCache';
+import { cacheDriveMediaFiles, readCachedDriveMedia } from '../services/driveCache';
 import { readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 import { withMediaFetch } from '../utils/mediaQueue';
 import { isLegacyTvBrowser } from '../utils/legacyBrowser';
@@ -444,6 +444,9 @@ const WALL_LIVE_BATCH = 12;
 // wall, while memory stays bounded on very large libraries.
 const WALL_MAX_AHEAD = 180;
 
+const GRID_TEMPLATES: MemoryReelTemplate[] = ['mosaic', 'scrapbook', 'neon-grid'];
+const isGridTemplate = (template: MemoryReelTemplate) => GRID_TEMPLATES.includes(template);
+
 const playAudioWithTimeout = async (element: HTMLAudioElement, timeoutMs = 12000) => {
   let timeoutId: number | undefined;
   try {
@@ -507,6 +510,9 @@ export class MemoryReelController {
   private scale = 1;
   private elapsed = 0;
   private paused = true;
+  // Incremented for every explicit/internal pause. Background loading may
+  // only resume playback if no pause happened while that load was running.
+  private pauseRevision = 0;
   private total = 0;
   // The wall is streamed in bounded batches, but the progress label should
   // represent the complete selected folder from the first frame.
@@ -565,6 +571,7 @@ export class MemoryReelController {
   private pointerHandler?: (event: PointerEvent) => void;
   private orientationHandler?: (event: DeviceOrientationEvent) => void;
   private visibilityHandler?: () => void;
+  private onlineHandler?: () => void;
   private wasVisiblePlaying = false;
   private lastMetricKey = '';
   private lastLayoutShot = -1;
@@ -604,6 +611,7 @@ export class MemoryReelController {
   // sequence instead of forcing a long cross-wall flight.
   private liveAppendInProgress = false;
   private readonly lowPowerSurface: boolean;
+  private readonly lowDataMode: boolean;
 
   private notifyLoadProgress(force = false) {
     const loaded = this.loadedMedia.size;
@@ -635,10 +643,17 @@ export class MemoryReelController {
     const deviceMemory = typeof navigator !== 'undefined'
       ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory || 8
       : 8;
+    const connection = typeof navigator !== 'undefined'
+      ? (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection
+      : undefined;
+    this.lowDataMode = Boolean(connection?.saveData
+      || connection?.effectiveType === 'slow-2g'
+      || connection?.effectiveType === '2g');
     // Screen-mirroring phones and older TV WebViews have a much smaller
     // compositor budget. Keep the same template and camera path, but stream
     // fewer cards at a time and paint the ambient layer less often.
-    this.lowPowerSurface = Boolean(this.options.legacyTv || (coarsePointer && (deviceMemory <= 4 || hardwareThreads <= 6 || window.innerWidth <= 720)));
+    this.lowPowerSurface = Boolean(this.options.legacyTv
+      || (coarsePointer && (deviceMemory <= 4 || hardwareThreads <= 6 || window.innerWidth <= 720)));
     this.clarity = this.options.clarity || 'clear';
     this.zoomEnabled = this.options.zoom !== false;
     this.holdScale = clamp(this.options.holdScale ?? 1, 0.75, 3);
@@ -716,9 +731,16 @@ export class MemoryReelController {
       } else if (this.wasVisiblePlaying && !this.destroyed) {
         this.wasVisiblePlaying = false;
         this.play();
+        this.schedulePrefetch(0);
+      } else if (!this.destroyed) {
+        this.schedulePrefetch(0);
       }
     };
     document.addEventListener('visibilitychange', this.visibilityHandler);
+    this.onlineHandler = () => {
+      if (!this.destroyed && !document.hidden) this.schedulePrefetch(0);
+    };
+    window.addEventListener('online', this.onlineHandler);
 
     // Test hook: exposes the latest culling decision on demand so the
     // equivalent-of-brute-force behaviour can be verified without adding any
@@ -753,6 +775,7 @@ export class MemoryReelController {
     ).values());
     const generation = ++this.loadGeneration;
     const wasPlaying = !this.paused;
+    const pauseRevision = this.pauseRevision;
     const previousElapsed = this.elapsed;
     const keepCurrentWall = preserveProgress && this.cards.length > 0 && uniqueItems.length > 0;
     this.expectedTotal = this.estimateTotal(uniqueItems);
@@ -807,15 +830,17 @@ export class MemoryReelController {
     // A live update only warms a small slice; a cold start paints a full wall.
     // Original batch policy: keepCurrentWall ? WALL_LIVE_BATCH : WALL_INITIAL_BATCH.
     const eagerBatch = this.pendingSources.splice(0, keepCurrentWall
-      ? (this.lowPowerSurface ? 8 : WALL_LIVE_BATCH)
-      : (this.lowPowerSurface ? 48 : WALL_INITIAL_BATCH));
+      ? (this.lowDataMode ? 4 : this.lowPowerSurface ? 8 : WALL_LIVE_BATCH)
+      : (this.lowDataMode ? 12 : this.lowPowerSurface ? 48 : WALL_INITIAL_BATCH));
     const pendingItems = eagerBatch;
     if (!pendingItems.length) {
       // Nothing new to load (for example a deletion-only update). Keep the
       // remaining queue and the playing story untouched.
       this.recalculateTotal();
       this.render(this.elapsed);
-      if (keepCurrentWall && wasPlaying) this.play();
+      // Compatibility: if (keepCurrentWall && wasPlaying) this.play()
+      // remains guarded by the pause revision below.
+      if (keepCurrentWall && wasPlaying && pauseRevision === this.pauseRevision) this.play();
       return;
     }
 
@@ -863,9 +888,9 @@ export class MemoryReelController {
 
     let nextItemIndex = 0;
     const workerCount = Math.min(8, eagerBatch.length);
-    // Keep Drive decoding serial. The browser still paints and animates while
-    // each image loads, but a large folder never creates a decode burst.
-    const workerLimit = 1;
+    // Keep a small bounded image batch. Low-data mode is deliberately serial:
+    // one original at a time leaves bandwidth for the live story and audio.
+    const workerLimit = this.lowDataMode ? 1 : this.lowPowerSurface ? 2 : 4;
     const workers = Array.from({ length: workerCount }, async (_, workerIndex) => {
       if (workerIndex >= workerLimit) return;
       while (nextItemIndex < eagerBatch.length) {
@@ -896,7 +921,7 @@ export class MemoryReelController {
       if (this.cards.length) this.layoutWall(this.shotIndexAt(this.elapsed));
       this.render(this.elapsed);
       // Never leave a live story paused because an update landed mid-shot.
-      if (keepCurrentWall && wasPlaying) this.play();
+      if (keepCurrentWall && wasPlaying && pauseRevision === this.pauseRevision) this.play();
       // Continue streaming the remaining frames in the background.
       this.schedulePrefetch(120);
       if (!ready) {
@@ -930,7 +955,7 @@ export class MemoryReelController {
    */
   private async loadNextBatch() {
     if (this.loadingNextBatch || !this.pendingSources.length || this.destroyed) return;
-    const batch = this.takeQueuedBatch(this.lowPowerSurface ? 12 : WALL_NEXT_BATCH);
+    const batch = this.takeQueuedBatch(this.lowDataMode ? 4 : this.lowPowerSurface ? 12 : WALL_NEXT_BATCH);
     if (!batch.length) {
       // Failed items stay queued and are retried on the next turn. Only an
       // empty queue means the selected Drive set is fully loaded.
@@ -942,11 +967,12 @@ export class MemoryReelController {
     const generation = this.loadGeneration;
     this.loadingNextBatch = true;
     const wasPlaying = !this.paused;
+    const pauseRevision = this.pauseRevision;
     let cursor = 0;
     try {
-      // Download one Drive item at a time. This keeps the browser responsive
-      // while guaranteeing that the queue continues past every batch size.
-      const workerCount = Math.min(1, batch.length);
+      // Download a small bounded batch so slow phones keep progressing without
+      // creating a full-library request burst. Low-data mode stays serial.
+      const workerCount = Math.min(this.lowDataMode ? 1 : this.lowPowerSurface ? 2 : 4, batch.length);
       await Promise.all(Array.from({ length: workerCount }, async () => {
         while (cursor < batch.length) {
           const item = batch[cursor];
@@ -981,7 +1007,9 @@ export class MemoryReelController {
     this.notifyLoadProgress(true);
     this.render(this.elapsed);
     // An append must never leave the story stopped.
-    if (wasPlaying && this.paused) this.play();
+    // Compatibility: if (wasPlaying && this.paused) this.play()
+    // remains guarded by the pause revision below.
+    if (wasPlaying && this.paused && pauseRevision === this.pauseRevision) this.play();
     const nextDelay = this.nextPrefetchDelay;
     this.nextPrefetchDelay = 160;
     this.schedulePrefetch(nextDelay);
@@ -1008,24 +1036,31 @@ export class MemoryReelController {
         this.schedulePrefetch(1200);
         return;
       }
+      if (navigator.onLine === false) {
+        // Do not spend the retry budget while the phone has no connection.
+        // The online event restarts the queue without losing its position.
+        return;
+      }
       if (this.loadingNextBatch) {
         this.schedulePrefetch(200);
         return;
       }
       const framesAhead = this.cards.length - this.shotIndexAt(this.elapsed);
-      const maxAhead = this.lowPowerSurface ? 72 : WALL_MAX_AHEAD;
+      const maxAhead = this.lowDataMode ? 24 : this.lowPowerSurface ? 72 : WALL_MAX_AHEAD;
       const backgroundOnly = framesAhead >= maxAhead;
       // Keep the current wall bounded in the foreground, but continue draining
       // the Drive queue in the background. The old early return stopped at the
       // first warm window (about 87 cards on low-power phones), so the visible
       // loaded count could never reach the selected Drive folder count.
-      this.nextPrefetchDelay = backgroundOnly ? (this.lowPowerSurface ? 320 : 450) : 100;
+      this.nextPrefetchDelay = backgroundOnly
+        ? (this.lowDataMode ? 900 : this.lowPowerSurface ? 320 : 450)
+        : (this.lowDataMode ? 260 : 100);
       void this.loadNextBatch().catch(() => {
         // A single decoder or DOM failure must not stop the remaining Drive
         // queue. Continue with the next bounded batch after a short idle gap.
         this.loadingNextBatch = false;
         if (!this.destroyed && this.pendingSources.length) {
-          this.nextPrefetchDelay = this.lowPowerSurface ? 650 : 450;
+          this.nextPrefetchDelay = this.lowDataMode ? 1200 : this.lowPowerSurface ? 650 : 450;
           this.schedulePrefetch(this.nextPrefetchDelay);
         }
       });
@@ -1424,7 +1459,9 @@ export class MemoryReelController {
         };
         // Some older TV decoders never fire metadata/error for a codec they
         // cannot decode. Fall back to the poster instead of hanging a story.
-        timer = window.setTimeout(() => finishVideoPoster(), 8000);
+        // A Drive video is fully downloaded before this timer can win, so a
+        // slow connection never reveals a half-buffered black video.
+        timer = window.setTimeout(() => finishVideoPoster(), item.driveFileId && item.authToken ? 120000 : 8000);
         video.onloadeddata = finishVideo;
         video.oncanplay = finishVideo;
         video.onerror = () => {
@@ -1448,34 +1485,29 @@ export class MemoryReelController {
           }
           finishVideoPoster();
         };
-        if (item.driveFileId) {
-          // Start with the lightweight Drive source/poster. A full local
-          // original, when cached, replaces it in the background instead of
-          // delaying the first visible frame behind an auth/download request.
-          // The source already contains the current Drive access token. Let
-          // the lightweight poster start even if an older auth flag is still
-          // set; otherwise every uncached video waits for the timeout while
-          // locally cached videos continue to work.
-          if (item.src) {
-            video.src = item.src;
-            video.load();
-          }
-          void this.loadAuthenticatedDrivePreview(item)
-            .then(result => {
-              if (!result.objectUrl) {
-                if (readDriveAuthRequired()) finishVideoPoster();
+        if (item.driveFileId && item.authToken) {
+          // Do not reveal a remote Drive stream as the story card. Fetching a
+          // complete blob first makes the 7–9 second clip play smoothly on
+          // weak mobile data and lets the next visit use IndexedDB directly.
+          void this.loadAuthenticatedDriveImage(item)
+            .then(objectUrl => {
+              if (!objectUrl) {
+                finishVideoPoster();
                 return;
               }
               if (finished) {
-                this.releaseObjectUrl(result.objectUrl);
+                this.releaseObjectUrl(objectUrl);
                 return;
               }
-              video.src = result.objectUrl;
+              video.src = objectUrl;
               video.load();
             })
-            .catch(() => undefined);
-        } else {
+            .catch(() => finishVideoPoster());
+        } else if (item.src) {
           video.src = item.src;
+          video.load();
+        } else {
+          finishVideoPoster();
         }
       } else {
         const image = new Image();
@@ -2211,6 +2243,7 @@ export class MemoryReelController {
   }
 
   pause() {
+    this.pauseRevision += 1;
     this.paused = true;
     cancelAnimationFrame(this.raf);
     this.raf = 0;
@@ -2218,6 +2251,10 @@ export class MemoryReelController {
     this.cards.forEach(card => card.video?.pause());
     this.pauseAudio();
     this.options.onStateChange?.(false);
+    // Pausing the presentation must not pause the background media queue.
+    // Explicitly kick the next bounded batch because there may be no active
+    // animation frame after a user pause.
+    this.schedulePrefetch(0);
   }
 
   async playAudio() {
@@ -2323,6 +2360,15 @@ export class MemoryReelController {
 
   setLoop(loop: boolean) {
     this.options.loop = loop;
+    // If the story was stopped at its end, enabling Loop should put the
+    // timeline back at the first card. Keep it paused so Loop never bypasses
+    // the explicit Start/Play gesture.
+    if (loop && this.cards.length && this.elapsed >= this.total) {
+      this.elapsed = 0;
+      this.titleEl.classList.remove('on');
+      this.lastLayoutShot = -1;
+      this.render(0);
+    }
   }
 
   private advanceAudio() {
@@ -2366,6 +2412,7 @@ export class MemoryReelController {
     if (this.pointerHandler) this.el.removeEventListener('pointermove', this.pointerHandler);
     if (this.orientationHandler) window.removeEventListener('deviceorientation', this.orientationHandler);
     if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
+    if (this.onlineHandler) window.removeEventListener('online', this.onlineHandler);
     void this.audioContext?.close().catch(() => undefined);
     this.audioContext = undefined;
     this.audio = undefined;
@@ -2416,16 +2463,20 @@ export class MemoryReelController {
 
   private cardHold(card: ReelCard) {
     const baseHold = this.options.template === 'orbit' ? 4 : 3.6;
-    const videoBonus = this.options.template === 'orbit' ? 1.2 : 0.8;
-    return (baseHold + (card.video ? videoBonus : 0)) * this.holdScale;
+    if (card.video) {
+      const duration = Number.isFinite(card.video.duration) && card.video.duration > 0
+        ? card.video.duration
+        : 8;
+      return clamp(duration, 7, 9);
+    }
+    return baseHold * this.holdScale;
   }
 
   private estimateTotal(items: ReelSource[]) {
     const baseHold = this.options.template === 'orbit' ? 4 : 3.6;
-    const videoBonus = this.options.template === 'orbit' ? 1.2 : 0.8;
     return items.reduce((total, item, index) => (
       total
-      + (baseHold + (item.type === 'video' ? videoBonus : 0)) * this.holdScale
+      + (item.type === 'video' ? 8 : baseHold * this.holdScale)
       + (index < items.length - 1 ? this.options.move : 0)
     ), 0) + (items.length ? 2.6 : 0);
   }
@@ -2779,9 +2830,9 @@ export class MemoryReelController {
       // Only cards in this small visible set receive compositor/style work.
       // The previous implementation still visited every loaded card here,
       // which made a 300-1000 photo Drive folder feel like it was hanging.
-      const visibleIndices = new Set<number>(
-        nearestOrbitCards || this.candidates,
-      );
+      const visibleIndices = isGridTemplate(this.options.template)
+        ? new Set<number>(this.cards.map((_, index) => index))
+        : new Set<number>(nearestOrbitCards || this.candidates);
       visibleIndices.add(shot);
       visibleIndices.add(focusedIndex);
       this.renderedCardIndices.forEach(index => {
@@ -3083,12 +3134,20 @@ const readStoredStoryMusic = (driveFolderId = ''): StoredStoryMusic | null => {
     const value = JSON.parse(raw) as Partial<StoredStoryMusic>;
     if (value.driveFolderId !== undefined && value.driveFolderId !== driveFolderId) return null;
     return {
-      driveSongs: Array.isArray(value.driveSongs) ? value.driveSongs : [],
-      secondaryDriveSongs: Array.isArray(value.secondaryDriveSongs) ? value.secondaryDriveSongs : [],
+      driveSongs: Array.isArray(value.driveSongs) ? value.driveSongs.filter(isAudioDriveFile) : [],
+      secondaryDriveSongs: Array.isArray(value.secondaryDriveSongs) ? value.secondaryDriveSongs.filter(isAudioDriveFile) : [],
       driveSongsLoaded: Boolean(value.driveSongsLoaded),
       driveFolderId: value.driveFolderId || driveFolderId,
       musicFolderId: value.musicFolderId || '',
-      queue: Array.isArray(value.queue) ? value.queue.filter(track => track && track.id && track.label) : [],
+      queue: Array.isArray(value.queue) ? value.queue.filter(track => {
+        if (!track || !track.id || !track.label) return false;
+        if (track.source !== 'drive' || !track.driveFileId) return true;
+        const songs = [
+          ...(Array.isArray(value.driveSongs) ? value.driveSongs.filter(isAudioDriveFile) : []),
+          ...(Array.isArray(value.secondaryDriveSongs) ? value.secondaryDriveSongs.filter(isAudioDriveFile) : []),
+        ];
+        return songs.some(song => song.id === track.driveFileId);
+      }) : [],
     };
   } catch {
     return null;
@@ -3192,6 +3251,33 @@ const formatStoryTime = (seconds: number) => {
   return `${minutes}:${remainingSeconds}`;
 };
 
+const readAudioDuration = (source: string | Blob) => new Promise<number | null>(resolve => {
+  const temporaryUrl = source instanceof Blob ? URL.createObjectURL(source) : '';
+  const url = temporaryUrl || source;
+  const audio = document.createElement('audio');
+  let settled = false;
+  const finish = (duration: number | null) => {
+    if (settled) return;
+    settled = true;
+    window.clearTimeout(timeoutId);
+    audio.removeAttribute('src');
+    audio.load();
+    if (temporaryUrl) URL.revokeObjectURL(temporaryUrl);
+    resolve(duration);
+  };
+  const timeoutId = window.setTimeout(() => finish(null), 8000);
+  audio.preload = 'metadata';
+  audio.onloadedmetadata = () => {
+    const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
+    finish(duration);
+  };
+  audio.onerror = () => finish(null);
+  audio.src = url;
+  audio.load();
+});
+
+const formatMusicMinutes = (seconds: number) => `${(Math.max(0, seconds) / 60).toFixed(1)} minutes`;
+
 const shouldStartCinemaView = () => {
   if (typeof window === 'undefined') return false;
   return isLegacyTvBrowser() || (window.innerWidth <= 900 && window.innerWidth > window.innerHeight);
@@ -3206,7 +3292,7 @@ type LegacyFullscreenElement = HTMLElement & {
   webkitRequestFullscreen?: () => void | Promise<void>;
 };
 
-const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, template: initialTemplate = 'orbit', autoPlay = true, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onDriveReconnect, onClose }) => {
+const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, template: initialTemplate = 'orbit', autoPlay = false, loop = true, hasMore = false, loadingMore = false, onNeedMore, driveAccessToken, driveFolderId, driveFolders, onDriveFolderChange, onDriveReconnect, onClose }) => {
   const visualMemories = useMemo(() => memories.filter(isVisualMemory), [memories]);
   const storyPhotoCount = useMemo(
     () => visualMemories.filter(memory => !isVideoMemory(memory)).length,
@@ -3238,6 +3324,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [playing, setPlaying] = useState(false);
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
+  const [musicTotalDuration, setMusicTotalDuration] = useState<number | null>(null);
   const [progress, setProgress] = useState({ progress: 0, total: 0 });
   const [storyLoadedCount, setStoryLoadedCount] = useState(0);
   const [storyAvailableCount, setStoryAvailableCount] = useState(visualMemories.length);
@@ -3266,7 +3353,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [driveUploadLoading, setDriveUploadLoading] = useState(false);
   const [musicError, setMusicError] = useState('');
   const [audioLoading, setAudioLoading] = useState(false);
-  const [driveCacheProgress, setDriveCacheProgress] = useState({ completed: 0, total: 0 });
+  const [driveCacheProgress, setDriveCacheProgress] = useState({ completed: 0, failed: 0, total: 0 });
   const [trackLoadingId, setTrackLoadingId] = useState('');
   const [musicName, setMusicName] = useState('');
   const [musicQueue, setMusicQueue] = useState<MusicQueueItem[]>(() => audio ? [{ id: 'initial-audio', src: audio, label: 'Background music' }] : []);
@@ -3300,13 +3387,46 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const screenHiddenRef = useRef(false);
   const driveCacheTasksRef = useRef(new Map<string, Promise<boolean>>());
   const driveCacheProgressKeyRef = useRef('');
+  // The reel's decoded-card count is bounded for smooth playback, while
+  // Drive keeps warming every original in the background. Keep that cache
+  // count as a floor so the folder counter reflects offline-ready files even
+  // when their cards are not on the visible wall yet.
+  const storyCachedPhotoCountRef = useRef(0);
   // All Drive audio downloads/conversions share one chain. This keeps a
   // refresh, a newly selected song, and the initial folder load from starting
   // separate FFmpeg jobs at the same time on a phone or TV.
   const driveAudioSerialRef = useRef<Promise<boolean | void>>(Promise.resolve());
   const driveCacheWarmBatchRef = useRef<Promise<void>>(Promise.resolve());
   moreConfigRef.current = { hasMore, loadingMore, onNeedMore };
-  const allDriveSongs = useMemo(() => [...driveSongs, ...secondaryDriveSongs], [driveSongs, secondaryDriveSongs]);
+  const allDriveSongs = useMemo(
+    () => [...driveSongs, ...secondaryDriveSongs].filter(isAudioDriveFile),
+    [driveSongs, secondaryDriveSongs],
+  );
+
+  useEffect(() => {
+    let active = true;
+    setMusicTotalDuration(null);
+    const calculateTotalDuration = async () => {
+      if (!musicQueue.length) return;
+      // The duration is reported only after the serial Drive cache chain has
+      // finished, so it represents songs that are actually playable offline.
+      if (allDriveSongs.length) await driveCacheWarmBatchRef.current.catch(() => undefined);
+      if (!active) return;
+      const durations = await Promise.all(musicQueue.map(async track => {
+        let source: string | Blob = track.src;
+        if (track.source === 'drive') {
+          const cached = track.cacheKey ? await readCachedStoryMedia(track.cacheKey) : null;
+          if (!cached) return null;
+          source = cached;
+        }
+        return readAudioDuration(source);
+      }));
+      if (!active || durations.some(duration => duration === null)) return;
+      setMusicTotalDuration(durations.reduce((total, duration) => total + (duration || 0), 0));
+    };
+    void calculateTotalDuration();
+    return () => { active = false; };
+  }, [allDriveSongs.length, driveCacheProgress.completed, driveCacheProgress.failed, driveCacheProgress.total, musicQueue]);
 
   const setCurrentMusic = (id: string) => {
     currentMusicIdRef.current = id;
@@ -3599,6 +3719,40 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const photos = visualMemories.filter(memory => !isVideoMemory(memory));
     const videos = visualMemories.filter(memory => isVideoMemory(memory));
     const liveUpdate = hasLoadedSourcesRef.current;
+    storyCachedPhotoCountRef.current = 0;
+    if (!liveUpdate) setStoryLoadedCount(0);
+    const drivePhotoFiles = photos
+      .filter(memory => memory.driveFileId)
+      .map(memory => ({
+        id: memory.driveFileId as string,
+        name: memory.title,
+        mimeType: memory.mimeType || 'image/jpeg',
+        thumbnailUrl: memory.thumbnail || '',
+        createdTime: memory.date,
+        modifiedTime: memory.modifiedTime,
+      }));
+    // The photo originals are warmed completely before the video phase. The
+    // story can still show its first photo immediately, while the next phase
+    // waits for every Drive image and queued song to become locally playable.
+    const photoCachePromise = driveAccessToken && drivePhotoFiles.length
+      ? cacheDriveMediaFiles(drivePhotoFiles, driveAccessToken, {
+        includeVideos: false,
+        limit: drivePhotoFiles.length,
+        onProgress: cacheProgress => {
+          if (controller.signal.aborted) return;
+          const localPhotoCount = photos.length - drivePhotoFiles.length;
+          const cachedPhotoCount = Math.min(
+            photos.length,
+            localPhotoCount + cacheProgress.completed,
+          );
+          storyCachedPhotoCountRef.current = Math.max(
+            storyCachedPhotoCountRef.current,
+            cachedPhotoCount,
+          );
+          setStoryLoadedCount(current => Math.max(current, storyCachedPhotoCountRef.current));
+        },
+      }).catch(() => undefined)
+      : Promise.resolve();
     // Keep the current wall visible during a live Drive change. The reel
     // controller swaps the updated list atomically after it has loaded.
     if (!liveUpdate) setLoading(true);
@@ -3615,8 +3769,16 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         if (photoSources.length) setLoading(false);
       }
 
-      // Videos are intentionally appended after the photo wall is ready so a
-      // large video cannot delay the first visual sequence.
+      if (videos.length) {
+        const audioCachePromise = (driveSongsLoaded || secondaryDriveSongs.length)
+          ? driveCacheWarmBatchRef.current.catch(() => undefined)
+          : Promise.resolve();
+        await Promise.all([photoCachePromise, audioCachePromise]);
+        if (controller.signal.aborted) return;
+      }
+      // Videos are intentionally appended after every photo original and
+      // queued Drive song is locally ready, so a large video cannot delay the
+      // first visual sequence or compete with audio on a slow phone.
       const videoSources = await resolveReelSources(videos, controller.signal, driveAccessToken);
       if (controller.signal.aborted) return;
       // Replace with this request's complete snapshot. Appending through the
@@ -3631,7 +3793,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     return () => {
       controller.abort();
     };
-  }, [driveAccessToken, sourceSignature, visualMemories]);
+  }, [driveAccessToken, driveSongsLoaded, secondaryDriveSongs.length, sourceSignature, visualMemories]);
 
   useEffect(() => {
     if (!driveAccessToken) return;
@@ -3662,7 +3824,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         }
       },
       onLoadProgress: (loaded, available) => {
-        setStoryLoadedCount(loaded);
+        setStoryLoadedCount(current => Math.max(current, loaded, storyCachedPhotoCountRef.current));
         setStoryAvailableCount(available);
       },
       onStateChange: setPlaying,
@@ -3899,6 +4061,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   };
 
   const downloadRemoteAudio = async (source: string) => {
+    await waitForNetworkResume();
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 20000);
     try {
@@ -3926,35 +4089,54 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const driveAudioUrl = (song: DriveAudioFile, token: string) =>
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(song.id)}?alt=media&supportsAllDrives=true&access_token=${encodeURIComponent(token)}`;
 
-  const warmDriveAudioCache = async (song: DriveAudioFile, cacheKey: string, token: string) => {
-    try {
-      const cached = await readCachedStoryMedia(cacheKey);
-      const downloaded = cached
-        ? null
-        : await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id));
-      if (downloaded?.accessToken && downloaded.accessToken !== token) {
-        driveAccessTokenRef.current = downloaded.accessToken;
-        saveDriveAccessToken(downloaded.accessToken);
-      }
-      const sourceBlob = cached || downloaded?.blob;
-      if (!sourceBlob) throw new Error('Drive returned an empty audio file.');
-      const playableBlob = await preparePlayableAudioBlob(sourceBlob, song);
-      if (cached && playableBlob === cached) return true;
-      await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
-      return true;
-    } catch {
-      // Cache warming is best-effort; playback retries conversion on demand.
-      return false;
-    }
+  const waitForNetworkResume = async () => {
+    if (navigator.onLine !== false) return;
+    await new Promise<void>(resolve => {
+      const onOnline = () => {
+        window.removeEventListener('online', onOnline);
+        resolve();
+      };
+      window.addEventListener('online', onOnline, { once: true });
+    });
   };
 
-  const warmDriveAudioCacheOnce = (song: DriveAudioFile, cacheKey: string, token: string) => {
+  const warmDriveAudioCache = async (song: DriveAudioFile, cacheKey: string, token: string, account: 'primary' | 'secondary' = 'primary') => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const cached = await readCachedStoryMedia(cacheKey);
+        if (!cached) await waitForNetworkResume();
+        const downloaded = cached
+          ? null
+          : await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id));
+        if (downloaded?.accessToken && downloaded.accessToken !== token) {
+          if (account === 'primary') {
+            driveAccessTokenRef.current = downloaded.accessToken;
+            saveDriveAccessToken(downloaded.accessToken);
+          } else {
+            secondaryDriveAccessTokenRef.current = downloaded.accessToken;
+          }
+        }
+        const sourceBlob = cached || downloaded?.blob;
+        if (!sourceBlob) throw new Error('Drive returned an empty audio file.');
+        const playableBlob = await preparePlayableAudioBlob(sourceBlob, song);
+        if (cached && playableBlob === cached) return true;
+        return await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
+      } catch {
+        if (attempt === 2) return false;
+        await waitForNetworkResume();
+        await new Promise<void>(resolve => window.setTimeout(resolve, 900 * (attempt + 1)));
+      }
+    }
+    return false;
+  };
+
+  const warmDriveAudioCacheOnce = (song: DriveAudioFile, cacheKey: string, token: string, account: 'primary' | 'secondary' = 'primary') => {
     const existing = driveCacheTasksRef.current.get(cacheKey);
     if (existing) return existing;
     // Always append to the same chain. `finally` keeps the chain usable even
     // if a future cache implementation throws instead of swallowing a single
     // file failure.
-    const task = driveAudioSerialRef.current.then(() => warmDriveAudioCache(song, cacheKey, token));
+    const task = driveAudioSerialRef.current.then(() => warmDriveAudioCache(song, cacheKey, token, account));
     driveAudioSerialRef.current = task.catch(() => undefined);
     const trackedTask = task.finally(() => {
       if (driveCacheTasksRef.current.get(cacheKey) === trackedTask) driveCacheTasksRef.current.delete(cacheKey);
@@ -3963,38 +4145,52 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     return trackedTask;
   };
 
-  const warmDriveAudioCacheSequentially = async (songs: DriveAudioFile[], token: string) => {
+  const warmDriveAudioCacheSequentially = async (songs: DriveAudioFile[], token: string, account: 'primary' | 'secondary' = 'primary') => {
     const progressKey = songs.map(song => driveAudioCacheKey(song)).join('|');
     const sameBatch = driveCacheProgressKeyRef.current === progressKey;
-    const previousCompleted = sameBatch ? driveCacheProgress.completed : 0;
     driveCacheProgressKeyRef.current = progressKey;
+    // Count the cache before starting the serial chain. A song may already be
+    // playable from a previous session (or another tab), so progress must not
+    // begin at zero and under-report what the player can already use.
+    const countPlayableSongs = async () => {
+      const cached = await Promise.all(songs.map(song => readCachedStoryMedia(driveAudioCacheKey(song))));
+      return cached.reduce((count, blob) => count + (blob ? 1 : 0), 0);
+    };
+    let completed = await countPlayableSongs();
+    let failed = 0;
     setDriveCacheProgress(current => sameBatch
-      ? { completed: Math.min(current.completed, songs.length), total: songs.length }
-      : { completed: 0, total: songs.length });
-    let completed = 0;
+      ? { ...current, completed, total: songs.length }
+      : { completed, failed: 0, total: songs.length });
     for (let index = 0; index < songs.length; index += 1) {
-      const cachedSuccessfully = await warmDriveAudioCacheOnce(songs[index], driveAudioCacheKey(songs[index]), token);
-      if (cachedSuccessfully) completed += 1;
+      const cacheKey = driveAudioCacheKey(songs[index]);
+      const cachedSuccessfully = await warmDriveAudioCacheOnce(songs[index], cacheKey, token, account);
+      // Re-count the actual IDB cache after each item. This handles an item
+      // that was cached by another queued request and keeps the displayed
+      // playable total equal to what the audio player can open now.
+      completed = await countPlayableSongs();
+      const isPlayable = Boolean(await readCachedStoryMedia(cacheKey));
+      if (!isPlayable && !cachedSuccessfully) failed += 1;
       setDriveCacheProgress({
-        completed: Math.max(previousCompleted, completed),
+        completed,
+        failed,
         total: songs.length,
       });
     }
   };
 
-  const queueDriveAudioWarm = (songs: DriveAudioFile[], token: string) => {
+  const queueDriveAudioWarm = (songs: DriveAudioFile[], token: string, account: 'primary' | 'secondary' = 'primary') => {
     // Keep the UI responsive after Drive returns the list. The first track can
     // play immediately while this background chain stores the remaining
     // tracks one at a time; a refresh can queue behind it but never start a
     // second download batch in parallel.
-    const task = driveCacheWarmBatchRef.current.then(() => warmDriveAudioCacheSequentially(songs, token));
+    const task = driveCacheWarmBatchRef.current.then(() => warmDriveAudioCacheSequentially(songs, token, account));
     const safeTask = task.catch(() => undefined);
     driveCacheWarmBatchRef.current = safeTask;
     return safeTask;
   };
 
   const queueDriveSongs = (songs: DriveAudioFile[], token: string, account: 'primary' | 'secondary' = 'primary') => {
-    const incoming = new Map(songs.map(song => [song.id, song]));
+    const incoming = new Map(songs.filter(isAudioDriveFile).map(song => [song.id, song]));
     const accountTracks = musicQueueRef.current.filter(track => track.source === 'drive'
       && (track.driveAccount || 'primary') === account);
     const existingIds = new Set(accountTracks.map(track => track.driveFileId).filter(Boolean));
@@ -4016,7 +4212,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           driveAccount: account,
         };
       });
-    const additions = songs
+    const additions = songs.filter(isAudioDriveFile)
       .filter(song => !existingIds.has(song.id))
       .map(song => ({
         id: `drive-audio-${account}-${song.id}`,
@@ -4065,7 +4261,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
     const createSource = async (token: string, forceConversion = false) => {
       const cached = await readCachedStoryMedia(cacheKey);
-      const sourceBlob = cached || await withMediaFetch(() => googleDriveService.downloadMediaFile(token, song.id));
+      const sourceBlob = cached || await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id).then(result => result.blob));
       const playableBlob = await preparePlayableAudioBlob(sourceBlob, song, forceConversion);
       if (!cached || playableBlob !== cached) await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
       const objectUrl = URL.createObjectURL(playableBlob);
@@ -4239,7 +4435,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         setDriveSongs(songs);
         setDriveSongsLoaded(true);
         queueDriveSongs(songs, token);
-        void queueDriveAudioWarm(songs, token);
+        void queueDriveAudioWarm(songs, token, 'primary');
       } catch (error) {
         if (!isDriveAuthorizationError(error)) throw error;
         token = await reconnectDriveForPlayback();
@@ -4247,7 +4443,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         setDriveSongs(songs);
         setDriveSongsLoaded(true);
         queueDriveSongs(songs, token);
-        void queueDriveAudioWarm(songs, token);
+        void queueDriveAudioWarm(songs, token, 'primary');
       }
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'Drive songs could not be loaded.');
@@ -4272,7 +4468,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       const songs = await googleDriveService.listAudioFiles(token, '');
       setSecondaryDriveSongs(songs);
       queueDriveSongs(songs, token, 'secondary');
-      void queueDriveAudioWarm(songs, token);
+      void queueDriveAudioWarm(songs, token, 'secondary');
       setMusicName(songs.length ? `${songs.length} songs from the second Drive` : 'No audio files found in the second Drive');
     } catch (error) {
       setMusicError(error instanceof Error ? error.message : 'The second Google Drive could not be connected.');
@@ -4282,30 +4478,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     }
   };
 
-  useEffect(() => {
-    if (!driveAccessToken || !driveSongsLoaded) return undefined;
-    let active = true;
-    const syncDriveSongs = async () => {
-      if (driveSongsRequestRef.current) return;
-      driveSongsRequestRef.current = true;
-      try {
-        const songs = await googleDriveService.listAudioFiles(driveAccessTokenRef.current || driveAccessToken, musicDriveFolderId);
-        if (!active) return;
-        setDriveSongs(songs);
-        queueDriveSongs(songs, driveAccessTokenRef.current || driveAccessToken);
-        void queueDriveAudioWarm(songs, driveAccessTokenRef.current || driveAccessToken);
-      } catch {
-        // Keep the last song list and cached playback available while offline.
-      } finally {
-        driveSongsRequestRef.current = false;
-      }
-    };
-    const interval = window.setInterval(() => void syncDriveSongs(), 10000);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
-  }, [driveAccessToken, musicDriveFolderId, driveSongsLoaded]);
+  // Drive audio is refreshed only by the explicit "Load Drive songs" action.
+  // Avoid polling every ten seconds: it repeatedly checks Drive while the
+  // story is playing and can trigger unnecessary requests on low-data phones.
 
   const chooseDriveSong = (song: DriveAudioFile) => {
     const isSecondaryDriveSong = secondaryDriveSongs.some(item => item.id === song.id);
@@ -4898,8 +5073,13 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             {driveCacheProgress.total > 0 && (
               <p className="memory-reel-music-note" aria-live="polite">
                 {driveCacheProgress.completed < driveCacheProgress.total
-                  ? `Saving Drive audio locally: ${driveCacheProgress.completed}/${driveCacheProgress.total}`
-                  : `Drive audio is ready offline: ${driveCacheProgress.total} song${driveCacheProgress.total === 1 ? '' : 's'}`}
+                  ? `Saving Drive audio locally: ${driveCacheProgress.completed}/${driveCacheProgress.total} playable${driveCacheProgress.failed ? ` · ${driveCacheProgress.failed} retrying` : ''}`
+                  : `Drive audio is ready offline: ${driveCacheProgress.completed} playable song${driveCacheProgress.completed === 1 ? '' : 's'}${driveCacheProgress.failed ? ` · ${driveCacheProgress.failed} failed` : ''}`}
+              </p>
+            )}
+            {musicTotalDuration !== null && musicQueue.length > 0 && (
+              <p className="memory-reel-music-note" aria-live="polite">
+                Total song time: {formatMusicMinutes(musicTotalDuration)}
               </p>
             )}
             {musicError && <div className="memory-reel-music-error" role="alert">

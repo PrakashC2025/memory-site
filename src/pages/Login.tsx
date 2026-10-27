@@ -80,14 +80,14 @@ const Login: React.FC = () => {
           </h1>
 
           <p className="mt-5 max-w-2xl text-base leading-7 text-white/68 md:text-lg">
-            Sign in with Google to use that same account's Drive automatically, or use email/password for local memories. Sessions remain active while you use Memoriya and automatically sign out after one hour of inactivity.
+            Sign in with Google, then connect Drive from the dashboard when you want to import photos. On a second device, Google Drive asks for a one-time authorization for that browser. Sessions remain active while you use Memoriya and automatically sign out after one hour of inactivity.
           </p>
 
           <div className="mt-8 grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">
             {[
               { label: 'Firebase Auth', text: 'Email/password and Google sign-in', Icon: ShieldCheck },
               { label: 'Idle Logout', text: 'One hour of inactivity ends the session', Icon: Lock },
-              { label: 'Drive Ready', text: 'Google sign-in links the same account\'s Drive', Icon: Zap },
+              { label: 'Drive Ready', text: 'Connect Drive only when you want to import photos', Icon: Zap },
             ].map(item => (
               <div key={item.label} className="neon-card p-4">
                 <item.Icon size={18} style={{ color: config.primary }} />

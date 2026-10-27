@@ -22,6 +22,10 @@ export default defineConfig({
     },
   },
   server: {
+    // Listen on the local Wi-Fi interface so another device on the same
+    // network can open the development site.
+    host: true,
+    port: 5173,
     // Allow the app to be opened through VS Code / remote dev tunnels and the
     // Arena live-preview proxy (port-5173-*.e2b.app).
     allowedHosts: ["ljs91hvv-5173.inc1.devtunnels.ms", ".devtunnels.ms", ".e2b.app"],

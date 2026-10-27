@@ -27,6 +27,8 @@ const openCache = () => new Promise<IDBDatabase | null>(resolve => {
 
 let cacheDbPromise: Promise<IDBDatabase | null> | undefined;
 const getCache = () => cacheDbPromise || (cacheDbPromise = openCache());
+const inFlightDownloads = new Map<string, Promise<{ blob: Blob; accessToken: string } | null>>();
+let imageWarmChain: Promise<void> = Promise.resolve();
 
 const readCached = async (id: string) => {
   const db = await getCache();
@@ -46,11 +48,11 @@ export const readCachedDriveMedia = async (id: string) => {
 
 const writeCached = async (item: CachedDriveMedia) => {
   const db = await getCache();
-  if (!db) return;
-  await new Promise<void>(resolve => {
+  if (!db) return false;
+  return new Promise<boolean>(resolve => {
     const request = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put(item);
-    request.onsuccess = () => resolve();
-    request.onerror = () => resolve();
+    request.onsuccess = () => resolve(true);
+    request.onerror = () => resolve(false);
   });
 };
 
@@ -65,36 +67,109 @@ export const deleteCachedDriveMedia = async (id: string) => {
   });
 };
 
-const downloadDriveMedia = async (file: DriveMediaFile, accessToken: string) => {
-  const existing = await readCached(file.id);
-  if (existing && existing.modifiedTime === file.modifiedTime) return;
-  try {
-    const blob = await withMediaFetch(() => googleDriveService.downloadMediaFile(accessToken, file.id));
-    await writeCached({
-      id: file.id,
-      modifiedTime: file.modifiedTime,
-      mimeType: file.mimeType,
-      blob,
+export const ensureCachedDriveMedia = (file: DriveMediaFile, accessToken: string) => {
+  const taskKey = `${file.id}:${file.modifiedTime || ''}`;
+  const existingTask = inFlightDownloads.get(taskKey);
+  if (existingTask) return existingTask;
+  const task = (async () => {
+    const existing = await readCached(file.id);
+    if (existing && existing.modifiedTime === file.modifiedTime) {
+      return { blob: existing.blob, accessToken };
+    }
+    try {
+      const result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(accessToken, file.id));
+      await writeCached({
+        id: file.id,
+        modifiedTime: file.modifiedTime,
+        mimeType: file.mimeType,
+        blob: result.blob,
+      });
+      return result;
+    } catch {
+      // A cache miss must never prevent the live Drive story from playing.
+      return null;
+    }
+  })();
+  inFlightDownloads.set(taskKey, task);
+  void task.then(() => undefined, () => undefined).finally(() => {
+    if (inFlightDownloads.get(taskKey) === task) inFlightDownloads.delete(taskKey);
+  });
+  return task;
+};
+
+const downloadDriveMedia = async (file: DriveMediaFile, accessToken: string) =>
+  Boolean(await ensureCachedDriveMedia(file, accessToken));
+
+export interface DriveCacheProgress {
+  completed: number;
+  failed: number;
+  total: number;
+}
+
+type DriveCacheOptions = {
+  includeVideos?: boolean;
+  limit?: number;
+  onProgress?: (progress: DriveCacheProgress) => void;
+};
+
+// Kept as a compatibility marker for older cache diagnostics. The default
+// now expands to the complete supplied Drive list; callers can still pass a
+// smaller explicit limit when they only want a preview warm.
+const MAX_WARMED_FILES = 48;
+
+const getCacheWorkerCount = () => {
+  const connection = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+  if (connection?.saveData || connection?.effectiveType === 'slow-2g' || connection?.effectiveType === '2g') return 1;
+  return 4;
+};
+
+// Background warming must yield to the live story when the browser has no
+// connection or the page is hidden. Waiting for the browser events preserves
+// the queue position, so a return to the page continues instead of restarting
+// or marking every remaining file as failed.
+const waitForCacheResume = async () => {
+  while (navigator.onLine === false || document.hidden) {
+    await new Promise<void>(resolve => {
+      const onResume = () => {
+        window.removeEventListener('online', onResume);
+        document.removeEventListener('visibilitychange', onResume);
+        resolve();
+      };
+      window.addEventListener('online', onResume, { once: true });
+      document.addEventListener('visibilitychange', onResume, { once: true });
     });
-  } catch {
-    // A cache miss must never prevent the live Drive story from playing.
   }
 };
 
-// How many originals a single background warm may pull. A 500 photo library
-// used to queue 500 full-size downloads the moment it synced; those downloads
-// filled the media queue ahead of the thumbnails that were actually on screen,
-// so the gallery looked stuck on placeholders. Warming the first screenful is
-// enough: anything else is fetched on demand when it becomes visible.
-const MAX_WARMED_FILES = 48;
-
-export const cacheDriveMediaFiles = (files: DriveMediaFile[], accessToken: string, options?: { includeVideos?: boolean; limit?: number }) => {
-  const limit = Math.max(0, options?.limit ?? MAX_WARMED_FILES);
-  const visualFiles = files
-    .filter(file => file.mimeType.startsWith('image/') || ((options?.includeVideos ?? true) && file.mimeType.startsWith('video/')))
-    .sort((a, b) => Number(b.mimeType.startsWith('image/')) - Number(a.mimeType.startsWith('image/')))
-    .slice(0, limit);
-  return Promise.all(visualFiles.map(file => downloadDriveMedia(file, accessToken))).then(() => undefined);
+export const cacheDriveMediaFiles = async (files: DriveMediaFile[], accessToken: string, options?: DriveCacheOptions) => {
+  const limit = Math.max(0, options?.limit ?? Math.max(MAX_WARMED_FILES, files.length));
+  const visualFiles = files.filter(file =>
+    file.mimeType.startsWith('image/') || ((options?.includeVideos ?? true) && file.mimeType.startsWith('video/')),
+  );
+  const imageFiles = visualFiles.filter(file => file.mimeType.startsWith('image/')).slice(0, limit);
+  const videoFiles = visualFiles.filter(file => file.mimeType.startsWith('video/')).slice(0, Math.max(0, limit - imageFiles.length));
+  const progress: DriveCacheProgress = { completed: 0, failed: 0, total: imageFiles.length + videoFiles.length };
+  options?.onProgress?.({ ...progress });
+  const runPhase = async (phaseFiles: DriveMediaFile[]) => {
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < phaseFiles.length) {
+        const file = phaseFiles[cursor];
+        cursor += 1;
+        await waitForCacheResume();
+        if (await downloadDriveMedia(file, accessToken)) progress.completed += 1;
+        else progress.failed += 1;
+        options?.onProgress?.({ ...progress });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(getCacheWorkerCount(), phaseFiles.length) }, () => worker()));
+  };
+  // All callers share this image barrier. A later page cannot start its video
+  // phase while another page is still warming Drive images.
+  const imagePhase = imageWarmChain.then(() => runPhase(imageFiles));
+  imageWarmChain = imagePhase.then(() => undefined, () => undefined);
+  await imagePhase;
+  await runPhase(videoFiles);
 };
 
 export const warmDriveFolderCache = async (accessToken: string, folderId = '') => {

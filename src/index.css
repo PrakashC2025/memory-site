@@ -11355,6 +11355,32 @@ html.legacy-tv-browser .memoriya-page-loader {
   animation: memory-reel-album-image-drift 10s cubic-bezier(.35, .05, .25, 1) infinite alternate;
 }
 
+/* Grid looks keep every loaded image on the canvas. The cinematic rules above
+   intentionally hide distant cards, but that would leave Mosaic, Scrapbook,
+   and Neon Grid with only the active/neighbor frames visible. */
+.memory-reel-stage.memory-reel-template-mosaic .card,
+.memory-reel-stage.memory-reel-template-scrapbook .card,
+.memory-reel-stage.memory-reel-template-neon-grid .card {
+  opacity: .62 !important;
+  pointer-events: auto;
+}
+
+.memory-reel-stage.memory-reel-template-mosaic .card.is-active,
+.memory-reel-stage.memory-reel-template-scrapbook .card.is-active,
+.memory-reel-stage.memory-reel-template-neon-grid .card.is-active {
+  opacity: 1 !important;
+}
+
+/* These full-frame looks have no paper footer; let the source fill the whole
+   frame so portrait and landscape images are both visible end to end. */
+.memory-reel-stage.memory-reel-template-super8 .card > .m,
+.memory-reel-stage.memory-reel-template-dreamscape .card > .m,
+.memory-reel-stage.memory-reel-template-spotlight .card > .m {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+
 .memory-reel-stage.memory-reel-template-cinema,
 .memory-reel-stage.memory-reel-template-filmstrip,
 .memory-reel-stage.memory-reel-template-spotlight {

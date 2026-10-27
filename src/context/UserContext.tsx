@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { User } from '../data/memories';
 import { authService, isFirebaseConfigured } from '../services/firebaseService';
-import { clearDriveSession, saveDriveAccessToken } from '../services/driveLibrary';
+import { clearDriveSession } from '../services/driveLibrary';
 import { googleDriveService } from '../services/googleDriveService';
 import { isLegacyTvBrowser } from '../utils/legacyBrowser';
 
@@ -157,7 +157,6 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (user?.email && result.user.email && user.email !== result.user.email) clearDriveSession();
       setUser(mapFirebaseUser(result.user));
       googleDriveService.setLoginHint(result.user.email || undefined);
-      if (result.driveAccessToken) saveDriveAccessToken(result.driveAccessToken);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Google authentication failed.');
       throw error;

@@ -33,12 +33,11 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import type { Memory } from '../data/memories';
-import { googleDriveService } from '../services/googleDriveService';
 import { readCachedDriveMedia } from '../services/driveCache';
+import { ensureCachedDriveMedia } from '../services/driveCache';
 import { saveDriveAccessToken } from '../services/driveLibrary';
 import { searchOpenSourceMusic } from '../services/openSourceMusic';
 import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
-import { withMediaFetch } from '../utils/mediaQueue';
 
 export type SlideshowTransition =
   | 'crossfade'
@@ -633,7 +632,14 @@ const MemoryLightbox: React.FC<Props> = ({
         }
 
         if (!current.driveFileId || !current.authToken) return;
-        const result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(current.authToken!, current.driveFileId!, controller.signal), controller.signal);
+        const result = await ensureCachedDriveMedia({
+          id: current.driveFileId!,
+          name: current.title,
+          mimeType: current.mimeType || (isVideoMemory(current) ? 'video/mp4' : 'image/jpeg'),
+          thumbnailUrl: current.thumbnail || '',
+          modifiedTime: current.modifiedTime,
+        }, current.authToken!);
+        if (!result) throw new Error('Drive media could not be cached.');
         if (result.accessToken !== current.authToken) saveDriveAccessToken(result.accessToken);
         const blob = result.blob;
         if (cancelled) return;
@@ -1153,7 +1159,14 @@ const MemoryLightbox: React.FC<Props> = ({
       const cacheKey = getStoryMediaCacheKey(current);
       let blob = await readCachedStoryMedia(cacheKey);
       if (!blob && current.driveFileId && current.authToken) {
-        const result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(current.authToken!, current.driveFileId!));
+        const result = await ensureCachedDriveMedia({
+          id: current.driveFileId,
+          name: current.title,
+          mimeType: current.mimeType || (isVideoMemory(current) ? 'video/mp4' : 'image/jpeg'),
+          thumbnailUrl: current.thumbnail || '',
+          modifiedTime: current.modifiedTime,
+        }, current.authToken);
+        if (!result) throw new Error('Drive media could not be cached.');
         if (result.accessToken !== current.authToken) saveDriveAccessToken(result.accessToken);
         blob = result.blob;
         void writeCachedStoryMedia(cacheKey, blob, current.mimeType || blob.type);

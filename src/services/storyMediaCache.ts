@@ -59,12 +59,14 @@ export const readCachedStoryMedia = async (key: string) => {
   }
 };
 
-export const writeCachedStoryMedia = async (key: string, blob: Blob, mimeType = blob.type) => {
-  if (!key || !blob.size) return;
+export const writeCachedStoryMedia = async (key: string, blob: Blob, mimeType = blob.type): Promise<boolean> => {
+  if (!key || !blob.size) return false;
   try {
     await withStore<IDBValidKey>('readwrite', store => store.put({ key, blob, mimeType, savedAt: Date.now() }));
+    return true;
   } catch {
     // Browsers may deny storage or evict large media. Story Mode can still use the current object URL.
+    return false;
   }
 };
 
