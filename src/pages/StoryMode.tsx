@@ -39,7 +39,13 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     // Drive is the authoritative Story Mode source whenever it is connected.
     // Do not append local picker items to the Drive story: that created
     // duplicate-looking frames and made the loaded count differ from Drive.
-    const sourceMemories = driveAccessToken ? driveMemories : localMemories;
+    // Drive metadata and IndexedDB media are device-local. After a phone
+    // refresh the short-lived OAuth token may be gone even though the phone
+    // still has an offline Drive snapshot. Keep that snapshot playable rather
+    // than switching the story to an empty local-picker list.
+    const sourceMemories = driveAccessToken || driveMemories.length
+      ? driveMemories
+      : localMemories;
     sourceMemories.forEach(memory => {
       byKey.set(memory.driveFileId || memory.id, memory);
     });

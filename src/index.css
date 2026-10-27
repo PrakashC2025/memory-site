@@ -3304,12 +3304,12 @@ html.heavy-visual-paused .memory-reel-overlay {
 
 .memory-reel-stage[data-clarity="4k"] .card.is-active > .m {
   filter: contrast(1.18) saturate(1.12) brightness(1.025) !important;
-  image-rendering: -webkit-optimize-contrast;
+  image-rendering: auto;
 }
 
 .memory-reel-stage[data-clarity="8k"] .card.is-active > .m {
   filter: contrast(1.24) saturate(1.16) brightness(1.035) !important;
-  image-rendering: -webkit-optimize-contrast;
+  image-rendering: auto;
 }
 
 .memory-reel-stage.memory-reel-template-orbit .card.frame {
@@ -8670,7 +8670,7 @@ nav.fixed.left-0.right-0.top-0 {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0.72;
+  opacity: 0.84;
 }
 
 .drive-preview-loading-label {
@@ -12784,7 +12784,7 @@ html:not(.legacy-tv-browser) .page-hero button {
 .memory-reel-stage.memory-reel-template-orbit .memory-reel-effects-canvas {
   display: block !important;
   z-index: 0;
-  opacity: .76;
+  opacity: .88;
 }
 
 .memory-reel-stage.memory-reel-template-orbit .card {

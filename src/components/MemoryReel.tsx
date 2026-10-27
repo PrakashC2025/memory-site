@@ -244,8 +244,10 @@ const clarityImageFilter = (clarity: MemoryReelClarity) => {
   }
 };
 
-const clarityImageRendering = (clarity: MemoryReelClarity) =>
-  clarity === '4k' || clarity === '8k' ? '-webkit-optimize-contrast' : 'auto';
+// Let the browser use its high-quality scaler. `-webkit-optimize-contrast`
+// looks like a sharpness mode, but on large Chrome surfaces it can switch to
+// a pixelated resampling path when a photo is enlarged.
+const clarityImageRendering = (_clarity: MemoryReelClarity) => 'auto';
 const escapeHtml = (value: string) => String(value).replace(/[&<>\"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[character] || character));
 
 const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
@@ -1708,7 +1710,7 @@ export class MemoryReelController {
                 image.src = objectUrl;
               })
               .catch(() => finish(null));
-          } else if (item.driveFileId && item.src) {
+        } else if (item.driveFileId && item.src) {
             // Paint Drive's lightweight thumbnail immediately. IndexedDB lookup
             // and the sharper cached original must never delay the first frame.
           // Start the Drive thumbnail immediately. A stale auth-required flag
@@ -1753,7 +1755,10 @@ export class MemoryReelController {
         } else {
           image.src = item.src;
         }
-        timer = window.setTimeout(() => finish(null), requireFullQuality ? 120000 : 12000);
+        // Reveal the thumbnail promptly so a slow original never pauses the
+        // camera. The original promotion continues independently and replaces
+        // the same image node when it is ready.
+        timer = window.setTimeout(() => finish(null), requireFullQuality ? 120000 : 30000);
       }
     });
   }
@@ -2063,33 +2068,61 @@ export class MemoryReelController {
     // shake, jump, flash, or resize the active memory.
   }
 
-  private drawEffectBackdrop(context: CanvasRenderingContext2D, width: number, height: number, colors: [string, string], energy: number) {
-    // The effect canvas sits behind the photo world. Keep this wash subtle so
-    // it gives the empty space a responsive atmosphere without tinting or
-    // covering the memories themselves.
-    const alpha = clamp(0.045 + energy * 0.075, 0.045, 0.12);
+  private drawEffectBackdrop(
+    context: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    colors: [string, string],
+    energy: number,
+    pulse = 0,
+    time = 0,
+  ) {
+    // This canvas is behind the photo world. The beat response is deliberately
+    // a soft bloom/ring rather than a hard white flash, so it is visible on a
+    // phone without making the memory playback feel jumpy or distracting.
+    const beat = clamp(pulse, 0, 1);
+    const alpha = clamp(0.065 + energy * 0.105 + beat * 0.14, 0.065, 0.25);
+    const driftX = Math.sin(time * 0.34) * (0.035 + beat * 0.025);
+    const driftY = Math.cos(time * 0.27) * (0.025 + beat * 0.02);
     const gradient = context.createRadialGradient(
-      width * (0.5 + Math.sin(energy * 4) * 0.08),
-      height * (0.42 + Math.cos(energy * 3) * 0.06),
+      width * (0.5 + driftX),
+      height * (0.42 + driftY),
       0,
       width * 0.5,
       height * 0.5,
-      Math.max(width, height) * 0.78,
+      Math.max(width, height) * (0.7 + beat * 0.16),
     );
     gradient.addColorStop(0, colors[0].replace('ALPHA', alpha.toFixed(3)));
-    gradient.addColorStop(0.58, colors[1].replace('ALPHA', (alpha * 0.62).toFixed(3)));
+    gradient.addColorStop(0.52, colors[1].replace('ALPHA', (alpha * 0.72).toFixed(3)));
     gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
     context.save();
     context.globalCompositeOperation = 'screen';
     context.fillStyle = gradient;
     context.fillRect(0, 0, width, height);
+
+    // A low-frequency pulse makes the beat readable even when the song has a
+    // quiet bass line. It expands and fades instead of blinking on/off.
+    if (beat > 0.015) {
+      const radius = Math.min(width, height) * (0.18 + energy * 0.08 + beat * 0.2);
+      const bloom = context.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, radius * 1.9);
+      bloom.addColorStop(0, colors[0].replace('ALPHA', (0.035 + beat * 0.13).toFixed(3)));
+      bloom.addColorStop(0.45, colors[1].replace('ALPHA', (0.025 + beat * 0.08).toFixed(3)));
+      bloom.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      context.fillStyle = bloom;
+      context.fillRect(0, 0, width, height);
+      context.strokeStyle = colors[0].replace('ALPHA', (0.08 + beat * 0.25).toFixed(3));
+      context.lineWidth = 1.2 + beat * 2.6;
+      context.beginPath();
+      context.arc(width / 2, height / 2, radius, 0, Math.PI * 2);
+      context.stroke();
+    }
     context.restore();
   }
 
   private drawEffect(context: CanvasRenderingContext2D, effect: MemoryReelEffect, width: number, height: number, metrics: { level: number; bass: number; mid: number; treble: number; beat: number }, time: number) {
     if (effect === 'off') return;
     const energy = clamp(metrics.level, 0.05, 1);
-    const pulse = clamp(metrics.beat + metrics.bass * 0.45, 0, 1);
+    const pulse = clamp(metrics.beat * 0.9 + metrics.bass * 0.5, 0, 1);
     const centerX = width / 2;
     const centerY = height / 2;
     const drawDots = (count: number, color: string, size: number, speed: number) => {
@@ -2097,7 +2130,7 @@ export class MemoryReelController {
       for (let index = 0; index < count; index += 1) {
         const x = ((smoothNoise(time * speed + index * 0.13, index + 3) + 1) * 0.5) * width;
         const y = ((smoothNoise(time * speed * 0.72 + index * 0.19, index + 27) + 1) * 0.5) * height;
-        const radius = size * (0.65 + smoothNoise(time * speed * 0.4, index + 81) * 0.25 + pulse * 0.35);
+        const radius = size * (0.65 + smoothNoise(time * speed * 0.4, index + 81) * 0.25 + pulse * 0.55 + metrics.treble * 0.12);
         context.beginPath();
         context.arc(x, y, Math.max(0.7, radius), 0, Math.PI * 2);
         context.fill();
@@ -2110,7 +2143,8 @@ export class MemoryReelController {
         const y = height * base
           + Math.sin(progress * Math.PI * 2.2 + time * speed) * height * amplitude
           + Math.sin(progress * Math.PI * 5.4 - time * speed * 0.7) * height * amplitude * 0.32
-          + pulse * Math.sin(progress * Math.PI * 3) * height * 0.018;
+          + pulse * Math.sin(progress * Math.PI * 3) * height * 0.035
+          + metrics.mid * Math.sin(progress * Math.PI * 7 + time * 0.7) * height * 0.012;
         if (x < 0) context.moveTo(x, y); else context.lineTo(x, y);
       }
       context.strokeStyle = color;
@@ -2126,7 +2160,7 @@ export class MemoryReelController {
       for (let index = 0; index < rayCount; index += 1) {
         const angle = (index / rayCount) * Math.PI * 2 + time * 0.12;
         const inner = radius * (0.48 + pulse * 0.12);
-        const outer = radius * (0.86 + pulse * 0.22 + (index % 3) * 0.04);
+        const outer = radius * (0.86 + pulse * 0.3 + (index % 3) * 0.04);
         context.beginPath();
         context.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
         context.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
@@ -2136,15 +2170,15 @@ export class MemoryReelController {
     };
     switch (effect) {
       case 'natural':
-        this.drawEffectBackdrop(context, width, height, ['rgba(255, 194, 113, ALPHA)', 'rgba(42, 66, 93, ALPHA)'], energy);
-        drawDots(22, `rgba(255, 224, 162, ${0.18 + energy * 0.24})`, 2.2, 0.1);
-        drawRibbon(`rgba(255, 218, 155, ${0.07 + pulse * 0.08})`, 0.22, 0.055, 0.28, 2);
+        this.drawEffectBackdrop(context, width, height, ['rgba(255, 194, 113, ALPHA)', 'rgba(42, 66, 93, ALPHA)'], energy, pulse, time);
+        drawDots(24, `rgba(255, 224, 162, ${0.22 + energy * 0.28 + pulse * 0.12})`, 2.2, 0.1);
+        drawRibbon(`rgba(255, 218, 155, ${0.09 + pulse * 0.14})`, 0.22, 0.055 + metrics.mid * 0.02, 0.28, 2.2);
         break;
       case 'birthday':
-        this.drawEffectBackdrop(context, width, height, ['rgba(255, 170, 63, ALPHA)', 'rgba(179, 48, 105, ALPHA)'], energy + pulse * 0.2);
-        drawDots(28, `rgba(255, 217, 117, ${0.22 + pulse * 0.42})`, 2.8, 0.2);
-        context.strokeStyle = `rgba(255, 205, 123, ${0.28 + pulse * 0.48})`;
-        context.lineWidth = 2;
+        this.drawEffectBackdrop(context, width, height, ['rgba(255, 170, 63, ALPHA)', 'rgba(179, 48, 105, ALPHA)'], energy + pulse * 0.2, pulse, time);
+        drawDots(30, `rgba(255, 217, 117, ${0.25 + pulse * 0.48})`, 2.8, 0.2);
+        context.strokeStyle = `rgba(255, 205, 123, ${0.3 + pulse * 0.52})`;
+        context.lineWidth = 2 + pulse * 1.2;
         for (let index = 0; index < 18; index += 1) {
           const x = ((index * 71 + 17) % 100) / 100 * width;
           const y = ((index * 43 + 29) % 100) / 100 * height;
@@ -2153,34 +2187,35 @@ export class MemoryReelController {
           context.lineTo(x + Math.sin(time * 2 + index) * 7, y + 12 + (index % 4) * 4);
           context.stroke();
         }
-        drawBurst(`rgba(255, 230, 167, ${0.08 + pulse * 0.3})`, 18, Math.min(width, height) * 0.34);
+        drawBurst(`rgba(255, 230, 167, ${0.1 + pulse * 0.38})`, 18, Math.min(width, height) * 0.34);
         break;
       case 'waves':
-        this.drawEffectBackdrop(context, width, height, ['rgba(36, 117, 191, ALPHA)', 'rgba(8, 20, 70, ALPHA)'], energy);
-        drawRibbon(`rgba(84, 210, 255, ${0.12 + energy * 0.22})`, 0.78, 0.06 + metrics.bass * 0.035, 1.1, 2.2);
-        drawRibbon(`rgba(206, 143, 255, ${0.08 + metrics.mid * 0.18})`, 0.84, 0.045 + metrics.treble * 0.028, 1.55, 1.4);
-        drawRibbon(`rgba(255, 221, 156, ${0.05 + metrics.treble * 0.12})`, 0.9, 0.028, 1.9, 1);
+        this.drawEffectBackdrop(context, width, height, ['rgba(36, 117, 191, ALPHA)', 'rgba(8, 20, 70, ALPHA)'], energy, pulse, time);
+        drawRibbon(`rgba(84, 210, 255, ${0.15 + energy * 0.25 + pulse * 0.1})`, 0.78, 0.06 + metrics.bass * 0.05, 1.1, 2.6);
+        drawRibbon(`rgba(206, 143, 255, ${0.1 + metrics.mid * 0.22})`, 0.84, 0.045 + metrics.treble * 0.04, 1.55, 1.7);
+        drawRibbon(`rgba(255, 221, 156, ${0.07 + metrics.treble * 0.16})`, 0.9, 0.028 + pulse * 0.02, 1.9, 1.2);
         break;
       case 'cinematic':
-        this.drawEffectBackdrop(context, width, height, ['rgba(222, 121, 74, ALPHA)', 'rgba(24, 82, 89, ALPHA)'], energy);
-        drawRibbon(`rgba(255, 218, 154, ${0.06 + pulse * 0.13})`, 0.3, 0.035, 0.45, 3);
-        drawBurst(`rgba(255, 226, 180, ${0.04 + pulse * 0.12})`, 14, Math.min(width, height) * 0.45);
-        drawDots(28, `rgba(255, 244, 210, ${0.04 + metrics.treble * 0.12})`, 1, 0.3);
+        this.drawEffectBackdrop(context, width, height, ['rgba(222, 121, 74, ALPHA)', 'rgba(24, 82, 89, ALPHA)'], energy, pulse, time);
+        drawRibbon(`rgba(255, 218, 154, ${0.08 + pulse * 0.18})`, 0.3, 0.035 + metrics.mid * 0.018, 0.45, 3.2);
+        drawBurst(`rgba(255, 226, 180, ${0.05 + pulse * 0.18})`, 14, Math.min(width, height) * 0.45);
+        drawDots(30, `rgba(255, 244, 210, ${0.05 + metrics.treble * 0.16})`, 1.1, 0.3);
         break;
       case 'stardust':
-        this.drawEffectBackdrop(context, width, height, ['rgba(50, 77, 164, ALPHA)', 'rgba(4, 10, 43, ALPHA)'], energy);
-        drawDots(46, `rgba(170, 202, 255, ${0.18 + metrics.treble * 0.32})`, 1.5, 0.08);
-        drawBurst(`rgba(194, 218, 255, ${0.04 + pulse * 0.16})`, 24, Math.min(width, height) * 0.4);
+        this.drawEffectBackdrop(context, width, height, ['rgba(50, 77, 164, ALPHA)', 'rgba(4, 10, 43, ALPHA)'], energy, pulse, time);
+        drawDots(50, `rgba(170, 202, 255, ${0.2 + metrics.treble * 0.36 + pulse * 0.1})`, 1.5, 0.08);
+        drawBurst(`rgba(194, 218, 255, ${0.05 + pulse * 0.2})`, 24, Math.min(width, height) * 0.4);
         break;
       case 'neon':
-        this.drawEffectBackdrop(context, width, height, ['rgba(205, 28, 213, ALPHA)', 'rgba(18, 4, 50, ALPHA)'], energy + pulse * 0.18);
-        drawDots(14, `rgba(255, 66, 224, ${0.18 + pulse * 0.3})`, 2.2, 0.24);
+        this.drawEffectBackdrop(context, width, height, ['rgba(205, 28, 213, ALPHA)', 'rgba(18, 4, 50, ALPHA)'], energy + pulse * 0.18, pulse, time);
+        drawDots(16, `rgba(255, 66, 224, ${0.2 + pulse * 0.38})`, 2.2, 0.24);
+        drawBurst(`rgba(84, 239, 255, ${0.06 + pulse * 0.24})`, 16, Math.min(width, height) * 0.3);
         break;
       case 'aurora':
-        this.drawEffectBackdrop(context, width, height, ['rgba(48, 188, 139, ALPHA)', 'rgba(71, 34, 127, ALPHA)'], energy);
-        context.lineWidth = Math.max(18, height * 0.06);
+        this.drawEffectBackdrop(context, width, height, ['rgba(48, 188, 139, ALPHA)', 'rgba(71, 34, 127, ALPHA)'], energy, pulse, time);
+        context.lineWidth = Math.max(18, height * (0.06 + pulse * 0.012));
         context.lineCap = 'round';
-        context.strokeStyle = `rgba(89, 244, 175, ${0.08 + energy * 0.18})`;
+        context.strokeStyle = `rgba(89, 244, 175, ${0.1 + energy * 0.2 + pulse * 0.12})`;
         for (let index = 0; index < 3; index += 1) {
           context.beginPath();
           context.moveTo(-width * 0.1, height * (0.25 + index * 0.12));
@@ -2189,43 +2224,45 @@ export class MemoryReelController {
         }
         break;
       case 'prism':
-        this.drawEffectBackdrop(context, width, height, ['rgba(89, 103, 226, ALPHA)', 'rgba(111, 35, 120, ALPHA)'], energy);
+        this.drawEffectBackdrop(context, width, height, ['rgba(89, 103, 226, ALPHA)', 'rgba(111, 35, 120, ALPHA)'], energy, pulse, time);
         for (let index = 0; index < 5; index += 1) {
-          context.strokeStyle = `hsla(${(index * 62 + time * 28) % 360}, 90%, 70%, ${0.06 + pulse * 0.12})`;
-          context.lineWidth = 4;
+          context.strokeStyle = `hsla(${(index * 62 + time * 28) % 360}, 90%, 70%, ${0.08 + pulse * 0.18})`;
+          context.lineWidth = 4 + pulse * 1.5;
           context.beginPath();
-          context.arc(centerX, centerY, Math.min(width, height) * (0.25 + index * 0.09 + pulse * 0.02), 0, Math.PI * 2);
+          context.arc(centerX, centerY, Math.min(width, height) * (0.25 + index * 0.09 + pulse * 0.045), 0, Math.PI * 2);
           context.stroke();
         }
         break;
       case 'ember':
-        this.drawEffectBackdrop(context, width, height, ['rgba(241, 96, 33, ALPHA)', 'rgba(68, 8, 12, ALPHA)'], energy);
-        drawDots(30, `rgba(255, 153, 63, ${0.16 + metrics.bass * 0.3})`, 2.4, 0.11);
+        this.drawEffectBackdrop(context, width, height, ['rgba(241, 96, 33, ALPHA)', 'rgba(68, 8, 12, ALPHA)'], energy, pulse, time);
+        drawDots(34, `rgba(255, 153, 63, ${0.18 + metrics.bass * 0.34 + pulse * 0.12})`, 2.4, 0.11);
+        drawBurst(`rgba(255, 211, 128, ${0.04 + pulse * 0.16})`, 12, Math.min(width, height) * 0.32);
         break;
       case 'ocean':
-        this.drawEffectBackdrop(context, width, height, ['rgba(19, 153, 178, ALPHA)', 'rgba(5, 27, 69, ALPHA)'], energy);
-        context.strokeStyle = `rgba(93, 226, 225, ${0.1 + energy * 0.22})`;
-        context.lineWidth = 3;
+        this.drawEffectBackdrop(context, width, height, ['rgba(19, 153, 178, ALPHA)', 'rgba(5, 27, 69, ALPHA)'], energy, pulse, time);
+        context.strokeStyle = `rgba(93, 226, 225, ${0.12 + energy * 0.24 + pulse * 0.1})`;
+        context.lineWidth = 3 + pulse * 1.3;
         for (let index = 0; index < 3; index += 1) {
           context.beginPath();
           for (let x = 0; x <= width; x += 14) {
-            const y = height * (0.76 + index * 0.06) + Math.sin(x * 0.014 + time * (0.7 + index * 0.22)) * (10 + energy * 12);
+            const y = height * (0.76 + index * 0.06) + Math.sin(x * 0.014 + time * (0.7 + index * 0.22)) * (10 + energy * 12 + pulse * 14);
             if (x === 0) context.moveTo(x, y); else context.lineTo(x, y);
           }
           context.stroke();
         }
-        drawDots(18, `rgba(151, 245, 237, ${0.1 + metrics.treble * 0.2})`, 2, 0.09);
+        drawDots(20, `rgba(151, 245, 237, ${0.12 + metrics.treble * 0.24 + pulse * 0.08})`, 2, 0.09);
         break;
       case 'rose':
-        this.drawEffectBackdrop(context, width, height, ['rgba(249, 159, 180, ALPHA)', 'rgba(91, 31, 78, ALPHA)'], energy);
-        context.fillStyle = `rgba(255, 201, 178, ${0.07 + pulse * 0.13})`;
+        this.drawEffectBackdrop(context, width, height, ['rgba(249, 159, 180, ALPHA)', 'rgba(91, 31, 78, ALPHA)'], energy, pulse, time);
+        context.fillStyle = `rgba(255, 201, 178, ${0.08 + pulse * 0.17})`;
         context.beginPath();
-        context.arc(centerX, centerY, Math.min(width, height) * (0.28 + pulse * 0.05), 0, Math.PI * 2);
+        context.arc(centerX, centerY, Math.min(width, height) * (0.28 + pulse * 0.08), 0, Math.PI * 2);
         context.fill();
         break;
       case 'galaxy':
-        this.drawEffectBackdrop(context, width, height, ['rgba(78, 54, 182, ALPHA)', 'rgba(8, 10, 41, ALPHA)'], energy);
-        drawDots(54, `rgba(212, 190, 255, ${0.12 + metrics.treble * 0.3})`, 1.4, 0.06);
+        this.drawEffectBackdrop(context, width, height, ['rgba(78, 54, 182, ALPHA)', 'rgba(8, 10, 41, ALPHA)'], energy, pulse, time);
+        drawDots(58, `rgba(212, 190, 255, ${0.14 + metrics.treble * 0.34 + pulse * 0.08})`, 1.4, 0.06);
+        drawBurst(`rgba(230, 220, 255, ${0.04 + pulse * 0.14})`, 20, Math.min(width, height) * 0.36);
         break;
       default:
         break;
