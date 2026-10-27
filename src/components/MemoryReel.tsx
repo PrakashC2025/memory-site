@@ -12,7 +12,7 @@ import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/op
 import { cacheDriveMediaFiles, readCachedDriveMedia } from '../services/driveCache';
 import { readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 import { withMediaFetch } from '../utils/mediaQueue';
-import { isLegacyTvBrowser } from '../utils/legacyBrowser';
+import { isAndroidTvBrowser, isLegacyTvBrowser } from '../utils/legacyBrowser';
 import { getMediaFrameKind, getMediaFrameSize } from '../utils/mediaFrames';
 import { LocalCastController } from './LocalCast';
 
@@ -147,6 +147,7 @@ interface MemoryReelOptions {
   loop?: boolean;
   reducedMotion?: boolean;
   legacyTv?: boolean;
+  performanceSurface?: boolean;
   onProgress?: (progress: number, total: number) => void;
   onLoadProgress?: (loaded: number, available: number) => void;
   onStateChange?: (playing: boolean) => void;
@@ -156,6 +157,7 @@ interface MemoryReelOptions {
 interface LoadedMedia {
   node: HTMLImageElement | HTMLVideoElement;
   video?: HTMLVideoElement;
+  media?: HTMLImageElement | HTMLVideoElement;
   aspect: number;
   rotation?: number;
   id?: string;
@@ -549,6 +551,8 @@ export class MemoryReelController {
   private paintCount = 0;
   private candidateDistances: number[] = [];
   private renderedCardIndices = new Set<number>();
+  private allCardIndices = new Set<number>();
+  private allCardIndexCount = 0;
   private audio?: HTMLAudioElement;
   private audioElement?: HTMLAudioElement;
   private analysisAudio?: HTMLAudioElement;
@@ -669,6 +673,7 @@ export class MemoryReelController {
     // compositor budget. Keep the same template and camera path, but stream
     // fewer cards at a time and paint the ambient layer less often.
     this.lowPowerSurface = Boolean(this.options.legacyTv
+      || this.options.performanceSurface
       || (coarsePointer && (deviceMemory <= 4 || hardwareThreads <= 6 || window.innerWidth <= 720)));
     this.clarity = this.options.clarity || 'clear';
     this.zoomEnabled = this.options.zoom !== false;
@@ -1219,6 +1224,21 @@ export class MemoryReelController {
     }
   }
 
+  // Grid templates intentionally keep every loaded card visible. Reuse the
+  // same index set instead of allocating and populating a new Set on every
+  // animation frame (large Drive folders otherwise create steady GC spikes).
+  private getAllCardIndices() {
+    const count = this.cards.length;
+    for (let index = this.allCardIndexCount; index < count; index += 1) this.allCardIndices.add(index);
+    if (count < this.allCardIndexCount) {
+      for (const index of this.allCardIndices) {
+        if (index >= count) this.allCardIndices.delete(index);
+      }
+    }
+    this.allCardIndexCount = count;
+    return this.allCardIndices;
+  }
+
   /**
    * Collects the cards within `radius` of the camera, writing distances into
    * the reused `distanceByCard` buffer. Returns the number of candidates.
@@ -1363,7 +1383,7 @@ export class MemoryReelController {
       if (this.options.template === 'orbit' && index % 6 === 0) card.classList.add('orbit-polaroid');
       card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
       card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
-      return { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video } satisfies ReelCard;
+      return { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video, media: media.node } satisfies ReelCard;
     });
 
     // Use one deterministic random target order. The layout remains spatially
@@ -1437,7 +1457,7 @@ export class MemoryReelController {
     card.style.transform = `translate3d(${x - width / 2}px,${y - height / 2}px,${z}px) rotateZ(${rot}deg)`;
     card.style.transformOrigin = `${width / 2}px ${height / 2}px`;
     this.world.appendChild(card);
-    const reelCard: ReelCard = { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video };
+    const reelCard: ReelCard = { id: media.id || String(index), card, x, y, z, rot, width, height, video: media.video, media: media.node };
     this.cards.splice(insertedAt, 0, reelCard);
     this.renderedCardIndices.clear();
     if (!renderNow) {
@@ -1840,7 +1860,7 @@ export class MemoryReelController {
     const height = Math.max(1, Math.round(rect.height));
     this.dustWidth = width;
     this.dustHeight = height;
-    this.dustDpr = Math.min(1.5, window.devicePixelRatio || 1);
+    this.dustDpr = this.lowPowerSurface ? 1 : Math.min(1.5, window.devicePixelRatio || 1);
     this.dustCanvas.width = Math.round(width * this.dustDpr);
     this.dustCanvas.height = Math.round(height * this.dustDpr);
     this.dustCanvas.style.width = `${width}px`;
@@ -1850,7 +1870,7 @@ export class MemoryReelController {
     // buys nothing visible but costs a lot of per-frame fill on phones.
     const coarsePointer = typeof window.matchMedia === 'function'
       && window.matchMedia('(pointer: coarse)').matches;
-    this.effectsDpr = coarsePointer ? 1 : Math.min(1.5, window.devicePixelRatio || 1);
+    this.effectsDpr = this.lowPowerSurface || coarsePointer ? 1 : Math.min(1.5, window.devicePixelRatio || 1);
     this.effectsWidth = width;
     this.effectsHeight = height;
     this.effectsCanvas.width = Math.round(width * this.effectsDpr);
@@ -2877,7 +2897,7 @@ export class MemoryReelController {
           else card.video.pause();
         }
       });
-      const focusedMedia = this.cards[shot]?.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
+      const focusedMedia = this.cards[shot]?.media;
       const ambientSource = focusedMedia?.currentSrc || focusedMedia?.getAttribute('src') || '';
       if (ambientSource && ambientSource !== this.ambientSource) {
         this.ambientSource = ambientSource;
@@ -3020,7 +3040,7 @@ export class MemoryReelController {
       // The previous implementation still visited every loaded card here,
       // which made a 300-1000 photo Drive folder feel like it was hanging.
       const visibleIndices = isGridTemplate(this.options.template)
-        ? new Set<number>(this.cards.map((_, index) => index))
+        ? this.getAllCardIndices()
         : new Set<number>(nearestOrbitCards || this.candidates);
       visibleIndices.add(shot);
       visibleIndices.add(focusedIndex);
@@ -3143,7 +3163,7 @@ export class MemoryReelController {
             card.lastFilter = 'none';
             card.card.style.setProperty('filter', 'none', 'important');
           }
-          const activeMedia = card.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
+          const activeMedia = card.media;
           const activeImageFilter = clarityImageFilter(this.clarity);
           if (activeMedia && card.lastImageFilter !== activeImageFilter) {
             card.lastImageFilter = activeImageFilter;
@@ -3155,7 +3175,7 @@ export class MemoryReelController {
             activeMedia.style.setProperty('image-rendering', activeImageRendering);
           }
         } else {
-          const inactiveMedia = card.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
+          const inactiveMedia = card.media;
           if (inactiveMedia && card.lastImageFilter !== undefined) {
             card.lastImageFilter = undefined;
             inactiveMedia.style.removeProperty('filter');
@@ -3182,10 +3202,10 @@ export class MemoryReelController {
           else if (!active && !card.video.paused) card.video.pause();
         }
       });
-      const focusedMedia = this.cards[focusedIndex]?.card.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
+      const focusedMedia = this.cards[focusedIndex]?.media;
       const ambientSource = focusedMedia?.currentSrc || focusedMedia?.getAttribute('src') || '';
       const heroCard = this.cards[shot]?.card;
-      const heroMedia = heroCard?.querySelector<HTMLImageElement | HTMLVideoElement>('.m');
+      const heroMedia = heroCard?.media;
       const heroSource = heroMedia?.currentSrc || heroMedia?.getAttribute('src') || '';
       if (heroCard && heroSource) {
         const heroImage = `url("${heroSource.replace(/"/g, '\\"')}")`;
@@ -3559,6 +3579,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const loopEnabledRef = useRef(loop);
   const reducedMotion = usePrefersReducedMotion();
   const legacyTvMode = useMemo(isLegacyTvBrowser, []);
+  const androidTvMode = useMemo(isAndroidTvBrowser, []);
   const moreRequestedRef = useRef(false);
   const hasLoadedSourcesRef = useRef(false);
   const sourceSignatureRef = useRef('');
@@ -4041,6 +4062,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       loop: loopEnabled,
       reducedMotion,
       legacyTv: legacyTvMode,
+      performanceSurface: androidTvMode,
       template,
       zoom: zoomEnabled,
       holdScale: storyTimingScale(timing),
@@ -4069,7 +4091,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       controller.destroy();
       controllerRef.current = null;
     };
-  }, [audio, legacyTvMode, reducedMotion]);
+  }, [audio, androidTvMode, legacyTvMode, reducedMotion]);
 
   useEffect(() => {
     controllerRef.current?.setTemplate(template);
@@ -4244,7 +4266,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     // can leave the renderer waiting forever and trigger the TV's "page not
     // responding" dialog. The WebView already occupies the TV screen, so a
     // CSS cinema surface is the reliable fullscreen implementation there.
-    if (legacyTvMode) {
+    if (legacyTvMode || androidTvMode) {
       setFullscreen(value => !value);
       setFullscreenControlsVisible(true);
       return;

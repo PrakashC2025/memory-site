@@ -19,6 +19,14 @@ export const isLegacyTvBrowser = () => {
   return isLegacyTvUserAgent(userAgent);
 };
 
+// Android TV browsers do not all advertise the same version. Some expose a
+// nearly complete Fullscreen API that never resolves, so Story Mode needs a
+// separate TV check instead of treating only old Chromium as special.
+export const isAndroidTvBrowser = () => {
+  const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent || '';
+  return /android\s*tv|googletv|aftb|afts|aftm|aftt|bravia|shield|smart[- ]?tv|hbbtv|netcast/i.test(userAgent);
+};
+
 export const installLegacyBrowserSupport = () => {
   const browserWindow = window as Window & {
     queueMicrotask?: (callback: VoidFunction) => void;
