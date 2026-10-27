@@ -187,6 +187,7 @@ export const cacheDriveMemories = (memories: Memory[], accessToken: string) => {
       mimeType: memory.mimeType || (memory.type === 'video' ? 'video/mp4' : 'image/jpeg'),
       thumbnailUrl: memory.thumbnail || '',
       createdTime: memory.date,
+      modifiedTime: memory.modifiedTime,
     } satisfies DriveMediaFile));
   // Story Mode needs the original video locally so playback can start without
   // waiting on a second Drive request after the cinematic reel opens.
@@ -210,7 +211,10 @@ export const hydrateCachedDriveMemories = async (memories: Memory[]) => {
     remainingUrls -= 1;
     const url = URL.createObjectURL(cached.blob);
     objectUrls.push(url);
-    return { ...memory, url, thumbnail: url, mimeType: cached.mimeType };
+    // Keep the Drive thumbnail URL stable. The blob URL is only a fast local
+    // source; replacing the thumbnail made a later hydration revoke the URL
+    // while MemoryReel was still decoding it, producing ERR_FILE_NOT_FOUND.
+    return { ...memory, url, mimeType: cached.mimeType };
   }));
   return { memories: hydrated, objectUrls };
 };

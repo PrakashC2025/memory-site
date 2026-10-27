@@ -4,6 +4,7 @@ import {
   Camera,
   Check,
   Grid3X3,
+  Images,
   Lightbulb,
   Loader2,
   RefreshCw,
@@ -678,6 +679,36 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     }
   };
 
+  const importGalleryPhotos = (files: FileList | File[]) => {
+    const selected = Array.from(files || []).filter(file => file.type.startsWith('image/') && file.size > 0);
+    if (!selected.length) return;
+    const photos = selected.map(file => {
+      // Queue the local copy first. resumeUpload persists the original in
+      // IndexedDB before it starts Drive, so a slow connection or app close
+      // cannot lose a gallery photo.
+      const queueId = resumeUpload(file);
+      return {
+        sourceBlob: file,
+        file,
+        url: URL.createObjectURL(file),
+        queueId,
+        uploadedFile: null,
+      } satisfies CapturedPhoto;
+    });
+    const latest = photos[photos.length - 1];
+    if (!latest) return;
+    previewUrlRef.current = latest.url;
+    originalPreviewUrlRef.current = '';
+    setCapturedGallery(current => [...current, ...photos]);
+    setCapturedPhoto(latest);
+    setUploadedFile(null);
+    setPreviewUrl(latest.url);
+    setShowLastShot(true);
+    setReviewOpen(false);
+    setError('');
+    setStatus(`${photos.length} gallery photo${photos.length === 1 ? '' : 's'} saved locally. Uploading to Drive in the background.`);
+  };
+
   const deletePhoto = async () => {
     if (!capturedPhoto) return;
     pauseUpload();
@@ -921,6 +952,18 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
               </select>
             </label>
           </div>
+          <label className="memoriya-camera-gallery-picker">
+            <Images size={16} /> Add from mobile gallery
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={event => {
+                importGalleryPhotos(event.currentTarget.files || []);
+                event.currentTarget.value = '';
+              }}
+            />
+          </label>
           <div className="memoriya-camera-settings">
             <button type="button" onClick={() => setAutoEnhance(value => !value)} className={autoEnhance ? 'is-active' : ''} aria-pressed={autoEnhance}><Sparkles size={15} /> {autoEnhance ? 'Enhance on' : 'Enhance off'}</button>
             <label className="memoriya-camera-quality">Quality

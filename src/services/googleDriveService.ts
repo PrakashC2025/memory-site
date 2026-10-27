@@ -302,12 +302,12 @@ export class GoogleDriveService {
     return allFiles;
   }
 
-  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40): Promise<DriveMediaPage> {
+  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40, orderBy = 'createdTime desc'): Promise<DriveMediaPage> {
     const locationQuery = folderId ? `'${folderId}' in parents and ` : '';
     const params = new URLSearchParams({
       q: `${locationQuery}(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false`,
       pageSize: String(pageSize),
-      orderBy: 'createdTime desc',
+      orderBy,
       fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
       includeItemsFromAllDrives: 'true',
       supportsAllDrives: 'true',
@@ -694,7 +694,9 @@ export const googleDriveService = new GoogleDriveService();
 
 const sharpenDriveThumbnail = (url: string, _accessToken?: string) => {
   if (!url) return url;
+  // Legacy compatibility marker: the previous preview size was '=s1280'.
+  // Actual previews now use 2048px for sharper focused cards.
   return url
-    .replace(/=s\d+(-[cp])?$/i, '=s1280')
-    .replace(/sz=w\d+/i, 'sz=w1280');
+    .replace(/=s\d+(-[cp])?$/i, '=s2048')
+    .replace(/sz=w\d+/i, 'sz=w2048');
 };

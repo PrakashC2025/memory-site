@@ -257,5 +257,8 @@ export const upgradeDriveImageUrls = (memory: Memory): Memory => {
 
 const sharpenStoredThumbnail = (url: string) =>
   url
-    .replace(/=s\d+(-[cp])?$/i, '=s960')
-    .replace(/sz=w\d+/i, 'sz=w960');
+    // Keep the fast thumbnail path, but request enough pixels for the large
+    // Story Mode hero. The original Drive blob still wins whenever it is
+    // cached; this only prevents a soft thumbnail during promotion.
+    .replace(/=s\d+(-[cp])?$/i, '=s2048')
+    .replace(/sz=w\d+/i, 'sz=w2048');

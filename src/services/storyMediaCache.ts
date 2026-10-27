@@ -13,8 +13,9 @@ type CachedStoryMedia = {
 
 const canUseIndexedDb = () => typeof window !== 'undefined' && 'indexedDB' in window;
 
-const openCacheDb = () =>
-  new Promise<IDBDatabase>((resolve, reject) => {
+let cacheDbPromise: Promise<IDBDatabase> | undefined;
+
+const openCacheDb = () => cacheDbPromise || (cacheDbPromise = new Promise<IDBDatabase>((resolve, reject) => {
     if (!canUseIndexedDb()) {
       reject(new Error('IndexedDB unavailable'));
       return;
@@ -27,9 +28,16 @@ const openCacheDb = () =>
         db.createObjectStore(STORE_NAME, { keyPath: 'key' });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error('Story cache failed'));
-  });
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+    request.onerror = () => {
+      cacheDbPromise = undefined;
+      reject(request.error || new Error('Story cache failed'));
+    };
+  }));
 
 const withStore = async <T>(mode: IDBTransactionMode, callback: (store: IDBObjectStore) => IDBRequest<T>) => {
   const db = await openCacheDb();
@@ -39,11 +47,10 @@ const withStore = async <T>(mode: IDBTransactionMode, callback: (store: IDBObjec
     const request = callback(store);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error('Story cache request failed'));
-    transaction.oncomplete = () => db.close();
     transaction.onerror = () => {
-      db.close();
       reject(transaction.error || new Error('Story cache transaction failed'));
     };
+    transaction.onabort = () => reject(transaction.error || new Error('Story cache transaction aborted'));
   });
 };
 

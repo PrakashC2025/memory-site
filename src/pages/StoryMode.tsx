@@ -10,6 +10,12 @@ interface StoryModeProps {
   onExit: () => void;
 }
 
+const compareDriveMemories = (a: Memory, b: Memory) => {
+  const dateDelta = new Date(b.date).getTime() - new Date(a.date).getTime();
+  if (dateDelta) return dateDelta;
+  return (a.driveFileId || a.id).localeCompare(b.driveFileId || b.id);
+};
+
 const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const localInputRef = useRef<HTMLInputElement>(null);
   const [localMemories, setLocalMemories] = useState<Memory[]>([]);
@@ -30,11 +36,15 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const driveAuthRequiredRef = useRef(readDriveAuthRequired());
   const storyMemories = useMemo(() => {
     const byKey = new Map<string, Memory>();
-    [...driveMemories, ...localMemories].forEach(memory => {
+    // Drive is the authoritative Story Mode source whenever it is connected.
+    // Do not append local picker items to the Drive story: that created
+    // duplicate-looking frames and made the loaded count differ from Drive.
+    const sourceMemories = driveAccessToken ? driveMemories : localMemories;
+    sourceMemories.forEach(memory => {
       byKey.set(memory.driveFileId || memory.id, memory);
     });
-    return Array.from(byKey.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [driveMemories, localMemories]);
+    return Array.from(byKey.values()).sort(compareDriveMemories);
+  }, [driveAccessToken, driveMemories, localMemories]);
 
   useEffect(() => {
     return () => {
@@ -106,6 +116,11 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     knownDriveMemoriesRef.current = known;
     let syncBusy = false;
     let changePageToken = readDriveChangePageToken();
+    // A previously saved session can contain only the first page of Drive
+    // metadata. Do one complete reconciliation when Story Mode opens, then
+    // repeat it periodically so older files missing from that snapshot can
+    // never keep the story stuck at a partial count.
+    let lastFullReconcileAt = 0;
 
     const applyCached = async (next: Memory[]) => {
       const generation = ++cacheHydrationGenerationRef.current;
@@ -123,7 +138,11 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     if (token) void cacheDriveMemories(known, token).then(() => applyCached(knownDriveMemoriesRef.current));
 
     const syncDrive = async () => {
-      if (driveAuthRequiredRef.current || readDriveAuthRequired() || syncBusy || !acquireDriveSyncLock()) return;
+      // Drive is the source of truth for Story Mode. A stale auth-required
+      // flag from an older tab must not suppress the next metadata check when
+      // a current token is still available; the request itself decides
+      // whether the token is really expired and refreshes it on 401/403.
+      if (syncBusy || !acquireDriveSyncLock()) return;
       known = knownDriveMemoriesRef.current;
       token = readDriveAccessToken() || token;
       if (!token) {
@@ -135,13 +154,15 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       try {
         let files: Awaited<ReturnType<typeof googleDriveService.listAllMedia>> = [];
         let removedFromFeed: string[] = [];
-        let fullSnapshot = !changePageToken;
+        const fullReconcileDue = !lastFullReconcileAt || Date.now() - lastFullReconcileAt >= 30000;
+        let fullSnapshot = !changePageToken || fullReconcileDue;
         const readDriveUpdates = async () => {
-          if (!changePageToken) {
+          if (!changePageToken || fullReconcileDue) {
             // Establish the cursor before the snapshot so uploads made during
             // this request are picked up on the next cheap poll.
-            changePageToken = await googleDriveService.getStartPageToken(token);
+            if (!changePageToken) changePageToken = await googleDriveService.getStartPageToken(token);
             fullSnapshot = true;
+            lastFullReconcileAt = Date.now();
             files = await googleDriveService.listAllMedia(token, folderId);
             return files;
           }
@@ -170,7 +191,10 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
           // visible, reconcile the newest metadata page as a lightweight
           // safety net so the new photo/video joins the live story immediately.
           if (active && !fullSnapshot) {
-            const latestPage = await googleDriveService.listMediaPage(token, '', folderId, 100);
+            // Use modified time for the live safety page. A file uploaded or
+            // copied into Drive can have an old createdTime and otherwise sit
+            // outside the first page forever, even though it was just added.
+            const latestPage = await googleDriveService.listMediaPage(token, '', folderId, 100, 'modifiedTime desc');
             const knownFileIds = new Set(files.map(file => file.id));
             files = [...files, ...latestPage.files.filter(file => !knownFileIds.has(file.id))];
           }
@@ -196,7 +220,15 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
           .filter(memory => {
             const existing = memory.driveFileId ? knownByDriveId.get(memory.driveFileId) : undefined;
             if (!existing) return true;
-            return existing.title !== memory.title || existing.date !== memory.date || existing.type !== memory.type || existing.mimeType !== memory.mimeType || existing.thumbnail !== memory.thumbnail;
+            return existing.title !== memory.title
+              || existing.date !== memory.date
+              || existing.type !== memory.type
+              || existing.mimeType !== memory.mimeType
+              || existing.modifiedTime !== memory.modifiedTime
+              // Drive thumbnail URLs can rotate or gain a new token during a
+              // metadata poll. They are not content identity; modifiedTime
+              // is the authoritative signal for replacing a cached frame.
+              || (!memory.modifiedTime && existing.thumbnail !== memory.thumbnail);
           });
         const importedById = new Map(imported.map(memory => [memory.driveFileId, memory]));
         const changedIds = new Set([...files.map(file => file.id), ...removedFromFeed]);
@@ -212,7 +244,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
           : memory);
         const knownIds = new Set(known.map(memory => memory.driveFileId || memory.id));
         known = [...known, ...imported.filter(memory => !knownIds.has(memory.driveFileId || memory.id))]
-          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          .sort(compareDriveMemories);
         knownDriveMemoriesRef.current = known;
 
         if (removed.size) {
@@ -238,7 +270,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
             const currentById = new Map(current.map(memory => [memory.driveFileId || memory.id, memory]));
             known.forEach(memory => currentById.set(memory.driveFileId || memory.id, memory));
             removed.forEach(id => currentById.delete(id));
-            return Array.from(currentById.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            return Array.from(currentById.values()).sort(compareDriveMemories);
           });
           void applyCached(known);
         }
