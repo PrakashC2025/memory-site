@@ -17,6 +17,7 @@ import MemoryTree from './pages/MemoryTree';
 import Settings from './pages/Settings';
 import StoryMode from './pages/StoryMode';
 import Timeline from './pages/Timeline';
+import { LocalCastReceiver } from './components/LocalCast';
 
 type Page = 'dashboard' | 'memoriya' | 'tree' | 'timeline' | 'events' | 'story' | 'settings';
 
@@ -36,6 +37,10 @@ const PageLoader: React.FC = () => (
 const AppContent: React.FC = () => {
   const { authLoading, user } = useUser();
   const [currentPage, setCurrentPage] = useState<Page>('memoriya');
+
+  if (new URLSearchParams(window.location.search).get('cast') === 'receiver') {
+    return <LocalCastReceiver />;
+  }
 
   const navigate = (page: string) => {
     setCurrentPage(page as Page);

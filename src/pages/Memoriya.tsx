@@ -80,15 +80,40 @@ const formatTime = new Intl.DateTimeFormat('en', { hour: '2-digit', minute: '2-d
 const readDriveSession = (): DriveSessionSnapshot | null => {
   try {
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
-    if (!stored) return null;
+    const offlineMemories = readDriveMemories().filter(isVisualMemory).map(upgradeDriveImageUrls);
+    if (!stored) {
+      if (!offlineMemories.length) return null;
+      return {
+        accessToken: '',
+        nextPageToken: '',
+        importCount: offlineMemories.length,
+        memories: offlineMemories,
+        savedAt: Date.now(),
+      };
+    }
     const snapshot = JSON.parse(stored) as DriveSessionSnapshot;
-    if (!snapshot.accessToken) return null;
+    const memories = (snapshot.memories || []).filter(isVisualMemory).map(upgradeDriveImageUrls);
+    // sessionStorage disappears when the tab/session is replaced. Keep the
+    // local Drive library as the source for the first paint so camera photos
+    // already saved to Drive never vanish after reopening the site.
+    const restoredMemories = memories.length ? memories : offlineMemories;
+    if (!restoredMemories.length && !snapshot.accessToken) return null;
     return {
       ...snapshot,
-      memories: (snapshot.memories || []).filter(isVisualMemory).map(upgradeDriveImageUrls),
+      accessToken: snapshot.accessToken || '',
+      memories: restoredMemories,
+      importCount: snapshot.importCount || restoredMemories.length,
     };
   } catch {
-    return null;
+    const offlineMemories = readDriveMemories().filter(isVisualMemory).map(upgradeDriveImageUrls);
+    if (!offlineMemories.length) return null;
+    return {
+      accessToken: '',
+      nextPageToken: '',
+      importCount: offlineMemories.length,
+      memories: offlineMemories,
+      savedAt: Date.now(),
+    };
   }
 };
 
@@ -542,14 +567,13 @@ const Memoriya: React.FC = () => {
       return [...replaced, ...imported.filter(memory => !ids.has(memory.driveFileId || memory.id))]
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     };
-    setMemories(current => {
-      const next = mergeImported(current);
-      // Publish camera/manual imports immediately so an already-open Story
-      // Mode receives the new Drive memory without waiting for its next poll.
-      saveDriveMemories(next.filter(memory => memory.driveFileId), token, driveFolderId);
-      if (!selected && next[0]) setSelected(next[0]);
-      return next;
-    });
+    // Persist before the state update. React may delay a state updater until
+    // after the camera overlay is closed; the Drive photo must already be in
+    // the offline library if the page is reopened in that window.
+    const persistedNext = mergeImported(memoriesRef.current);
+    saveDriveMemories(persistedNext.filter(memory => memory.driveFileId), token, driveFolderId);
+    if (!selected && persistedNext[0]) setSelected(persistedNext[0]);
+    setMemories(current => mergeImported(current));
     // Update the mounted reel in the same upload turn. The normal
     // filteredMemories effect still keeps this synchronized with the gallery,
     // but this direct path prevents a freshly uploaded photo from waiting for

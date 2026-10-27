@@ -14,6 +14,8 @@ export interface CompletedCameraUpload {
   driveFileId: string;
   folderId: string;
   completedAt: number;
+  name?: string;
+  mimeType?: string;
 }
 
 const canUseStorage = () => typeof window !== 'undefined' && Boolean(window.localStorage);

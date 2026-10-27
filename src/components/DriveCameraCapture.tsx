@@ -126,6 +126,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const [torchEnabled, setTorchEnabled] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [torchAvailable, setTorchAvailable] = useState(false);
+  const [cameraEnabled, setCameraEnabled] = useState(true);
   const [cameraReady, setCameraReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [status, setStatus] = useState('Starting camera…');
@@ -168,9 +169,13 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     const updateOrientation = () => setLandscape(window.innerWidth > window.innerHeight);
     updateOrientation();
     window.addEventListener('resize', updateOrientation, { passive: true });
+    window.addEventListener('orientationchange', updateOrientation, { passive: true });
+    window.visualViewport?.addEventListener('resize', updateOrientation, { passive: true });
     window.screen?.orientation?.addEventListener?.('change', updateOrientation);
     return () => {
       window.removeEventListener('resize', updateOrientation);
+      window.removeEventListener('orientationchange', updateOrientation);
+      window.visualViewport?.removeEventListener('resize', updateOrientation);
       window.screen?.orientation?.removeEventListener?.('change', updateOrientation);
     };
   }, []);
@@ -184,7 +189,11 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   useEffect(() => {
     let cancelled = false;
     const restorePendingPhotos = async () => {
-      const completedIds = new Set(readCompletedCameraUploads().map(item => item.id));
+      // Only restore the recent camera gallery. The complete Drive library is
+      // already shown by Memoriya; reading hundreds of blobs here would make
+      // a phone camera overlay feel slow.
+      const completedUploads = readCompletedCameraUploads().slice(-24);
+      const completedIds = new Set(completedUploads.map(item => item.id));
       const savedJobs = readPendingCameraUploads().filter(job => !completedIds.has(job.id));
       const restored = await Promise.all(savedJobs.map(async savedJob => {
         const blob = await readCachedStoryMedia(savedJob.id);
@@ -201,19 +210,48 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           } as CapturedPhoto,
         };
       }));
+      // A Drive upload can finish just before the camera is closed. Restore
+      // that completed capture from the Drive-keyed cache so the camera still
+      // has a real preview when it is opened again (instead of only showing a
+      // temporary object URL from the previous component instance).
+      const restoredCompleted = await Promise.all(completedUploads.map(async completed => {
+        const blob = await readCachedStoryMedia(completed.driveFileId);
+        if (!blob) return null;
+        const mimeType = completed.mimeType || blob.type || 'image/jpeg';
+        const file = new File([blob], completed.name || `memoriya-${completed.driveFileId}.jpg`, { type: mimeType });
+        const uploadedFile: DriveMediaFile = {
+          id: completed.driveFileId,
+          name: file.name,
+          mimeType,
+          thumbnailUrl: '',
+          parents: completed.folderId ? [completed.folderId] : undefined,
+        };
+        return {
+          sourceBlob: blob,
+          file,
+          url: URL.createObjectURL(blob),
+          queueId: completed.id,
+          uploadedFile,
+        } as CapturedPhoto;
+      }));
       if (cancelled) {
         restored.forEach(item => { if (item) URL.revokeObjectURL(item.photo.url); });
+        restoredCompleted.forEach(photo => { if (photo) URL.revokeObjectURL(photo.url); });
         return;
       }
-      const validItems = restored.filter((item): item is NonNullable<typeof item> => Boolean(item));
+      const validPendingItems = restored.filter((item): item is NonNullable<typeof item> => Boolean(item));
+      const validCompletedItems = restoredCompleted.filter((photo): photo is CapturedPhoto => Boolean(photo));
+      const validItems = [...validPendingItems.map(item => item.photo), ...validCompletedItems];
       const currentIds = new Set(uploadQueueRef.current.map(job => job.id));
-      const recoveredJobs = validItems.map(item => item.job).filter(job => !currentIds.has(job.id));
+      const recoveredJobs = validPendingItems.map(item => item.job).filter(job => !currentIds.has(job.id));
       uploadQueueRef.current = [...recoveredJobs, ...uploadQueueRef.current];
       recoveredJobs.forEach(job => updateUploadStatus(job.id, 'queued'));
       if (validItems.length) {
-        setCapturedGallery(current => [...validItems.map(item => item.photo), ...current]);
-        setCapturedPhoto(current => current || validItems[validItems.length - 1].photo);
-        setPreviewUrl(current => current || validItems[validItems.length - 1].photo.url);
+        const latestPhoto = validItems[validItems.length - 1];
+        setCapturedGallery(current => [...validItems, ...current]);
+        setCapturedPhoto(current => current || latestPhoto);
+        setUploadedFile(current => current || latestPhoto.uploadedFile || null);
+        setPreviewUrl(current => current || latestPhoto.url);
         setShowLastShot(true);
       }
       persistUploadQueue();
@@ -227,6 +265,17 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   useEffect(() => {
     let cancelled = false;
     const start = async () => {
+      if (!cameraEnabled) {
+        streamRef.current?.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+        trackRef.current = null;
+        imageCaptureRef.current = null;
+        if (videoRef.current) videoRef.current.srcObject = null;
+        setCameraReady(false);
+        setTorchAvailable(false);
+        setStatus('Camera is off. Tap Camera on when you are ready.');
+        return;
+      }
       if (!navigator.mediaDevices?.getUserMedia) {
         setError('This browser does not provide camera access. Open Memoriya in Chrome or Safari on the phone.');
         return;
@@ -307,7 +356,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       if (zoomApplyFrameRef.current !== null) cancelAnimationFrame(zoomApplyFrameRef.current);
       zoomApplyFrameRef.current = null;
     };
-  }, [facingMode, landscape]);
+  }, [cameraEnabled, facingMode, landscape]);
 
   useEffect(() => () => {
     // Do not abort a pending upload when the camera panel closes. The queue is
@@ -458,6 +507,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           driveFileId: uploaded.id,
           folderId: targetFolderId,
           completedAt: Date.now(),
+          name: uploaded.name || file.name,
+          mimeType: uploaded.mimeType || file.type,
         });
         // Cleanup is deliberately non-blocking. Drive has already confirmed
         // the upload, so the live story must be notified before IndexedDB
@@ -465,10 +516,10 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         void deleteCachedStoryMedia(queueId);
         writePendingCameraUploads(readPendingCameraUploads().filter(job => job.id !== queueId));
       }
+      // Finish the Drive-keyed cache write before reporting success. This
+      // makes a close/reopen immediately safe, even on a slow phone.
+      await writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
       onUploaded(uploaded, token, file);
-      // Keep the original locally for the sharp live preview and offline
-      // replay, but never make the UI wait for this cache transaction.
-      void writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
       setStatus('Photo saved locally and synced to Drive.');
       return true;
     } catch (uploadError) {
@@ -668,7 +719,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       setEditRotation(0);
       setEditCrop('original');
       setShowLastShot(true);
-      setReviewOpen(false);
+      setReviewOpen(true);
       setCapturing(false);
       setStatus('Captured locally. Uploading to Drive in the background.');
     } catch (captureError) {
@@ -704,7 +755,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     setUploadedFile(null);
     setPreviewUrl(latest.url);
     setShowLastShot(true);
-    setReviewOpen(false);
+    setReviewOpen(true);
     setError('');
     setStatus(`${photos.length} gallery photo${photos.length === 1 ? '' : 's'} saved locally. Uploading to Drive in the background.`);
   };
@@ -868,6 +919,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     if (track) void track.applyConstraints({ advanced: [{ torch: next } as MediaTrackConstraintSet] });
   };
 
+  const recentGallery = capturedGallery.slice(-5);
+  const olderGalleryCount = Math.max(0, capturedGallery.length - recentGallery.length);
+
   return (
     <div className={`memoriya-camera-overlay${landscape ? ' is-landscape' : ' is-portrait'}`} role="dialog" aria-modal="true" aria-label="Drive camera">
       <section className="memoriya-camera-panel">
@@ -916,18 +970,18 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           </div>
         </div>
         <div className="memoriya-camera-bottom-deck">
-          {capturedGallery.length > 0 && (
+          {recentGallery.length > 0 && (
             <div className="memoriya-camera-gallery" aria-label="Captured photo gallery">
-              {capturedGallery.map((photo, index) => (
+              {recentGallery.map((photo, index) => (
                 <button
                   type="button"
                   key={photo.queueId}
                   className={`memoriya-camera-gallery-item${capturedPhoto?.queueId === photo.queueId ? ' is-active' : ''}`}
                   onClick={() => selectGalleryPhoto(photo)}
-                  aria-label={`Review captured photo ${index + 1}`}
+                  aria-label={`Review captured photo ${index + 1 + olderGalleryCount}`}
                 >
-                  <img src={photo.url} alt={`Captured memory ${index + 1}`} />
-                  <span>{index + 1}</span>
+                  <img src={photo.url} alt={`Captured memory ${index + 1 + olderGalleryCount}`} />
+                  <span>{index + 1 + olderGalleryCount}</span>
                 </button>
               ))}
             </div>
@@ -965,6 +1019,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
             />
           </label>
           <div className="memoriya-camera-settings">
+            <button type="button" onClick={() => setCameraEnabled(value => !value)} className={cameraEnabled ? 'is-active' : ''} aria-pressed={cameraEnabled}><Camera size={15} /> {cameraEnabled ? 'Camera on' : 'Camera off'}</button>
             <button type="button" onClick={() => setAutoEnhance(value => !value)} className={autoEnhance ? 'is-active' : ''} aria-pressed={autoEnhance}><Sparkles size={15} /> {autoEnhance ? 'Enhance on' : 'Enhance off'}</button>
             <label className="memoriya-camera-quality">Quality
               <select value={quality} onChange={event => setQuality(event.target.value as CameraQuality)}>
@@ -983,20 +1038,21 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           {uploadedFile && !reviewOpen && <p className="memoriya-camera-saved"><Check size={15} /> Latest photo is saved to Drive and your live story.</p>}
           {capturedGallery.length > 0 && (
             <div className="memoriya-camera-upload-list" aria-label="Camera upload status" aria-live="polite">
-              {capturedGallery.map((photo, index) => {
+              {recentGallery.map((photo, index) => {
                 const status = photo.uploadedFile
                   ? 'uploaded'
                   : uploadStatuses[photo.queueId] || (uploadQueueRef.current.some(job => job.id === photo.queueId) ? 'queued' : 'paused');
                 const statusLabel = status === 'uploaded' ? 'Uploaded' : status === 'uploading' ? 'Uploading' : status === 'paused' ? 'Paused' : status === 'cancelled' ? 'Canceled' : status === 'failed' ? 'Failed' : 'Waiting';
                 return (
                   <div className={`memoriya-camera-upload-item is-${status}`} key={photo.queueId}>
-                    <span><b>Photo {index + 1}</b><small>{statusLabel}</small></span>
+                    <span><b>Photo {index + 1 + olderGalleryCount}</b><small>{statusLabel}</small></span>
                     {status === 'uploaded' && <Check size={14} aria-label="Uploaded" />}
                     {(status === 'queued' || status === 'uploading') && <button type="button" onClick={() => cancelUpload(photo)}>{status === 'uploading' ? 'Cancel' : 'Cancel'}</button>}
                     {(status === 'paused' || status === 'failed' || status === 'cancelled') && <button type="button" onClick={() => retryUpload(photo)}><RefreshCw size={13} /> Retry</button>}
                   </div>
                 );
               })}
+              {olderGalleryCount > 0 && <small className="memoriya-camera-upload-more">+{olderGalleryCount} older photos are safely stored in Drive.</small>}
             </div>
           )}
         </div>
@@ -1013,17 +1069,17 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
               <div className={`memoriya-camera-review-preview is-crop-${editMode ? editCrop : 'original'}`}>
                 <img src={capturedPhoto.url} alt="Captured memory preview" style={{ filter: CAMERA_FILTERS[editMode ? editFilter : 'natural'].css, transform: `rotate(${editRotation}deg)` }} />
               </div>
-              {capturedGallery.length > 1 && (
+              {recentGallery.length > 1 && (
                 <div className="memoriya-camera-review-gallery" aria-label="All captured photos">
-                  {capturedGallery.map((photo, index) => (
+                  {recentGallery.map((photo, index) => (
                     <button
                       type="button"
                       key={photo.queueId}
                       className={capturedPhoto.queueId === photo.queueId ? 'is-active' : ''}
                       onClick={() => selectGalleryPhoto(photo)}
-                      aria-label={`Open captured photo ${index + 1}`}
+                      aria-label={`Open captured photo ${index + 1 + olderGalleryCount}`}
                     >
-                      <img src={photo.url} alt={`Captured memory ${index + 1}`} />
+                      <img src={photo.url} alt={`Captured memory ${index + 1 + olderGalleryCount}`} />
                     </button>
                   ))}
                 </div>

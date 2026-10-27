@@ -3,7 +3,7 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import ffmpegCoreScript from '@ffmpeg/core?url';
 import ffmpegCoreWasm from '@ffmpeg/core/wasm?url';
-import { HardDrive, Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, VolumeX, WandSparkles, X } from 'lucide-react';
+import { Cast, HardDrive, Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, VolumeX, WandSparkles, X } from 'lucide-react';
 import { isVisualMemory, type Memory } from '../data/memories';
 import { beginHeavyVisualPause } from '../utils/visualActivity';
 import { googleDriveService, isAudioDriveFile, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
@@ -14,6 +14,7 @@ import { readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMe
 import { withMediaFetch } from '../utils/mediaQueue';
 import { isLegacyTvBrowser } from '../utils/legacyBrowser';
 import { getMediaFrameKind, getMediaFrameSize } from '../utils/mediaFrames';
+import { LocalCastController } from './LocalCast';
 
 export interface MemoryReelTitle {
   line?: string;
@@ -886,10 +887,10 @@ export class MemoryReelController {
       ? this.shotIndexAt(this.elapsed)
       : this.lastRenderedShot;
     let liveInsertIndex = keepCurrentWall
-      // A newly uploaded Drive photo becomes the focused frame immediately.
-      // Insert at the current shot while preserving elapsed time, playback,
-      // and the surrounding wall; the next frame then continues normally.
-      ? Math.min(this.cards.length, Math.max(0, liveShotAtUpdate))
+      // Keep the current frame uninterrupted. Insert the fully downloaded
+      // live photo immediately after it (before the existing next frame), so
+      // it appears in the nearby sequence and receives its complete hold.
+      ? Math.min(this.cards.length, Math.max(0, liveShotAtUpdate + 1))
       : this.cards.length;
     // Live updates warm a small slice so a newly uploaded image joins quickly.
     // Legacy policy reference: keepCurrentWall ? WALL_LIVE_BATCH : WALL_INITIAL_BATCH.
@@ -1414,6 +1415,7 @@ export class MemoryReelController {
     let rot = (randomUnit(index + 61) - 0.5) * 16;
     const insertedAt = Math.min(insertIndex, this.cards.length);
     const activeShot = this.cards.length ? this.shotIndexAt(this.elapsed) : -1;
+    const shouldStartLiveCard = this.liveAppendInProgress && insertedAt === activeShot;
     const currentCard = activeShot >= 0 ? this.cards[activeShot] : undefined;
     const nextCard = activeShot >= 0
       ? this.cards[Math.min(this.cards.length - 1, activeShot + 1)]
@@ -1449,6 +1451,11 @@ export class MemoryReelController {
       return;
     }
     this.recalculateTotal();
+    // A newly uploaded photo is inserted at the current shot so it appears
+    // promptly. Reset the clock to that new shot's start; otherwise the old
+    // elapsed offset can leave the fresh image visible for only a fraction of
+    // a second when it arrives near the end of the previous frame.
+    if (shouldStartLiveCard) this.elapsed = this.shotStartAt(insertedAt);
     this.gridDirty = true;
     // Style only the card that was just inserted. Resetting lastLayoutShot
     // forced the whole wall through a reposition pass on every streamed append,
@@ -2644,7 +2651,7 @@ export class MemoryReelController {
   }
 
   private cardHold(card: ReelCard) {
-    const baseHold = this.options.template === 'orbit' ? 4 : 3.6;
+    const baseHold = Math.max(4, this.options.template === 'orbit' ? 4 : 3.6);
     if (card.video) {
       const duration = Number.isFinite(card.video.duration) && card.video.duration > 0
         ? card.video.duration
@@ -2655,7 +2662,7 @@ export class MemoryReelController {
   }
 
   private estimateTotal(items: ReelSource[]) {
-    const baseHold = this.options.template === 'orbit' ? 4 : 3.6;
+    const baseHold = Math.max(4, this.options.template === 'orbit' ? 4 : 3.6);
     return items.reduce((total, item, index) => (
       total
       + (item.type === 'video' ? 8 : baseHold * this.holdScale)
@@ -3522,6 +3529,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [templateOpen, setTemplateOpen] = useState(false);
   const [effectsOpen, setEffectsOpen] = useState(false);
   const [clarityOpen, setClarityOpen] = useState(false);
+  const [castOpen, setCastOpen] = useState(false);
   const [template, setTemplate] = useState<MemoryReelTemplate>(() => readStoredStoryTemplate(initialTemplate));
   const [effect, setEffect] = useState<MemoryReelEffect>(() => readStoredStoryEffect('natural'));
   const [clarity, setClarity] = useState<MemoryReelClarity>(() => readStoredStoryClarity('clear'));
@@ -5207,6 +5215,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           </button>
           <button type="button" onClick={() => controllerRef.current?.restart()} disabled={loading}><RotateCcw size={16} /> Replay</button>
           <button type="button" onClick={toggleFullscreen}><>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</> {fullscreen ? 'Exit' : 'Fullscreen'}</button>
+          <button type="button" className={castOpen ? 'is-active' : ''} onClick={() => setCastOpen(true)} aria-pressed={castOpen}><Cast size={16} /> Cast local</button>
           <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Music2 size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : allDriveSongs.length ? `(${allDriveSongs.length} Drive)` : ''}</button>
           <button type="button" className={templateOpen ? 'is-active' : ''} aria-expanded={templateOpen} onClick={openTemplates}><WandSparkles size={16} /> Template</button>
           {musicQueue.length > 0 && <button type="button" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}><Volume2 size={16} /> {audioPlaying ? 'Stop music' : 'Play music'}</button>}
@@ -5287,6 +5296,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
               : 'This audio file was downloaded, but this browser or TV cannot decode its format. MP3 or AAC/M4A works on the widest range of phones and TVs.');
           }}
         />
+        <LocalCastController open={castOpen} onClose={() => setCastOpen(false)} />
         <div
           className={`memory-reel-fullscreen-controls${fullscreenControlsVisible ? '' : ' is-hidden'}`}
           aria-label="Fullscreen story controls"
