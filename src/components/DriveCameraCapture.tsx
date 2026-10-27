@@ -549,6 +549,34 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     return canvasToJpegBlob(canvas);
   };
 
+  const applyCaptureLook = async (blob: Blob) => {
+    if (filter === 'natural' && quality === 'standard' && !autoEnhance) return blob;
+    if (typeof createImageBitmap !== 'function') return blob;
+    let bitmap: ImageBitmap;
+    try {
+      bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+    } catch {
+      return blob;
+    }
+    const canvas = canvasRef.current || document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      bitmap.close();
+      return blob;
+    }
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.filter = [
+      CAMERA_FILTERS[filter].css,
+      CAMERA_QUALITY[quality].css,
+      autoEnhance ? 'brightness(1.08) contrast(1.06) saturate(1.08)' : 'none',
+    ].filter(value => value !== 'none').join(' ') || 'none';
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    return canvasToJpegBlob(canvas);
+  };
+
   const updatePendingCount = () => {
     setPendingUploads(uploadQueueRef.current.length);
   };
@@ -778,25 +806,30 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     setError('');
     setStatus('');
     try {
-      // Prefer the camera's native still frame for the sharpest available
-      // image. A few Android WebViews expose ImageCapture but fail at runtime,
-      // so the negotiated video frame remains a reliable fallback.
-      let rawBlob: Blob;
+      // Capture the already-running video frame first. It is immediate and
+      // already contains the selected look, quality, and auto-enhancement.
+      // Native ImageCapture is kept as a fallback for browsers whose video
+      // frame is not ready, rather than making every shutter press wait for a
+      // slow phone still-capture pipeline.
+      let blob: Blob;
       try {
-        if (!imageCaptureRef.current) throw new Error('Native still capture is unavailable.');
-        rawBlob = await imageCaptureRef.current.takePhoto();
-        if (!rawBlob?.size) throw new Error('The camera returned an empty image.');
-      } catch (stillError) {
+        blob = await captureFromVideo();
+      } catch (frameError) {
         try {
-          rawBlob = await captureFromVideo();
-        } catch (frameError) {
-          throw new Error(frameError instanceof Error ? frameError.message : stillError instanceof Error ? stillError.message : 'The phone could not capture this image.');
+          if (!imageCaptureRef.current) throw frameError;
+          const nativeBlob = await imageCaptureRef.current.takePhoto();
+          if (!nativeBlob?.size) throw new Error('The camera returned an empty image.');
+          blob = await normalizeHorizontalCapture(nativeBlob);
+          blob = await applyCaptureLook(blob);
+        } catch (nativeError) {
+          throw new Error(nativeError instanceof Error ? nativeError.message : frameError instanceof Error ? frameError.message : 'The phone could not capture this image.');
         }
       }
-      if (!rawBlob?.size) throw new Error('The phone returned an empty photo. Please try the shutter again.');
-      // Keep the original camera frame for immediate local saving. Looks and
-      // edits remain available in review, while Drive upload runs separately.
-      const blob = await normalizeHorizontalCapture(rawBlob);
+      // Keep the physical horizontal/vertical correction for both capture
+      // paths. A second pass is harmless because an already-horizontal blob
+      // is returned unchanged.
+      blob = await normalizeHorizontalCapture(blob);
+      if (!blob?.size) throw new Error('The phone returned an empty photo. Please try the shutter again.');
       const localPreviewUrl = URL.createObjectURL(blob);
       // Keep earlier captures alive in the camera gallery. Only the active
       // preview URL is replaced here; gallery thumbnails remain usable.
@@ -932,7 +965,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         nextQueueId = resumeUpload(localFile);
       }
       const photo = {
-        sourceBlob: capturedPhoto.sourceBlob,
+        // Keep the edited/enhanced pixels as the new source so the preview,
+        // local restore, and any later upload all use the same image.
+        sourceBlob: blob,
         file: localFile,
         url: localPreviewUrl,
         queueId: nextQueueId,
@@ -945,7 +980,6 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       setFilter(editFilter);
       setEditMode(false);
       setStatus(nextUploadedFile ? 'Enhanced photo updated on Drive.' : 'Enhanced photo saved locally and uploading to Drive.');
-      setStatus('Edited photo ready. Uploading the new version…');
     } catch (editError) {
       setError(editError instanceof Error ? editError.message : 'Could not save the edit.');
     } finally {

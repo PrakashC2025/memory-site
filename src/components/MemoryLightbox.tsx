@@ -599,7 +599,10 @@ const MemoryLightbox: React.FC<Props> = ({
       setMediaSrc(driveBacked ? '' : current.url);
       return;
     }
-    const quickPreview = driveBacked ? '' : current.thumbnail || current.url;
+    // A Drive photo must still paint its thumbnail immediately when the
+    // lightbox opens. The cached/original download continues in the background
+    // and replaces this preview when ready; it must not leave the viewer blank.
+    const quickPreview = current.thumbnail || current.url;
     setPreviewSrc(quickPreview);
     setMediaSrc(driveBacked ? '' : current.url);
   }, [current?.id, current?.url]);
@@ -655,7 +658,7 @@ const MemoryLightbox: React.FC<Props> = ({
         setMediaFailed(false);
         setHighResReady(true);
       } catch {
-        if (!controller.signal.aborted && !previewSrc) {
+        if (!controller.signal.aborted && !current.thumbnail && !current.url) {
           setMediaFailed(true);
         }
       }
@@ -708,6 +711,14 @@ const MemoryLightbox: React.FC<Props> = ({
     if (!current.driveFileId && !isVideoMemory(current) && current.url && previewSrc !== current.url) {
       setPreviewSrc(current.url);
       setImageLoaded(false);
+      return;
+    }
+    if (current.driveFileId && !isVideoMemory(current) && current.url && previewSrc !== current.url) {
+      // Drive thumbnails can expire independently of the cached original.
+      // Retry the authenticated original URL before showing an error state.
+      setPreviewSrc(current.url);
+      setImageLoaded(false);
+      setMediaFailed(false);
       return;
     }
     setImageLoaded(true);

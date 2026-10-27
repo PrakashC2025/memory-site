@@ -201,7 +201,8 @@ test('video loading keeps a usable poster and caches before story reveal', async
   assert.match(reel, /if \(loaded\.length === 1\) this\.rebuildWall\(loaded, preserveProgress, previousElapsed, wasPlaying\);/);
   assert.match(reel, /else this\.appendMediaCard\(resolvedMedia\);/);
   assert.match(reel, /const activeId = activeCard\?\.id \|\| ''/);
-  assert.match(camera, /rawBlob = await captureFromVideo\(\)/);
+  assert.match(camera, /blob = await captureFromVideo\(\)/);
+  assert.match(camera, /applyCaptureLook/);
   assert.match(camera, /memoriya-camera-corner-tools/);
   assert.doesNotMatch(camera, />Flip</);
   assert.match(camera, /window\.addEventListener\('online', resumeWhenOnline\)/);
