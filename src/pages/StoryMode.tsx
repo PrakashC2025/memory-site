@@ -231,6 +231,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
               || existing.type !== memory.type
               || existing.mimeType !== memory.mimeType
               || existing.modifiedTime !== memory.modifiedTime
+              || existing.orientation !== memory.orientation
+              || existing.width !== memory.width
+              || existing.height !== memory.height
               // Drive thumbnail URLs can rotate or gain a new token during a
               // metadata poll. They are not content identity; modifiedTime
               // is the authoritative signal for replacing a cached frame.

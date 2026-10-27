@@ -7,7 +7,8 @@ export const normalizeMediaAspect = (width?: number, height?: number, rotation =
   const safeHeight = Number(height);
   if (!Number.isFinite(safeWidth) || !Number.isFinite(safeHeight) || safeWidth <= 0 || safeHeight <= 0) return fallback;
   const rawAspect = safeWidth / safeHeight;
-  const quarterTurn = Math.round(rotation / 90) % 2 !== 0;
+  const numericRotation = Number(rotation);
+  const quarterTurn = Number.isFinite(numericRotation) && Math.round(numericRotation / 90) % 2 !== 0;
   return clamp(quarterTurn ? 1 / rawAspect : rawAspect, 0.3, 3.2);
 };
 

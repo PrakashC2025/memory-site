@@ -99,6 +99,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const zoomApplyFrameRef = useRef<number | null>(null);
   const pinchStartDistanceRef = useRef(0);
   const pinchStartZoomRef = useRef(1);
+  const physicalGammaRef = useRef<number | null>(null);
   const previewUrlRef = useRef('');
   const originalPreviewUrlRef = useRef('');
   const uploadAbortRef = useRef<AbortController | null>(null);
@@ -181,6 +182,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   useEffect(() => {
     const updateOrientation = () => setLandscape(window.innerWidth > window.innerHeight);
     const updatePhysicalOrientation = (event?: DeviceOrientationEvent) => {
+      if (typeof event?.gamma === 'number') physicalGammaRef.current = event.gamma;
       if (typeof event?.gamma === 'number' && Math.abs(event.gamma) > 45) setDeviceLandscape(true);
       else if (typeof event?.gamma === 'number' && Math.abs(event.gamma) < 35) setDeviceLandscape(false);
       else {
@@ -380,7 +382,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       if (zoomApplyFrameRef.current !== null) cancelAnimationFrame(zoomApplyFrameRef.current);
       zoomApplyFrameRef.current = null;
     };
-  }, [cameraEnabled, facingMode, landscape]);
+  }, [cameraEnabled, facingMode]);
 
   useEffect(() => () => {
     // Do not abort a pending upload when the camera panel closes. The queue is
@@ -516,6 +518,37 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     return canvasToJpegBlob(canvas);
   };
 
+  const normalizeHorizontalCapture = async (blob: Blob) => {
+    const windowAngle = Number((window as Window & { orientation?: number }).orientation);
+    const heldSideways = !landscape && (deviceLandscape
+      || Math.abs(physicalGammaRef.current || 0) > 45
+      || (Number.isFinite(windowAngle) && Math.abs(windowAngle) === 90));
+    if (!heldSideways || typeof createImageBitmap !== 'function') return blob;
+    let bitmap: ImageBitmap;
+    try {
+      bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+    } catch {
+      return blob;
+    }
+    if (bitmap.width >= bitmap.height) {
+      bitmap.close();
+      return blob;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.height;
+    canvas.height = bitmap.width;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      bitmap.close();
+      return blob;
+    }
+    context.translate(canvas.width / 2, canvas.height / 2);
+    context.rotate(Math.PI / 2);
+    context.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2);
+    bitmap.close();
+    return canvasToJpegBlob(canvas);
+  };
+
   const updatePendingCount = () => {
     setPendingUploads(uploadQueueRef.current.length);
   };
@@ -568,7 +601,12 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       // Finish the Drive-keyed cache write before reporting success. This
       // makes a close/reopen immediately safe, even on a slow phone.
       await writeCachedStoryMedia(uploaded.id, file, uploaded.mimeType || file.type);
-      onUploaded(uploaded, token, file);
+      try {
+        onUploaded(uploaded, token, file);
+      } catch {
+        // Drive has succeeded and the local copy is safe. A parent-page
+        // refresh must never turn a successful camera capture into an error.
+      }
       setStatus('Photo saved locally and synced to Drive.');
       return true;
     } catch (uploadError) {
@@ -584,8 +622,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         setStatus('Offline — upload queued safely until internet returns.');
       } else {
         if (queueId) updateUploadStatus(queueId, 'failed');
-        setError(uploadError instanceof Error ? `Drive upload failed: ${uploadError.message}` : 'Drive upload failed.');
-        setStatus('Photo is safe locally. Tap Retry to upload again.');
+        setError('');
+        setStatus('Saved locally. Drive upload will retry from this camera.');
       }
       return false;
       /*
@@ -647,7 +685,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     updatePendingCount();
     // Finish the local IndexedDB write before starting Drive. A sudden
     // disconnect or tab close can therefore never outrun the local copy.
-    void writeCachedStoryMedia(id, file, file.type).then(() => processUploadQueue());
+    void writeCachedStoryMedia(id, file, file.type)
+      .then(() => processUploadQueue())
+      .catch(() => setStatus('Saved in the current camera session. Drive upload will retry when storage is available.'));
     return id;
   };
 
@@ -756,7 +796,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       if (!rawBlob?.size) throw new Error('The phone returned an empty photo. Please try the shutter again.');
       // Keep the original camera frame for immediate local saving. Looks and
       // edits remain available in review, while Drive upload runs separately.
-      const blob = rawBlob;
+      const blob = await normalizeHorizontalCapture(rawBlob);
       const localPreviewUrl = URL.createObjectURL(blob);
       // Keep earlier captures alive in the camera gallery. Only the active
       // preview URL is replaced here; gallery thumbnails remain usable.
@@ -764,7 +804,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       originalPreviewUrlRef.current = '';
       const localFile = blobToFile(blob);
       const queueId = resumeUpload(localFile);
-      const photo = { sourceBlob: rawBlob, file: localFile, url: localPreviewUrl, queueId, uploadedFile: null };
+      const photo = { sourceBlob: blob, file: localFile, url: localPreviewUrl, queueId, uploadedFile: null };
       setCapturedPhoto(photo);
       setCapturedGallery(current => [...current, photo]);
       setUploadedFile(null);
@@ -773,12 +813,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       setEditRotation(0);
       setEditCrop('original');
       setShowLastShot(true);
-      setReviewOpen(true);
+      // Keep the live camera visible after capture. The local preview remains
+      // available in the thumbnail and opens the review only when tapped.
+      setReviewOpen(false);
       setCapturing(false);
       setStatus('Captured locally. Uploading to Drive in the background.');
-    } catch (captureError) {
-      setError(captureError instanceof Error ? captureError.message : 'Photo capture failed.');
-      setStatus('Ready to try again.');
+    } catch {
+      // Keep the camera surface usable. Capture failures should not replace it
+      // with a blocking error view; the next shutter press can retry safely.
+      setError('');
+      setStatus('Camera is ready. Tap the shutter to try again.');
     } finally {
       setCapturing(false);
     }
@@ -809,7 +853,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     setUploadedFile(null);
     setPreviewUrl(latest.url);
     setShowLastShot(true);
-    setReviewOpen(true);
+    setReviewOpen(false);
     setError('');
     setStatus(`${photos.length} gallery photo${photos.length === 1 ? '' : 's'} saved locally. Uploading to Drive in the background.`);
   };

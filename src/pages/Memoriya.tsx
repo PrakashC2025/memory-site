@@ -551,7 +551,14 @@ const Memoriya: React.FC = () => {
     void cacheDriveMediaFiles(files, token);
     const imported = files
       .filter(isVisualDriveFile)
-      .map(file => enrichDriveMemory(googleDriveService.toMemory(file, token), file));
+      .map(file => enrichDriveMemory(googleDriveService.toMemory(file, token), file))
+      .map(memory => localFile
+        // The camera normalizes a sideways capture into its final pixels
+        // before this callback. Do not let stale Drive EXIF rotation metadata
+        // turn that already-horizontal local preview back into a portrait
+        // Story Mode frame.
+        ? { ...memory, orientation: 0 }
+        : memory);
     if (!imported.length) return 0;
     if (localFile && imported[0]?.driveFileId) {
       const previousPreview = livePreviewUrlsRef.current.get(imported[0].driveFileId);

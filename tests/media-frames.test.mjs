@@ -26,6 +26,7 @@ test('media frames match portrait, square, landscape, and rotated source dimensi
   assert.equal(getMediaFrameKind(normalizeMediaAspect(1200, 1200)), 'square');
   assert.equal(getMediaFrameKind(normalizeMediaAspect(1920, 1080)), 'landscape');
   assert.equal(getMediaFrameKind(normalizeMediaAspect(1080, 1920, 90)), 'landscape');
+  assert.equal(getMediaFrameKind(normalizeMediaAspect(1080, 1920, '90')), 'landscape');
 
   const portraitFrame = getMediaFrameSize(normalizeMediaAspect(1080, 1920));
   const landscapeFrame = getMediaFrameSize(normalizeMediaAspect(1920, 1080));

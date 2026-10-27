@@ -28,7 +28,8 @@ export const getMemoryAspect = (memory: Pick<Memory, 'width' | 'height' | 'orien
   const safeHeight = Number(memory.height);
   if (!Number.isFinite(safeWidth) || !Number.isFinite(safeHeight) || safeWidth <= 0 || safeHeight <= 0) return fallback;
   const rawAspect = safeWidth / safeHeight;
-  const quarterTurn = Math.round((memory.orientation || 0) / 90) % 2 !== 0;
+  const numericOrientation = Number(memory.orientation);
+  const quarterTurn = Number.isFinite(numericOrientation) && Math.round(numericOrientation / 90) % 2 !== 0;
   return quarterTurn ? 1 / rawAspect : rawAspect;
 };
 

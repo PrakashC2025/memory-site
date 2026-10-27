@@ -664,9 +664,13 @@ export class GoogleDriveService {
   }
 }
 
-export const normalizeDriveRotation = (rotation?: number) => {
-  if (!Number.isFinite(rotation)) return 0;
-  const quarterTurns = Math.round((rotation as number) / 90);
+export const normalizeDriveRotation = (rotation?: number | string) => {
+  // Drive metadata is numeric in the API response, but values restored from
+  // cached JSON can be strings. Normalize both forms so a cached sideways
+  // landscape photo keeps its correct frame orientation.
+  const numericRotation = Number(rotation);
+  if (!Number.isFinite(numericRotation)) return 0;
+  const quarterTurns = Math.round(numericRotation / 90);
   return (((quarterTurns % 4) + 4) % 4) * 90;
 };
 

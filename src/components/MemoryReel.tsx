@@ -210,9 +210,10 @@ const smoothNoise = (time: number, seed: number) => {
   return lerp(sample(index), sample(index + 1), eased);
 };
 
-const normalizeQuarterRotation = (rotation?: number) => {
-  if (!Number.isFinite(rotation)) return 0;
-  const turns = Math.round((rotation as number) / 90);
+const normalizeQuarterRotation = (rotation?: number | string) => {
+  const numericRotation = Number(rotation);
+  if (!Number.isFinite(numericRotation)) return 0;
+  const turns = Math.round(numericRotation / 90);
   return (((turns % 4) + 4) % 4) * 90;
 };
 
