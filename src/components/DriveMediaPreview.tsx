@@ -274,11 +274,8 @@ const buildImageCandidates = (memory: Memory) => {
   return Array.from(new Set(candidates.filter(Boolean)));
 };
 
-const sharpenThumbnail = (url: string) => {
-  if (!url) return '';
-  return url
-    .replace(/=s\d+(-[cp])?$/i, '=s960')
-    .replace(/sz=w\d+/i, 'sz=w960');
-};
+const sharpenThumbnail = (url: string) => {  if (!url) return '';  // Upgrade thumbnail size to 960px for sharper preview.  // Handles patterns: =s1280, =s800, =s960, sz=w100, sz=w200, etc.  // Also strips query strings that might interfere  return url    .replace(/=s\d+(-[cp])?$/i, '=s960')    .replace(/sz=w\d+/i, 'sz=w960')    .replace(/\?.*$/i, '');}
+n// Ensure images use high-quality rendering on mobile devicesconst ensureHighQualityRendering = (img: HTMLImageElement) => {  // On mobile, force the browser to use its best rescaling algorithm  img.setAttribute('decoding', 'async');  img.setAttribute('style', (img.getAttribute('style') || '') + '; image-rendering: -webkit-optimize-contrast;');};
+nconst highQualityRenderedImages = new Set<HTMLImageElement>();;
 
 export default DriveMediaPreview;

@@ -209,10 +209,7 @@ const Memoriya: React.FC = () => {
     );
   }, [memories, query]);
 
-  const withLivePreviews = (items: Memory[]) => items.map(memory => {
-    const preview = memory.driveFileId ? livePreviewUrlsRef.current.get(memory.driveFileId) : '';
-    return preview ? { ...memory, url: preview, thumbnail: preview } : memory;
-  });
+  const withLivePreviews = (items: Memory[]) => items.map(memory => {  let preview = '';  if (memory.driveFileId) {    preview = livePreviewUrlsRef.current.get(memory.driveFileId) || '';  } else {    // For local memories, use the memory's own url as the preview    preview = memory.url || '';  }  return preview ? { ...memory, url: preview, thumbnail: preview } : memory;});
 
   const bestMemories = filteredMemories.slice(0, 8);
   const locations = useMemo(() => Object.entries(groupBy(filteredMemories, memory => memory.location || 'No location metadata')), [filteredMemories]);
