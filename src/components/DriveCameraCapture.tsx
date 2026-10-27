@@ -7,6 +7,8 @@ import {
   Images,
   Lightbulb,
   Loader2,
+  Maximize2,
+  Minimize2,
   RefreshCw,
   Sparkles,
   Trash2,
@@ -78,14 +80,12 @@ const fileName = () => `memoriya-${new Date().toISOString().replace(/[:.]/g, '-'
 
 const blobToFile = (blob: Blob) => new File([blob], fileName(), { type: 'image/jpeg' });
 
-const canvasToJpegBlob = (canvas: HTMLCanvasElement) => {
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.96);
-  const [header, encoded] = dataUrl.split(',');
-  const binary = atob(encoded);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return new Blob([bytes], { type: header.match(/data:([^;]+)/)?.[1] || 'image/jpeg' });
-};
+const canvasToJpegBlob = (canvas: HTMLCanvasElement) => new Promise<Blob>((resolve, reject) => {
+  canvas.toBlob(blob => {
+    if (blob?.size) resolve(blob);
+    else reject(new Error('The phone could not prepare the captured image.'));
+  }, 'image/jpeg', 0.98);
+});
 
 const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onUploaded, onDeleted, onClose }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -127,6 +127,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const [zoom, setZoom] = useState(1);
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [cameraFullscreen, setCameraFullscreen] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [status, setStatus] = useState('Starting camera…');
@@ -163,6 +164,16 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       document.body.classList.remove('memoriya-camera-active');
       document.body.style.overflow = previousOverflow;
     };
+  }, []);
+
+  useEffect(() => {
+    // Android Chrome can hide its address bar when fullscreen is requested
+    // from the camera-open gesture. Browsers that reject the automatic
+    // request keep the visible fullscreen button as the fallback.
+    if (!document.fullscreenElement) {
+      const request = document.documentElement.requestFullscreen?.();
+      if (request) void request.catch(() => undefined);
+    }
   }, []);
 
   useEffect(() => {
@@ -290,8 +301,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           audio: false,
           video: {
             facingMode: { ideal: facingMode },
-            width: { ideal: landscape ? 1920 : 1080 },
-            height: { ideal: landscape ? 1080 : 1920 },
+            width: { ideal: landscape ? 2560 : 1920, min: 720 },
+            height: { ideal: landscape ? 1440 : 2560, min: 720 },
             frameRate: { ideal: 30, max: 60 },
           },
         });
@@ -689,16 +700,19 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     setError('');
     setStatus('');
     try {
-      // Capture the current preview frame first. It is the same negotiated
-      // camera resolution shown on the phone and avoids the slow ImageCapture
-      // still-photo path used by some TV/WebView browsers. ImageCapture stays
-      // as a fallback for browsers that cannot expose a video frame yet.
+      // Prefer the camera's native still frame for the sharpest available
+      // image. A few Android WebViews expose ImageCapture but fail at runtime,
+      // so the negotiated video frame remains a reliable fallback.
       let rawBlob: Blob;
       try {
-        rawBlob = await captureFromVideo();
-      } catch (frameError) {
-        if (!imageCaptureRef.current) throw frameError;
+        if (!imageCaptureRef.current) throw new Error('Native still capture is unavailable.');
         rawBlob = await imageCaptureRef.current.takePhoto();
+      } catch (stillError) {
+        try {
+          rawBlob = await captureFromVideo();
+        } catch (frameError) {
+          throw new Error(frameError instanceof Error ? frameError.message : stillError instanceof Error ? stillError.message : 'The phone could not capture this image.');
+        }
       }
       // Keep the original camera frame for immediate local saving. Looks and
       // edits remain available in review, while Drive upload runs separately.
@@ -912,6 +926,29 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     pinchStartDistanceRef.current = 0;
   };
 
+  const toggleCameraFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen?.();
+    } catch {
+      setStatus('Fullscreen is not available in this browser. Rotate the phone for the wider camera view.');
+    }
+  };
+
+  const closeCamera = () => {
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    onClose();
+  };
+
+  useEffect(() => {
+    const updateFullscreen = () => setCameraFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => {
+      document.removeEventListener('fullscreenchange', updateFullscreen);
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    };
+  }, []);
+
   const toggleTorch = () => {
     const next = !torchEnabled;
     setTorchEnabled(next);
@@ -927,10 +964,13 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       <section className="memoriya-camera-panel">
         <header>
           <div className="memoriya-camera-header-copy">
-            <button type="button" className="memoriya-camera-back" onClick={onClose} aria-label="Back from camera"><ArrowLeft size={18} /> <span>Back</span></button>
+            <button type="button" className="memoriya-camera-back" onClick={closeCamera} aria-label="Back from camera"><ArrowLeft size={18} /> <span>Back</span></button>
             <div><span className="memoriya-kicker"><Camera size={15} /> Mobile camera</span><h2>Capture a new memory</h2></div>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close camera"><X size={20} /></button>
+          <div className="memoriya-camera-header-actions">
+            <button type="button" onClick={() => void toggleCameraFullscreen()} aria-label={cameraFullscreen ? 'Exit camera fullscreen' : 'Open camera fullscreen'} title={cameraFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>{cameraFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</button>
+            <button type="button" onClick={closeCamera} aria-label="Close camera"><X size={20} /></button>
+          </div>
         </header>
         <div className="memoriya-camera-viewfinder" onTouchStart={handlePinchStart} onTouchMove={handlePinchMove} onTouchEnd={handlePinchEnd} onTouchCancel={handlePinchEnd}>
           <video

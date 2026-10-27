@@ -3914,6 +3914,40 @@ body.memoriya-camera-active {
   margin-bottom: 0.85rem;
 }
 
+.memoriya-camera-header-copy {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.memoriya-camera-back {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.4rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(3, 5, 12, 0.6);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.memoriya-camera-header-copy > div {
+  min-width: 0;
+}
+
+.memoriya-camera-header-copy .memoriya-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
 .memoriya-camera-panel header h2 {
   margin: 0.35rem 0 0;
   color: #fff;
@@ -3921,7 +3955,8 @@ body.memoriya-camera-active {
   font-weight: 950;
 }
 
-.memoriya-camera-panel header > button {
+.memoriya-camera-panel header > button,
+.memoriya-camera-header-actions button {
   display: grid;
   width: 2.4rem;
   height: 2.4rem;
@@ -3931,6 +3966,13 @@ body.memoriya-camera-active {
   background: rgba(255, 255, 255, 0.07);
   color: #fff;
   cursor: pointer;
+}
+
+.memoriya-camera-header-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .memoriya-camera-viewfinder {
@@ -4754,6 +4796,23 @@ body.memoriya-camera-active {
     font-size: 0.62rem;
   }
 
+  .memoriya-camera-panel header .memoriya-camera-back {
+    min-height: 2rem;
+    padding: 0.3rem 0.55rem;
+    font-size: 0.68rem;
+  }
+
+  .memoriya-camera-header-actions button {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  /* The bottom deck already contains the camera switch. Keeping a second
+     switch beside the close button is what caused the overlap in landscape. */
+  .memoriya-camera-corner-tools {
+    display: none;
+  }
+
   .memoriya-camera-corner-tools,
   .memoriya-camera-viewfinder-tools {
     top: max(0.45rem, env(safe-area-inset-top));
@@ -4761,7 +4820,9 @@ body.memoriya-camera-active {
 
   .memoriya-camera-bottom-deck {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(17rem, 24rem);
+    max-height: 38dvh;
+    overflow-y: auto;
+    grid-template-columns: minmax(0, 1fr) minmax(14rem, 21rem);
     grid-template-areas:
       'gallery controls'
       'gallery-picker settings'
@@ -4843,7 +4904,7 @@ body.memoriya-camera-active {
 
   .memoriya-camera-upload-list {
     grid-area: status;
-    max-height: 3.8rem;
+    max-height: 2.8rem;
     padding: 0.2rem;
   }
 
