@@ -360,6 +360,20 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     setDriveMemories([]);
   };
 
+  const reconnectDrive = async (): Promise<string | undefined> => {
+    try {
+      const token = await googleDriveService.refreshAccessToken();
+      driveAuthRequiredRef.current = false;
+      saveDriveAuthRequired(false);
+      saveDriveAccessToken(token);
+      setDriveAccessToken(token);
+      return token;
+    } catch (error) {
+      setDriveError(error instanceof Error ? error.message : 'Google Drive could not reconnect.');
+      return undefined;
+    }
+  };
+
   const importLocalFiles = (files: FileList | null) => {
     const mediaFiles = Array.from(files || []).filter(file =>
       file.type.startsWith('image/') || file.type.startsWith('video/')
@@ -444,6 +458,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
         driveFolderId={selectedFolderId}
         driveFolders={driveFolders}
         onDriveFolderChange={changeDriveFolder}
+        onDriveReconnect={reconnectDrive}
         onClose={onExit}
       />
     </div>

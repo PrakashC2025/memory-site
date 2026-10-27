@@ -4713,19 +4713,16 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   };
 
   const loadDriveSongs = async () => {
-    const initialToken = driveAccessTokenRef.current || driveAccessToken;
-    if (!initialToken) {
-      setMusicError('Connect Google Drive to load songs stored there.');
-      return;
-    }
     if (driveSongsRequestRef.current) return;
     driveSongsRequestRef.current = true;
     setDriveSongsLoading(true);
     setMusicError('');
     try {
-      // Loading is an explicit user action. If the short-lived token has
-      // expired, renew it here before giving up with a 403 message.
-      let token = initialToken;
+      // Loading is an explicit user action. A cached story can still be
+      // playing after the short-lived Drive session has disappeared, so ask
+      // for authorization here instead of hiding the Drive song list.
+      let token = driveAccessTokenRef.current || driveAccessToken;
+      if (!token) token = await reconnectDriveForPlayback();
       try {
         const songs = await googleDriveService.listAudioFiles(token, musicDriveFolderId);
         setDriveSongs(songs);
@@ -5378,7 +5375,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
                 </label>
               )}
               <label className="memory-reel-upload memory-reel-drive-upload"><Upload size={15} /> {driveUploadLoading ? 'Uploading...' : 'Upload songs to Drive'}<input type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.opus,.wav,.flac,.aiff,.aif,.mka,.webm,.amr,.wma" multiple disabled={driveUploadLoading || !driveAccessToken} onChange={event => { void uploadSongsToDrive(event.target.files || []); event.currentTarget.value = ''; }} /></label>
-              {driveAccessToken && <button type="button" onClick={() => void loadDriveSongs()} disabled={driveSongsLoading}><Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : 'Load Drive songs'}</button>}
+              <button type="button" onClick={() => void loadDriveSongs()} disabled={driveSongsLoading}>
+                <Search size={15} /> {driveSongsLoading ? 'Loading Drive songs...' : driveAccessToken ? 'Load Drive songs' : 'Connect Drive & load songs'}
+              </button>
               <button type="button" onClick={() => void connectAdditionalMusicDrive()} disabled={secondaryDriveSongsLoading}><HardDrive size={15} /> {secondaryDriveSongsLoading ? 'Connecting second Drive...' : 'Add music from another Drive'}</button>
             </div>
             <p className="memory-reel-music-note">Drive songs download locally for offline playback. The second Drive option asks you to choose another Gmail account and is used only for Story Mode music.</p>
@@ -5438,7 +5437,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
                 ))}
               </div>
             )}
-            {driveAccessToken && driveSongsLoaded && !allDriveSongs.length && !musicError && (
+            {driveSongsLoaded && !allDriveSongs.length && !musicError && (
               <p className="memory-reel-music-note">No supported audio files were found in Drive. Upload an MP3, M4A, WAV, OGG, FLAC, AAC, or similar file, then press “Load Drive songs” again.</p>
             )}
             {musicResults.map(track => (
