@@ -117,6 +117,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const [uploadedFile, setUploadedFile] = useState<DriveMediaFile | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [landscape, setLandscape] = useState(() => typeof window !== 'undefined' && window.innerWidth > window.innerHeight);
+  const [deviceLandscape, setDeviceLandscape] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editFilter, setEditFilter] = useState<CameraFilter>('natural');
   const [editRotation, setEditRotation] = useState(0);
@@ -139,6 +140,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const [uploadingQueueId, setUploadingQueueId] = useState('');
   const capturedGalleryRef = useRef<CapturedPhoto[]>([]);
   const cancelledUploadIdsRef = useRef(new Set<string>());
+  const previewRecoveryRef = useRef(new Set<string>());
   capturedGalleryRef.current = capturedGallery;
 
   const updateUploadStatus = (queueId: string, status: CameraUploadStatus) => {
@@ -178,14 +180,25 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
 
   useEffect(() => {
     const updateOrientation = () => setLandscape(window.innerWidth > window.innerHeight);
+    const updatePhysicalOrientation = (event?: DeviceOrientationEvent) => {
+      if (typeof event?.gamma === 'number' && Math.abs(event.gamma) > 45) setDeviceLandscape(true);
+      else if (typeof event?.gamma === 'number' && Math.abs(event.gamma) < 35) setDeviceLandscape(false);
+      else {
+        const windowAngle = Number((window as Window & { orientation?: number }).orientation);
+        setDeviceLandscape(Number.isFinite(windowAngle) && Math.abs(windowAngle) === 90);
+      }
+    };
     updateOrientation();
+    updatePhysicalOrientation();
     window.addEventListener('resize', updateOrientation, { passive: true });
     window.addEventListener('orientationchange', updateOrientation, { passive: true });
+    window.addEventListener('deviceorientation', updatePhysicalOrientation, { passive: true });
     window.visualViewport?.addEventListener('resize', updateOrientation, { passive: true });
     window.screen?.orientation?.addEventListener?.('change', updateOrientation);
     return () => {
       window.removeEventListener('resize', updateOrientation);
       window.removeEventListener('orientationchange', updateOrientation);
+      window.removeEventListener('deviceorientation', updatePhysicalOrientation);
       window.visualViewport?.removeEventListener('resize', updateOrientation);
       window.screen?.orientation?.removeEventListener?.('change', updateOrientation);
     };
@@ -452,17 +465,42 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const captureFromVideo = async () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) throw new Error('Camera is still preparing.');
+    if (!video || !canvas) throw new Error('Camera is still preparing.');
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      await new Promise<void>((resolve, reject) => {
+        let finished = false;
+        const finish = (error?: Error) => {
+          if (finished) return;
+          finished = true;
+          window.clearTimeout(timeout);
+          video.removeEventListener('loadeddata', check);
+          video.removeEventListener('canplay', check);
+          if (error) reject(error);
+          else resolve();
+        };
+        const check = () => {
+          if (video.videoWidth > 0 && video.videoHeight > 0) finish();
+        };
+        const timeout = window.setTimeout(() => finish(new Error('Camera is still preparing. Please try again.')), 1500);
+        video.addEventListener('loadeddata', check);
+        video.addEventListener('canplay', check);
+        check();
+      });
+    }
+    if (video.videoWidth === 0 || video.videoHeight === 0) throw new Error('Camera is still preparing. Please try again.');
     const viewfinder = video.closest('.memoriya-camera-viewfinder');
     const viewfinderAspect = viewfinder && viewfinder.clientHeight > 0
       ? viewfinder.clientWidth / viewfinder.clientHeight
       : video.videoWidth / video.videoHeight;
+    const captureAspect = deviceLandscape && !landscape
+      ? Math.max(viewfinderAspect, 16 / 9)
+      : viewfinderAspect;
     const zoomFactor = hardwareZoomRef.current ? 1 : Math.max(1, zoomRef.current);
     let sourceWidth = video.videoWidth / zoomFactor;
     let sourceHeight = video.videoHeight / zoomFactor;
     const sourceAspect = sourceWidth / sourceHeight;
-    if (sourceAspect > viewfinderAspect) sourceWidth = sourceHeight * viewfinderAspect;
-    else sourceHeight = sourceWidth / viewfinderAspect;
+    if (sourceAspect > captureAspect) sourceWidth = sourceHeight * captureAspect;
+    else sourceHeight = sourceWidth / captureAspect;
     const sourceX = (video.videoWidth - sourceWidth) / 2;
     const sourceY = (video.videoHeight - sourceHeight) / 2;
     canvas.width = Math.max(1, Math.round(sourceWidth));
@@ -707,6 +745,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       try {
         if (!imageCaptureRef.current) throw new Error('Native still capture is unavailable.');
         rawBlob = await imageCaptureRef.current.takePhoto();
+        if (!rawBlob?.size) throw new Error('The camera returned an empty image.');
       } catch (stillError) {
         try {
           rawBlob = await captureFromVideo();
@@ -714,6 +753,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           throw new Error(frameError instanceof Error ? frameError.message : stillError instanceof Error ? stillError.message : 'The phone could not capture this image.');
         }
       }
+      if (!rawBlob?.size) throw new Error('The phone returned an empty photo. Please try the shutter again.');
       // Keep the original camera frame for immediate local saving. Looks and
       // edits remain available in review, while Drive upload runs separately.
       const blob = rawBlob;
@@ -926,6 +966,22 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     pinchStartDistanceRef.current = 0;
   };
 
+  const recoverPreview = (photo: CapturedPhoto) => {
+    if (previewRecoveryRef.current.has(photo.queueId)) return;
+    previewRecoveryRef.current.add(photo.queueId);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      if (!dataUrl) return;
+      setCapturedPhoto(current => current?.queueId === photo.queueId ? { ...current, url: dataUrl } : current);
+      setCapturedGallery(current => current.map(item => item.queueId === photo.queueId ? { ...item, url: dataUrl } : item));
+      setPreviewUrl(current => current === photo.url || !current ? dataUrl : current);
+      setError('');
+    };
+    reader.onerror = () => setError('The captured photo is saved locally, but this browser could not display its preview.');
+    reader.readAsDataURL(photo.sourceBlob);
+  };
+
   const toggleCameraFullscreen = async () => {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
@@ -986,7 +1042,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           {!cameraReady && <div className="memoriya-camera-status"><Loader2 className="memoriya-spin-icon" size={28} /><span>{error || status}</span></div>}
           {previewUrl && showLastShot && (
             <button type="button" className="memoriya-camera-last-shot-button" onClick={openReview} aria-label="Review last captured photo">
-              <img src={previewUrl} alt="Last captured memory" />
+              <img src={previewUrl} alt="Last captured memory" onError={() => capturedPhoto && recoverPreview(capturedPhoto)} />
               <span>Review</span>
             </button>
           )}
@@ -1020,7 +1076,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
                   onClick={() => selectGalleryPhoto(photo)}
                   aria-label={`Review captured photo ${index + 1 + olderGalleryCount}`}
                 >
-                  <img src={photo.url} alt={`Captured memory ${index + 1 + olderGalleryCount}`} />
+                  <img src={photo.url} alt={`Captured memory ${index + 1 + olderGalleryCount}`} onError={() => recoverPreview(photo)} />
                   <span>{index + 1 + olderGalleryCount}</span>
                 </button>
               ))}
@@ -1037,7 +1093,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
               <RefreshCw size={18} />
               <span>{facingMode === 'user' ? 'Rear camera' : 'Selfie camera'}</span>
             </button>
-            <button type="button" className="memoriya-camera-shutter" onClick={() => void capturePhoto()} disabled={!cameraReady || capturing} aria-label="Capture and upload photo">
+            <button type="button" className={`memoriya-camera-shutter${deviceLandscape && !landscape ? ' is-device-landscape' : ''}`} onClick={() => void capturePhoto()} disabled={!cameraReady || capturing} aria-label={deviceLandscape && !landscape ? 'Capture horizontal photo' : 'Capture and upload photo'}>
               {capturing ? <Loader2 className="memoriya-spin-icon" size={22} /> : <Camera size={22} />}
             </button>
             <label className="memoriya-camera-filter">Look
@@ -1107,7 +1163,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
             </div>
             <div className="memoriya-camera-review-body">
               <div className={`memoriya-camera-review-preview is-crop-${editMode ? editCrop : 'original'}`}>
-                <img src={capturedPhoto.url} alt="Captured memory preview" style={{ filter: CAMERA_FILTERS[editMode ? editFilter : 'natural'].css, transform: `rotate(${editRotation}deg)` }} />
+                <img src={capturedPhoto.url} alt="Captured memory preview" onError={() => recoverPreview(capturedPhoto)} style={{ filter: CAMERA_FILTERS[editMode ? editFilter : 'natural'].css, transform: `rotate(${editRotation}deg)` }} />
               </div>
               {recentGallery.length > 1 && (
                 <div className="memoriya-camera-review-gallery" aria-label="All captured photos">
@@ -1119,7 +1175,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
                       onClick={() => selectGalleryPhoto(photo)}
                       aria-label={`Open captured photo ${index + 1 + olderGalleryCount}`}
                     >
-                      <img src={photo.url} alt={`Captured memory ${index + 1 + olderGalleryCount}`} />
+                      <img src={photo.url} alt={`Captured memory ${index + 1 + olderGalleryCount}`} onError={() => recoverPreview(photo)} />
                     </button>
                   ))}
                 </div>

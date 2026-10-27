@@ -4236,6 +4236,13 @@ body.memoriya-camera-active {
   box-shadow: 0 0 0 7px rgba(255, 208, 138, 0.14), 0 8px 30px rgba(242, 120, 137, 0.28);
 }
 
+/* Keep the locked-screen camera UI upright, but give a clear cue that the
+   phone is being held sideways before a horizontal capture. */
+.memoriya-camera-shutter.is-device-landscape {
+  transform: rotate(90deg);
+  transition: transform 180ms ease;
+}
+
 .memoriya-camera-filter select {
   max-width: 6.5rem;
   border: 0;
