@@ -22,7 +22,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [fallbackLoading, setFallbackLoading] = useState(false);
-  const [videoActive, setVideoActive] = useState(Boolean(eager));
+  const [videoActive, setVideoActive] = useState(false);
   const authAttemptedRef = useRef(false);
   const cacheHydrationAttemptedRef = useRef(false);
   const cacheHydrationTimerRef = useRef<number | undefined>(undefined);
@@ -47,7 +47,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     setLoaded(false);
     setFailed(false);
     setFallbackLoading(false);
-    setVideoActive(Boolean(eager));
+    setVideoActive(false);
     authAttemptedRef.current = false;
     cacheHydrationAttemptedRef.current = false;
     if (cacheHydrationTimerRef.current) window.clearTimeout(cacheHydrationTimerRef.current);

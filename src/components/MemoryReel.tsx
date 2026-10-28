@@ -7,7 +7,7 @@ import { Cast, HardDrive, Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, 
 import { isVisualMemory, type Memory } from '../data/memories';
 import { beginHeavyVisualPause } from '../utils/visualActivity';
 import { googleDriveService, isAudioDriveFile, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
-import { readDriveAuthRequired, saveDriveAccessToken, saveDriveAuthRequired } from '../services/driveLibrary';
+import { saveDriveAccessToken, saveDriveAuthRequired } from '../services/driveLibrary';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
 import { cacheDriveMediaFiles, readCachedDriveMedia, writeCachedDriveMedia } from '../services/driveCache';
 import { readCachedStoryMedia, requestPersistentStoryStorage, writeCachedStoryMedia } from '../services/storyMediaCache';
@@ -602,6 +602,11 @@ export class MemoryReelController {
   // Live additions must reach the wall only after their complete original is
   // ready. A slow upload therefore never creates an empty or blurry card.
   private fullQualityLiveIds = new Set<string>();
+  // Thumbnail-first cards keep their original behind this callback. Only the
+  // focused card and its immediate neighbors upgrade to full resolution, so a
+  // large folder no longer downloads every original while the first shot is
+  // still appearing.
+  private imagePromotions = new Map<string, () => void>();
   // A source is removed from pendingSources while a worker is decoding it.
   // Keep a separate in-flight index so a Drive metadata refresh cannot lose
   // the rest of that batch before its workers finish (the old cause of the
@@ -842,6 +847,7 @@ export class MemoryReelController {
       this.pendingSources = [];
       this.failedSources.clear();
       this.fullQualityLiveIds.clear();
+      this.imagePromotions.clear();
       this.loadingNextBatch = false;
       this.clearPrefetchTimer();
     } else {
@@ -981,7 +987,7 @@ export class MemoryReelController {
     const workerCount = Math.min(8, eagerBatch.length);
     // Keep a small bounded image batch. Low-data mode is deliberately serial:
     // one original at a time leaves bandwidth for the live story and audio.
-    const workerLimit = this.lowDataMode ? 1 : this.lowPowerSurface ? 2 : 4;
+    const workerLimit = this.lowDataMode ? 1 : this.lowPowerSurface ? 3 : 4;
     const workers = Array.from({ length: workerCount }, async (_, workerIndex) => {
       if (workerIndex >= workerLimit) return;
       while (nextItemIndex < eagerBatch.length) {
@@ -1044,9 +1050,16 @@ export class MemoryReelController {
    */
   private takeQueuedBatch(limit: number) {
     const batch: ReelSource[] = [];
+    const shot = this.shotIndexAt(this.elapsed);
+    const loadedAhead = Math.max(0, this.cards.length - shot);
+    const videoWindow = WALL_PRELOAD_AHEAD + limit;
     for (const item of this.pendingSources) {
       if (batch.length >= limit) break;
       if (this.loadedMedia.has(item.id)) continue;
+      // A clip can be tens of megabytes. Start it only when the story is
+      // close enough to need it, otherwise the download competes with the
+      // photos the user is watching right now.
+      if (item.type === 'video' && loadedAhead > videoWindow) continue;
       batch.push(item);
     }
     return batch;
@@ -1087,7 +1100,7 @@ export class MemoryReelController {
     try {
       // Download a small bounded batch so slow phones keep progressing without
       // creating a full-library request burst. Low-data mode stays serial.
-      const workerCount = Math.min(this.lowDataMode ? 1 : this.lowPowerSurface ? 2 : 4, batch.length);
+      const workerCount = Math.min(this.lowDataMode ? 1 : this.lowPowerSurface ? 3 : 4, batch.length);
       await Promise.all(Array.from({ length: workerCount }, async () => {
         while (cursor < batch.length) {
           const item = batch[cursor];
@@ -1497,6 +1510,7 @@ export class MemoryReelController {
     for (const [id, media] of this.loadedMedia) {
       if (keepIds.has(id) && !invalidateIds.has(id)) continue;
       this.fullQualityLiveIds.delete(id);
+      this.imagePromotions.delete(id);
       const card = this.cards.find(current => current.id === id);
       card?.video?.pause();
       card?.card.remove();
@@ -1582,6 +1596,7 @@ export class MemoryReelController {
         if (finished) return;
         finished = true;
         finishedWithMedia = Boolean(value);
+        if (!value && !isVideo) this.imagePromotions.delete(item.id);
         window.clearTimeout(timer);
         resolve(value);
       };
@@ -1641,7 +1656,10 @@ export class MemoryReelController {
           // Do not reveal a remote Drive stream as the story card. Fetching a
           // complete blob first makes the 7–9 second clip play smoothly on
           // weak mobile data and lets the next visit use IndexedDB directly.
-          void this.loadAuthenticatedDriveImage(item)
+          // A video only reaches this path when the story is close to it, so
+          // let it outrank background photo promotions and start the clip
+          // instead of leaving the poster on screen.
+          void this.loadAuthenticatedDriveImage(item, 12)
             .then(objectUrl => {
               if (!objectUrl) {
                 finishVideoPoster();
@@ -1670,11 +1688,20 @@ export class MemoryReelController {
         let previewObjectUrl = '';
         let previewResolvedFull = false;
         const promoteDriveImage = () => {
+          this.imagePromotions.delete(item.id);
           if (drivePromotionStarted || previewResolvedFull || !item.driveFileId || !item.authToken || !item.src) return;
           drivePromotionStarted = true;
           void this.loadAuthenticatedDriveImage(item)
-            .then(objectUrl => {
+            .then(async objectUrl => {
               if (!objectUrl) return;
+              // Decode the sharper original off-screen first. Swapping the
+              // visible thumbnail before a decode can show a blank frame while
+              // the camera is already flying to the next story shot.
+              const decoded = await this.decodeObjectUrl(objectUrl);
+              if (!decoded || this.loadedMedia.get(item.id)?.node !== image) {
+                this.releaseObjectUrl(objectUrl);
+                return;
+              }
               // The thumbnail is already visible. Replace only the image
               // source so the current card, clock, and music never restart.
               const oldObjectUrl = previewObjectUrl;
@@ -1694,7 +1721,6 @@ export class MemoryReelController {
           // twice and receive the wrong portrait/landscape frame.
           image.style.imageOrientation = rotation ? 'none' : 'from-image';
           finish({ node: image, aspect: isQuarterTurn ? 1 / aspect : aspect, rotation });
-          promoteDriveImage();
         };
         image.onerror = () => {
           if (item.fallbackSrc && !attemptedFallback) {
@@ -1739,31 +1765,30 @@ export class MemoryReelController {
               })
               .catch(() => finish(null));
         } else if (item.driveFileId && item.src) {
-            // Paint Drive's lightweight thumbnail immediately. IndexedDB lookup
-            // and the sharper cached original must never delay the first frame.
-          // Start the Drive thumbnail immediately. A stale auth-required flag
-          // must not turn every uncached image into a 12-second timeout.
-          if (item.src) {
-            image.src = item.src;
+          // Paint Drive's lightweight thumbnail immediately. The cached
+          // original is decoded only when the story reaches this card, so a
+          // large folder does not read and decode every cached original before
+          // the first shot appears.
+          image.src = item.src;
+          if (item.authToken) {
+            this.imagePromotions.set(item.id, promoteDriveImage);
+          } else {
+            // No token means the original cannot be downloaded, but a previous
+            // visit may still have it cached.
+            void this.loadAuthenticatedDrivePreview(item)
+              .then(result => {
+                if (!result.objectUrl) return;
+                if (finished && !finishedWithMedia) {
+                  this.releaseObjectUrl(result.objectUrl);
+                  return;
+                }
+                previewObjectUrl = result.objectUrl;
+                previewResolvedFull = result.full;
+                if (result.full) drivePromotionStarted = true;
+                image.src = result.objectUrl;
+              })
+              .catch(() => undefined);
           }
-          void this.loadAuthenticatedDrivePreview(item)
-            .then(result => {
-              if (!result.objectUrl) {
-                if (readDriveAuthRequired()) finish(null);
-                else promoteDriveImage();
-                return;
-              }
-              if (finished && !finishedWithMedia) {
-                this.releaseObjectUrl(result.objectUrl);
-                return;
-              }
-              previewObjectUrl = result.objectUrl;
-              previewResolvedFull = result.full;
-              if (result.full) drivePromotionStarted = true;
-              image.src = result.objectUrl;
-              if (!result.full) promoteDriveImage();
-            })
-            .catch(() => undefined);
         } else if (item.driveFileId) {
           attemptedAuthenticated = Boolean(item.authToken);
           void this.loadAuthenticatedDriveImage(item)
@@ -1791,7 +1816,26 @@ export class MemoryReelController {
     });
   }
 
-  private async loadAuthenticatedDriveImage(item: ReelSource) {
+  private async decodeObjectUrl(objectUrl: string) {
+    const probe = new Image();
+    probe.decoding = 'async';
+    try {
+      probe.src = objectUrl;
+      if (typeof probe.decode === 'function') {
+        await probe.decode();
+      } else {
+        await new Promise<void>((resolve, reject) => {
+          probe.onload = () => resolve();
+          probe.onerror = () => reject(new Error('Image decode failed'));
+        });
+      }
+      return probe.naturalWidth > 0 || probe.width > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private async loadAuthenticatedDriveImage(item: ReelSource, priority = 10) {
     if (!item.driveFileId) return '';
     const cacheKey = item.driveFileId;
     const [driveCached, storyCached] = await Promise.all([
@@ -1816,7 +1860,7 @@ export class MemoryReelController {
       // Focused story cards jump ahead of background folder warming. This is
       // only one original at a time per visible card, so slow connections get
       // a sharp promotion without flooding the compositor or the network.
-      result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(item.authToken!, item.driveFileId!), undefined, 10);
+      result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(item.authToken!, item.driveFileId!), undefined, priority);
     } catch (error) {
       if (isDriveAuthorizationError(error)) saveDriveAuthRequired(true);
       throw error;
@@ -2655,6 +2699,7 @@ export class MemoryReelController {
   }
 
   private revokeObjectUrls() {
+    this.imagePromotions.clear();
     this.objectUrls.forEach(url => URL.revokeObjectURL(url));
     this.objectUrls.clear();
   }
@@ -2662,6 +2707,16 @@ export class MemoryReelController {
   private releaseObjectUrl(url: string) {
     if (!url || !this.objectUrls.delete(url)) return;
     URL.revokeObjectURL(url);
+  }
+
+  private promoteImagesNear(shot: number) {
+    if (!this.imagePromotions.size) return;
+    const last = Math.min(this.cards.length - 1, shot + 2);
+    for (let index = Math.max(0, shot - 1); index <= last; index += 1) {
+      const id = this.cards[index]?.id;
+      if (!id) continue;
+      this.imagePromotions.get(id)?.();
+    }
   }
 
   private target(index: number) {
@@ -2742,11 +2797,17 @@ export class MemoryReelController {
     if (!count) return;
     const audioMetrics = this.readAudioMetrics(time);
     const audioLevel = audioMetrics.level;
+    const activeShotIndex = this.shotIndexAt(time);
+    const focusedVideo = this.cards[activeShotIndex]?.video;
+    const videoIsPlaying = this.lowPowerSurface && Boolean(focusedVideo && !focusedVideo.paused);
     // The effect layer is slow, soft motion. Redrawing it at most 30 times a
     // second halves full-screen canvas fill on phones with no visible change,
-    // while the cards above it keep painting every frame.
+    // while the cards above it keep painting every frame. While a clip is
+    // decoding, freeze both canvas layers so the phone decoder gets the frame
+    // budget instead of competing with full-screen gradients and particles.
     const effectsNow = performance.now();
-    if (effectsNow - this.lastEffectsPaintAt >= 1000 / 30
+    if (!videoIsPlaying
+      && effectsNow - this.lastEffectsPaintAt >= 1000 / 30
       && (!this.lowPowerSurface || effectsNow - this.lastEffectsPaintAt >= 1000 / 20)) {
       this.lastEffectsPaintAt = effectsNow;
       this.renderEffects(audioMetrics, time);
@@ -2792,13 +2853,14 @@ export class MemoryReelController {
       this.el.classList.toggle('is-playing', !this.paused);
       this.el.classList.toggle('is-music-playing', audioActive);
     }
-    this.renderDust(audioMetrics, audioActive);
+    if (!videoIsPlaying) this.renderDust(audioMetrics, audioActive);
 
     // The cumulative timeline is rebuilt only when the card list changes, so
     // use its binary search here instead of walking every card on every frame.
     // This is the other large-library hitch: 1000 cards meant 1000 additions
     // per animation frame before this path was indexed.
-    let shot = this.shotIndexAt(time);
+    let shot = activeShotIndex;
+    this.promoteImagesNear(shot);
     const local = Math.max(0, time - this.shotStartAt(shot));
     const shotHold = this.cardHold(this.cards[shot]);
     let from = this.target(shot);
@@ -3096,7 +3158,6 @@ export class MemoryReelController {
         const blur = this.options.legacyTv || isActive
           ? 0
           : (clamp((distance - 220) / 100, 1.4, 5) + (distance > 360 ? flyBlur * 0.65 : 0)) * clarityBlurScale;
-        const near = distance < 200;
         const drift = this.options.reducedMotion || this.clarity !== 'natural'
           ? 0
           : (index === focusedIndex ? 0.35 : 0.6);
@@ -3202,9 +3263,14 @@ export class MemoryReelController {
           // pixel at these radii, but every distinct string forces the browser
           // to re-rasterise that layer, so coarser steps cut the work without
           // any visible change.
-          const rawBlur = this.options.template === 'orbit'
-            ? Math.max(0.25, Math.min(0.55, blur))
-            : Math.max(0.35, Math.min(1.2, blur));
+          // Blurred cards force the phone compositor to re-rasterise every
+          // layer on each camera step. Dimming alone gives the same depth cue
+          // there without the repeated full-screen blur cost.
+          const rawBlur = this.lowPowerSurface
+            ? 0
+            : this.options.template === 'orbit'
+              ? Math.max(0.25, Math.min(0.55, blur))
+              : Math.max(0.35, Math.min(1.2, blur));
           const readableBlur = Math.round(rawBlur * 2) / 2;
           const nextFilter = readableBlur > 0.15
             ? `blur(${readableBlur.toFixed(1)}px) brightness(${this.options.template === 'orbit' ? '.96' : '.92'})`
@@ -3215,7 +3281,10 @@ export class MemoryReelController {
           }
         }
         if (card.video) {
-          const active = near && !this.paused;
+          // Only the focused shot decodes. Playing a nearby video during a
+          // photo transition competes with the camera for the phone decoder
+          // and is the visible hitch when a clip is on the wall.
+          const active = isActive && !this.paused;
           if (active && card.video.paused) this.playMutedVideo(card.video);
           else if (!active && !card.video.paused) card.video.pause();
         }
@@ -4379,7 +4448,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     return constrainedConnection || compactTouchDevice;
   };
 
-  const warmDriveAudioCache = async (song: DriveAudioFile, cacheKey: string, token: string, account: 'primary' | 'secondary' = 'primary') => {
+  const warmDriveAudioCache = async (song: DriveAudioFile, cacheKey: string, token: string, account: 'primary' | 'secondary' = 'primary', priority = 25) => {
     let lastError = 'The file could not be saved for offline playback.';
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -4388,7 +4457,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         // Do not re-run FFmpeg or touch Drive when Story Mode is reopened.
         if (cached) return true;
         await waitForNetworkResume();
-        const downloaded = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id), undefined, 25);
+        const downloaded = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id), undefined, priority);
         if (downloaded?.accessToken && downloaded.accessToken !== token) {
           if (account === 'primary') {
             driveAccessTokenRef.current = downloaded.accessToken;
@@ -4437,13 +4506,13 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     return false;
   };
 
-  const warmDriveAudioCacheOnce = (song: DriveAudioFile, cacheKey: string, token: string, account: 'primary' | 'secondary' = 'primary') => {
+  const warmDriveAudioCacheOnce = (song: DriveAudioFile, cacheKey: string, token: string, account: 'primary' | 'secondary' = 'primary', priority = 6) => {
     const existing = driveCacheTasksRef.current.get(cacheKey);
     if (existing) return existing;
     // Always append to the same chain. `finally` keeps the chain usable even
     // if a future cache implementation throws instead of swallowing a single
     // file failure.
-    const task = driveAudioSerialRef.current.then(() => warmDriveAudioCache(song, cacheKey, token, account));
+    const task = driveAudioSerialRef.current.then(() => warmDriveAudioCache(song, cacheKey, token, account, priority));
     driveAudioSerialRef.current = task.catch(() => undefined);
     const trackedTask = task.finally(() => {
       if (driveCacheTasksRef.current.get(cacheKey) === trackedTask) driveCacheTasksRef.current.delete(cacheKey);

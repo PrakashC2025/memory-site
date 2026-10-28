@@ -304,17 +304,18 @@ const Memoriya: React.FC = () => {
             const existingIds = new Set(replaced.map(memory => memory.driveFileId || memory.id));
             const fresh = imported.filter(memory => !existingIds.has(memory.driveFileId || memory.id));
             const removedCount = current.length - kept.length;
+            const replacedChanged = replaced.some((memory, index) => memory !== kept[index]);
+            const hasChanges = removedCount > 0 || fresh.length > 0 || replacedChanged || (initial && current.length !== replaced.length);
+            if (!hasChanges) return current;
             if (removedCount) {
               setSelected(selectedMemory => selectedMemory?.driveFileId && idsToRemove.has(selectedMemory.driveFileId) ? null : selectedMemory);
               setViewerMemory(viewer => viewer?.driveFileId && idsToRemove.has(viewer.driveFileId) ? null : viewer);
             }
-            if (removedCount || fresh.length || (initial && current.length !== replaced.length)) {
-              setMessage(removedCount
-                ? `${removedCount} deleted Drive ${removedCount === 1 ? 'memory was' : 'memories were'} removed from your story.`
-                : fresh.length
-                  ? `${fresh.length} new Drive ${fresh.length === 1 ? 'memory is' : 'memories are'} now in your story.`
-                  : `Drive memories refreshed.`);
-            }
+            setMessage(removedCount
+              ? `${removedCount} deleted Drive ${removedCount === 1 ? 'memory was' : 'memories were'} removed from your story.`
+              : fresh.length
+                ? `${fresh.length} new Drive ${fresh.length === 1 ? 'memory is' : 'memories are'} now in your story.`
+                : `Drive memories refreshed.`);
             const merged = [...replaced, ...fresh].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             // This poll runs in the same page as Story Mode. Update the
             // mounted reel in the same state transaction so a root upload or
@@ -366,7 +367,8 @@ const Memoriya: React.FC = () => {
             // here; the reel still streams the original in the background.
             const latestPage = await googleDriveService.listMediaPage(accessToken, '', driveFolderId, 100);
             const changedIds = new Set(changedFiles.map(file => file.id));
-            changedFiles.push(...latestPage.files.filter(file => !changedIds.has(file.id)));
+            const knownIds = new Set(memoriesRef.current.map(memory => memory.driveFileId).filter(Boolean));
+            changedFiles.push(...latestPage.files.filter(file => !changedIds.has(file.id) && !knownIds.has(file.id)));
           }
           applyChanges(changedFiles, removedIds);
           const nextToken = newStartPageToken || changePageToken;
@@ -1523,19 +1525,26 @@ const isSupportedLocalMedia = (file: File) =>
 
 const localFileId = (file: File) => `local-${file.name}-${file.lastModified}-${file.size}`;
 
+const detectLightweightMode = () => {
+  if (typeof window === 'undefined') return false;
+  const livingRoom = window.innerWidth >= 1200 && window.innerHeight >= 650 && window.innerWidth / window.innerHeight >= 1.3;
+  const narrow = window.innerWidth < 760;
+  const coarse = window.matchMedia('(pointer: coarse)').matches;
+  const lowMemory = 'deviceMemory' in navigator && Number(navigator.deviceMemory) <= 4;
+  return !livingRoom && (narrow || coarse || lowMemory);
+};
+
 const useLightweightMode = () => {
-  const [lightweight, setLightweight] = useState(false);
+  const [lightweight, setLightweight] = useState(detectLightweightMode);
   useEffect(() => {
-    const check = () => {
-      const livingRoom = window.innerWidth >= 1200 && window.innerHeight >= 650 && window.innerWidth / window.innerHeight >= 1.3;
-      const narrow = window.innerWidth < 760;
-      const coarse = window.matchMedia('(pointer: coarse)').matches;
-      const lowMemory = 'deviceMemory' in navigator && Number(navigator.deviceMemory) <= 4;
-      setLightweight(!livingRoom && (narrow || coarse || lowMemory));
-    };
+    const check = () => setLightweight(detectLightweightMode());
     check();
     window.addEventListener('resize', check, { passive: true });
-    return () => window.removeEventListener('resize', check);
+    window.addEventListener('orientationchange', check, { passive: true });
+    return () => {
+      window.removeEventListener('resize', check);
+      window.removeEventListener('orientationchange', check);
+    };
   }, []);
   return lightweight;
 };
@@ -1549,18 +1558,25 @@ const clearDeletedDriveMedia = (driveFileIds: Iterable<string>) => {
 
 type DeviceProfile = 'mobile' | 'tablet' | 'desktop' | 'tv';
 
+const detectDeviceProfile = (): DeviceProfile => {
+  if (typeof window === 'undefined') return 'desktop';
+  const { innerWidth: width, innerHeight: height } = window;
+  const isLivingRoom = width >= 1200 && height >= 650 && width / height >= 1.3;
+  return isLivingRoom ? 'tv' : width <= 640 ? 'mobile' : width <= 1024 ? 'tablet' : 'desktop';
+};
+
 const useDeviceProfile = () => {
-  const [profile, setProfile] = useState<DeviceProfile>('desktop');
+  const [profile, setProfile] = useState<DeviceProfile>(detectDeviceProfile);
 
   useEffect(() => {
-    const check = () => {
-      const { innerWidth: width, innerHeight: height } = window;
-      const isLivingRoom = width >= 1200 && height >= 650 && width / height >= 1.3;
-      setProfile(isLivingRoom ? 'tv' : width <= 640 ? 'mobile' : width <= 1024 ? 'tablet' : 'desktop');
-    };
+    const check = () => setProfile(detectDeviceProfile());
     check();
     window.addEventListener('resize', check, { passive: true });
-    return () => window.removeEventListener('resize', check);
+    window.addEventListener('orientationchange', check, { passive: true });
+    return () => {
+      window.removeEventListener('resize', check);
+      window.removeEventListener('orientationchange', check);
+    };
   }, []);
 
   return profile;
