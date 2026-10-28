@@ -41,21 +41,28 @@ const AnimatedBackground: React.FC = () => {
     if (reduceMotion || coarsePointer || lowMemory || window.innerWidth < 820) {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-      canvas.width = Math.floor(width * dpr);
-      canvas.height = Math.floor(height * dpr);
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const background = ctx.createLinearGradient(0, 0, width, height);
-      background.addColorStop(0, config.gradientFrom);
-      background.addColorStop(0.62, config.gradientVia);
-      background.addColorStop(1, config.gradientTo);
-      ctx.fillStyle = background;
-      ctx.fillRect(0, 0, width, height);
-      return;
+      const paintStatic = () => {
+        const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const background = ctx.createLinearGradient(0, 0, width, height);
+        background.addColorStop(0, config.gradientFrom);
+        background.addColorStop(0.62, config.gradientVia);
+        background.addColorStop(1, config.gradientTo);
+        ctx.fillStyle = background;
+        ctx.fillRect(0, 0, width, height);
+      };
+      paintStatic();
+      // Mobile browsers change innerHeight when the address bar collapses or
+      // the device rotates. Without this the static canvas keeps its old size
+      // and leaves a dark strip behind the page.
+      window.addEventListener('resize', paintStatic);
+      return () => window.removeEventListener('resize', paintStatic);
     }
 
     const ctx = canvas.getContext('2d');

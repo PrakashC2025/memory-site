@@ -1,4 +1,4 @@
-import React, { Suspense, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import AppErrorBoundary from './components/AppErrorBoundary';
 import AnimatedBackground from './components/AnimatedBackground';
@@ -27,6 +27,33 @@ const PAGE_TRANSITIONS = {
   exit: { opacity: 0, y: -8 },
 };
 
+const MOBILE_SURFACE_QUERY = '(max-width: 900px), (pointer: coarse)';
+
+// Phones and tablets already pay for media decoding and touch scrolling.
+// Keep page changes instant there instead of fading the whole screen through
+// transparent black, and skip the decorative cursor fluid that has no cursor
+// to follow on a touch screen.
+const useMobileSurface = () => {
+  const [mobile, setMobile] = useState(() => (
+    typeof window !== 'undefined' && window.matchMedia(MOBILE_SURFACE_QUERY).matches
+  ));
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const query = window.matchMedia(MOBILE_SURFACE_QUERY);
+    const sync = () => setMobile(query.matches);
+    sync();
+    if (query.addEventListener) query.addEventListener('change', sync);
+    else query.addListener?.(sync);
+    return () => {
+      if (query.removeEventListener) query.removeEventListener('change', sync);
+      else query.removeListener?.(sync);
+    };
+  }, []);
+
+  return mobile;
+};
+
 const PageLoader: React.FC = () => (
   <div className="memoriya-page-loader" role="status" aria-label="Loading page">
     <span />
@@ -37,6 +64,7 @@ const PageLoader: React.FC = () => (
 const AppContent: React.FC = () => {
   const { authLoading, user } = useUser();
   const [currentPage, setCurrentPage] = useState<Page>('memoriya');
+  const mobileSurface = useMobileSurface();
 
   if (new URLSearchParams(window.location.search).get('cast') === 'receiver') {
     return <LocalCastReceiver />;
@@ -45,7 +73,7 @@ const AppContent: React.FC = () => {
   const navigate = (page: string) => {
     setCurrentPage(page as Page);
     if (page !== 'story') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: mobileSurface ? 'auto' : 'smooth' });
     }
   };
 
@@ -76,11 +104,18 @@ const AppContent: React.FC = () => {
     );
   }
 
+  const pageMotion = mobileSurface
+    ? { initial: false as const, animate: { opacity: 1 }, exit: { opacity: 1 }, transition: { duration: 0 } }
+    : { ...PAGE_TRANSITIONS, transition: { duration: 0.24 } };
+  const storyMotion = mobileSurface
+    ? { initial: false as const, animate: { opacity: 1 }, exit: { opacity: 1 }, transition: { duration: 0 } }
+    : { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: { duration: 0.28 } };
+
   return (
     <>
       <DriveLiveSync />
       <AnimatedBackground />
-      {!isLegacyTvBrowser() && currentPage !== 'story' && (
+      {!isLegacyTvBrowser() && !mobileSurface && currentPage !== 'story' && (
         <SplashCursor
           SIM_RESOLUTION={96}
           DYE_RESOLUTION={720}
@@ -99,39 +134,39 @@ const AppContent: React.FC = () => {
 
       <main className={`relative ${currentPage === 'story' ? '' : 'z-10'}`}>
         <Suspense fallback={<PageLoader />}>
-          <AnimatePresence mode="wait">
+          <AnimatePresence mode={mobileSurface ? 'sync' : 'wait'}>
             {currentPage === 'dashboard' && (
-              <motion.div key="dashboard" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+              <motion.div key="dashboard" {...pageMotion}>
                 <Dashboard onNavigate={navigate} />
               </motion.div>
             )}
             {currentPage === 'memoriya' && (
-              <motion.div key="memoriya" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+              <motion.div key="memoriya" {...pageMotion}>
                 <Memoriya />
               </motion.div>
             )}
             {currentPage === 'tree' && (
-              <motion.div key="tree" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+              <motion.div key="tree" {...pageMotion}>
                 <MemoryTree />
               </motion.div>
             )}
             {currentPage === 'timeline' && (
-              <motion.div key="timeline" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+              <motion.div key="timeline" {...pageMotion}>
                 <Timeline />
               </motion.div>
             )}
             {currentPage === 'events' && (
-              <motion.div key="events" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+              <motion.div key="events" {...pageMotion}>
                 <EventExplorer />
               </motion.div>
             )}
             {currentPage === 'story' && (
-              <motion.div key="story" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.28 }}>
+              <motion.div key="story" {...storyMotion}>
                 <StoryMode onExit={() => navigate('dashboard')} />
               </motion.div>
             )}
             {currentPage === 'settings' && (
-              <motion.div key="settings" {...PAGE_TRANSITIONS} transition={{ duration: 0.24 }}>
+              <motion.div key="settings" {...pageMotion}>
                 <Settings />
               </motion.div>
             )}

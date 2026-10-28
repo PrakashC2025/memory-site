@@ -14163,7 +14163,16 @@ html:not(.legacy-tv-browser) .page-hero button {
 
 @media (max-width: 900px), (pointer: coarse) {
   .memoriya-experience,
-  .memoriya-experience * {
+  .memoriya-experience *,
+  .glass-card,
+  .neon-card,
+  .memory-reel-overlay,
+  .memory-reel-fullscreen-controls,
+  .memory-reel-shell.is-fullscreen,
+  .memory-reel-shell:fullscreen,
+  .memoriya-mobile-dock,
+  .music-player,
+  .navbar {
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
   }
@@ -14173,9 +14182,37 @@ html:not(.legacy-tv-browser) .page-hero button {
     position: absolute;
   }
 
+  .memoriya-experience::after {
+    mix-blend-mode: normal;
+    opacity: 0.08;
+  }
+
   .memoriya-navbar {
-    -webkit-backdrop-filter: none !important;
-    backdrop-filter: none !important;
     background: rgba(3, 4, 7, 0.96) !important;
+  }
+
+  /* A near-opaque overlay avoids the full-screen blur pass and the black
+     compositor flashes some mobile browsers show behind a blurred layer. */
+  .memory-reel-overlay {
+    background: rgba(2, 4, 8, 0.97);
+  }
+
+  .memory-reel-shell.is-fullscreen,
+  .memory-reel-shell.is-fullscreen .memory-reel-stage {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+
+  .memory-reel-shell.is-fullscreen .memory-reel-stage {
+    min-height: 0;
+  }
+
+  .memory-reel-stage {
+    background-color: #080b13;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+    scroll-behavior: auto;
   }
 }

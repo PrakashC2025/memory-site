@@ -1,12 +1,85 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const PORT = Number(process.env.MEMORIYA_REALTIME_PORT || 8787);
+// Render/Railway/Fly inject PORT. Local development keeps the old 8787 port.
+const PORT = Number(process.env.PORT || process.env.MEMORIYA_REALTIME_PORT || 8787);
+const distDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const clients = new Map();
 
-const server = http.createServer((_req, res) => {
-  res.writeHead(200, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ ok: true, service: 'memoriya-realtime' }));
+const MIME_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.wasm': 'application/wasm',
+  '.map': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
+const sendHttpJson = (res, status, payload) => {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(payload));
+};
+
+const server = http.createServer((req, res) => {
+  const requestUrl = (req.url || '/').split('?')[0];
+  if (requestUrl === '/__memoriya-cast' || requestUrl === '/health') {
+    sendHttpJson(res, 200, { ok: true, service: 'memoriya-realtime' });
+    return;
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { allow: 'GET, HEAD' });
+    res.end();
+    return;
+  }
+  let pathname = '/';
+  try {
+    pathname = decodeURIComponent(requestUrl);
+  } catch {
+    pathname = '/';
+  }
+  const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+  const filePath = path.resolve(distDir, relative);
+  if (filePath !== path.join(distDir, 'index.html') && !filePath.startsWith(`${distDir}${path.sep}`)) {
+    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Forbidden');
+    return;
+  }
+  fs.stat(filePath, (error, stats) => {
+    const exists = !error && stats.isFile();
+    if (!exists && path.extname(relative)) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('Not found');
+      return;
+    }
+    const target = exists ? filePath : path.join(distDir, 'index.html');
+    fs.readFile(target, (readError, data) => {
+      if (readError) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end('Build output is missing. Run "npm run build" before starting the cast server.');
+        return;
+      }
+      const extension = path.extname(target).toLowerCase();
+      res.writeHead(200, {
+        'content-type': MIME_TYPES[extension] || 'application/octet-stream',
+        'cache-control': extension === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
+      });
+      if (req.method === 'HEAD') res.end();
+      else res.end(data);
+    });
+  });
 });
 
 const encodeFrame = (data, opcode = 0x1) => {
@@ -203,6 +276,7 @@ server.on('upgrade', (req, socket) => {
   socket.on('error', removeClient);
 });
 
-server.listen(PORT, () => {
-  console.log(`Memoriya realtime server running on ws://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Memoriya realtime/cast server listening on port ${PORT}`);
+  console.log(`Serving built site from ${distDir}`);
 });

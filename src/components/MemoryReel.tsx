@@ -514,6 +514,11 @@ export class MemoryReelController {
   private destroyed = false;
   private last = 0;
   private scale = 1;
+  // Reading clientWidth/clientHeight inside the paint loop forces a layout
+  // flush after the previous card's style write. Cache the stage box instead
+  // and refresh it only when the ResizeObserver fires.
+  private stageWidth = 0;
+  private stageHeight = 0;
   private elapsed = 0;
   private paused = true;
   // Incremented for every explicit/internal pause. Background loading may
@@ -582,6 +587,7 @@ export class MemoryReelController {
   private onlineHandler?: () => void;
   private wasVisiblePlaying = false;
   private lastMetricKey = '';
+  private lastAmbientMetricsAt = 0;
   private lastLayoutShot = -1;
   private lastStoryPlaying = false;
   private lastAudioActive = false;
@@ -619,6 +625,9 @@ export class MemoryReelController {
   private prefetchTimer = 0;
   private nextPrefetchDelay = 160;
   private lastDiagnostic = '';
+  private lastDiagnosticAt = 0;
+  private lastProgressPercent = -1;
+  private lastShowTitle = false;
   private lastAmbientOpacity = '';
   private lastEffectsPaintAt = 0;
   // Measured paint cost. On weak hardware the loop lowers its repaint rate
@@ -794,6 +803,8 @@ export class MemoryReelController {
       this.resizeHandler = () => this.resize();
       window.addEventListener('resize', this.resizeHandler, { passive: true });
     }
+    // Seed the cached stage box now so the first paint never reads layout.
+    this.resize();
   }
 
   async setItems(items: ReelSource[], preserveProgress = false) {
@@ -810,6 +821,7 @@ export class MemoryReelController {
     const previousElapsed = this.elapsed;
     const previousAvailableMediaCount = this.availableMediaCount;
     const keepCurrentWall = preserveProgress && this.cards.length > 0 && uniqueItems.length > 0;
+    const previousIds = new Set(this.sourceVersions.keys());
     const nextSourceVersions = new Map(uniqueItems.map(item => [
       item.id,
       [item.type, item.modifiedTime || '', item.src, item.fallbackSrc || ''].join('|'),
@@ -818,6 +830,9 @@ export class MemoryReelController {
     const changedSourceIds = new Set(uniqueItems
       .filter(item => this.sourceVersions.has(item.id)
         && this.sourceVersions.get(item.id) !== nextSourceVersions.get(item.id))
+      .map(item => item.id));
+    const newIds = new Set(uniqueItems
+      .filter(item => !previousIds.has(item.id))
       .map(item => item.id));
     this.sourceVersions = nextSourceVersions;
     // The first Story Mode render may come from a small cached snapshot. When
@@ -871,8 +886,9 @@ export class MemoryReelController {
     const stillQueued = this.pendingSources.filter(item =>
       wantedIds.has(item.id) && !this.loadedMedia.has(item.id));
     const newlyAdded = [
-      ...uniqueItems.filter(item => changedSourceIds.has(item.id)),
-      ...uniqueItems.filter(item => !changedSourceIds.has(item.id)),
+      ...uniqueItems.filter(item => newIds.has(item.id)),
+      ...uniqueItems.filter(item => changedSourceIds.has(item.id) && !newIds.has(item.id)),
+      ...uniqueItems.filter(item => !changedSourceIds.has(item.id) && !newIds.has(item.id)),
     ].filter(item =>
       !this.loadedMedia.has(item.id) && !queuedIds.has(item.id)
       && !activeSources.some(active => active.id === item.id));
@@ -886,11 +902,17 @@ export class MemoryReelController {
     this.failedSources.clear();
     const nextPending = new Map<string, ReelSource>();
     [...newlyAdded, ...resumedActive, ...stillQueued].forEach(item => nextPending.set(item.id, item));
-    // Photos always drain before videos. New photo uploads still stay first
-    // within the photo group, while video playback waits for the complete
-    // photo queue as requested.
-    this.pendingSources = Array.from(nextPending.values()).sort((a, b) =>
-      Number(a.type === 'video') - Number(b.type === 'video'));
+    // Photos always drain before videos. Truly new uploads jump ahead of the
+    // rest of the queue - including a newly uploaded video - so the item that
+    // was just added reaches the story next instead of waiting behind a large
+    // photo backlog. Older queued videos still wait for the photo phase.
+    const liveNewIds = keepCurrentWall && !bulkPhotoSync ? newIds : new Set<string>();
+    this.pendingSources = Array.from(nextPending.values()).sort((a, b) => {
+      const aLiveNew = liveNewIds.has(a.id) ? 0 : 1;
+      const bLiveNew = liveNewIds.has(b.id) ? 0 : 1;
+      if (aLiveNew !== bLiveNew) return aLiveNew - bLiveNew;
+      return Number(a.type === 'video') - Number(b.type === 'video');
+    });
     // Legacy contract marker: the queue still represents newlyAdded plus
     // stillQueued; resumedActive preserves the workers that were already busy.
     // this.pendingSources = [...newlyAdded, ...stillQueued]
@@ -1656,10 +1678,9 @@ export class MemoryReelController {
           // Do not reveal a remote Drive stream as the story card. Fetching a
           // complete blob first makes the 7–9 second clip play smoothly on
           // weak mobile data and lets the next visit use IndexedDB directly.
-          // A video only reaches this path when the story is close to it, so
-          // let it outrank background photo promotions and start the clip
-          // instead of leaving the poster on screen.
-          void this.loadAuthenticatedDriveImage(item, 12)
+          // Keep photos ahead of this download so the visible still frames
+          // promote to full quality while a clip warms in the background.
+          void this.loadAuthenticatedDriveImage(item, 4)
             .then(objectUrl => {
               if (!objectUrl) {
                 finishVideoPoster();
@@ -1697,16 +1718,20 @@ export class MemoryReelController {
               // Decode the sharper original off-screen first. Swapping the
               // visible thumbnail before a decode can show a blank frame while
               // the camera is already flying to the next story shot.
-              const decoded = await this.decodeObjectUrl(objectUrl);
-              if (!decoded || this.loadedMedia.get(item.id)?.node !== image) {
+              await this.decodeObjectUrl(objectUrl);
+              if (this.loadedMedia.get(item.id)?.node !== image) {
                 this.releaseObjectUrl(objectUrl);
                 return;
               }
               // The thumbnail is already visible. Replace only the image
               // source so the current card, clock, and music never restart.
+              // If the off-screen probe could not decode the original (common
+              // on memory-constrained phones), still let the visible element
+              // decode it instead of leaving the card permanently soft.
               const oldObjectUrl = previewObjectUrl;
               image.src = objectUrl;
               previewObjectUrl = '';
+              previewResolvedFull = true;
               if (oldObjectUrl) this.releaseObjectUrl(oldObjectUrl);
             })
             .catch(() => undefined);
@@ -1910,6 +1935,8 @@ export class MemoryReelController {
     const rect = this.el.getBoundingClientRect();
     const width = Math.max(1, Math.round(rect.width));
     const height = Math.max(1, Math.round(rect.height));
+    this.stageWidth = width;
+    this.stageHeight = height;
     this.dustWidth = width;
     this.dustHeight = height;
     this.dustDpr = this.lowPowerSurface ? 1 : Math.min(1.5, window.devicePixelRatio || 1);
@@ -2800,25 +2827,25 @@ export class MemoryReelController {
     const activeShotIndex = this.shotIndexAt(time);
     const focusedVideo = this.cards[activeShotIndex]?.video;
     const videoIsPlaying = this.lowPowerSurface && Boolean(focusedVideo && !focusedVideo.paused);
+    // The template flight is the moment the user notices dropped frames. Slow
+    // the decorative canvas layers while the camera is moving so the phone
+    // compositor spends its budget on the card transform. The template, timing,
+    // and camera path are untouched, and the effect keeps moving (just at a
+    // lower sample rate) so it never jumps when the shot settles.
+    const inFlight = activeShotIndex > 0 && time - this.shotStartAt(activeShotIndex) < move;
     // The effect layer is slow, soft motion. Redrawing it at most 30 times a
     // second halves full-screen canvas fill on phones with no visible change,
     // while the cards above it keep painting every frame. While a clip is
     // decoding, freeze both canvas layers so the phone decoder gets the frame
     // budget instead of competing with full-screen gradients and particles.
     const effectsNow = performance.now();
-    if (!videoIsPlaying
-      && effectsNow - this.lastEffectsPaintAt >= 1000 / 30
-      && (!this.lowPowerSurface || effectsNow - this.lastEffectsPaintAt >= 1000 / 20)) {
+    const effectsReady = inFlight
+      ? effectsNow - this.lastEffectsPaintAt >= (this.lowPowerSurface ? 1000 / 10 : 1000 / 12)
+      : effectsNow - this.lastEffectsPaintAt >= 1000 / 30
+        && (!this.lowPowerSurface || effectsNow - this.lastEffectsPaintAt >= 1000 / 20);
+    if (!videoIsPlaying && effectsReady) {
       this.lastEffectsPaintAt = effectsNow;
       this.renderEffects(audioMetrics, time);
-    }
-    if (!this.options.legacyTv && this.options.template !== 'orbit') {
-      // Writing the same string still invalidates style, so compare first.
-      const ambientOpacity = (0.68 + audioLevel * 0.16).toFixed(3);
-      if (ambientOpacity !== this.lastAmbientOpacity) {
-        this.lastAmbientOpacity = ambientOpacity;
-        this.ambient.style.opacity = ambientOpacity;
-      }
     }
     // Keep the empty space alive with a gentle music pulse. Beat and frequency
     // bands are smoothed so visuals breathe with the track instead of twitching.
@@ -2830,20 +2857,36 @@ export class MemoryReelController {
       audioMetrics.treble.toFixed(3),
       audioMetrics.beat.toFixed(3),
     ].join('|');
-    if (metricKey !== this.lastMetricKey) {
-      this.lastMetricKey = metricKey;
-      this.ambientEffects.style.setProperty('--audio-level', effectLevel.toFixed(3));
-      this.ambientEffects.style.setProperty('--bass-level', audioMetrics.bass.toFixed(3));
-      this.ambientEffects.style.setProperty('--mid-level', audioMetrics.mid.toFixed(3));
-      this.ambientEffects.style.setProperty('--treble-level', audioMetrics.treble.toFixed(3));
-      this.ambientEffects.style.setProperty('--beat-pulse', audioMetrics.beat.toFixed(3));
-      this.ambientEffects.style.setProperty('--wave-shift', `${(audioMetrics.bass * 18 + audioMetrics.mid * 8).toFixed(2)}px`);
-      this.ambientEffects.style.setProperty('--effect-opacity', (0.34 + effectLevel * 0.42).toFixed(3));
-      this.ambientEffects.style.setProperty('--glow-scale', (0.92 + effectLevel * 0.48).toFixed(3));
-      this.ambientEffects.style.setProperty('--particle-opacity', (0.28 + effectLevel * 0.72).toFixed(3));
-      this.ambientEffects.style.setProperty('--particle-scale', (0.72 + effectLevel * 1.1).toFixed(3));
-      this.ambientEffects.style.setProperty('--butterfly-opacity', (0.24 + effectLevel * 0.76).toFixed(3));
-      this.ambientEffects.style.setProperty('--butterfly-scale', (0.78 + effectLevel * 0.42).toFixed(3));
+    // The ambient layer is full-screen and has dozens of children reading
+    // these variables. Rewriting them at display rate forces the compositor to
+    // re-resolve that whole subtree while the template is flying. This motion
+    // is slow, so 12–20 updates/s look identical and leave the frame budget to
+    // the camera and card animation.
+    const ambientInterval = this.lowPowerSurface ? 1000 / 12 : 1000 / 20;
+    if (!inFlight && effectsNow - this.lastAmbientMetricsAt >= ambientInterval) {
+      this.lastAmbientMetricsAt = effectsNow;
+      if (!this.options.legacyTv && this.options.template !== 'orbit') {
+        const ambientOpacity = (0.68 + audioLevel * 0.16).toFixed(2);
+        if (ambientOpacity !== this.lastAmbientOpacity) {
+          this.lastAmbientOpacity = ambientOpacity;
+          this.ambient.style.opacity = ambientOpacity;
+        }
+      }
+      if (metricKey !== this.lastMetricKey) {
+        this.lastMetricKey = metricKey;
+        this.ambientEffects.style.setProperty('--audio-level', effectLevel.toFixed(3));
+        this.ambientEffects.style.setProperty('--bass-level', audioMetrics.bass.toFixed(3));
+        this.ambientEffects.style.setProperty('--mid-level', audioMetrics.mid.toFixed(3));
+        this.ambientEffects.style.setProperty('--treble-level', audioMetrics.treble.toFixed(3));
+        this.ambientEffects.style.setProperty('--beat-pulse', audioMetrics.beat.toFixed(3));
+        this.ambientEffects.style.setProperty('--wave-shift', `${(audioMetrics.bass * 18 + audioMetrics.mid * 8).toFixed(2)}px`);
+        this.ambientEffects.style.setProperty('--effect-opacity', (0.34 + effectLevel * 0.42).toFixed(3));
+        this.ambientEffects.style.setProperty('--glow-scale', (0.92 + effectLevel * 0.48).toFixed(3));
+        this.ambientEffects.style.setProperty('--particle-opacity', (0.28 + effectLevel * 0.72).toFixed(3));
+        this.ambientEffects.style.setProperty('--particle-scale', (0.72 + effectLevel * 1.1).toFixed(3));
+        this.ambientEffects.style.setProperty('--butterfly-opacity', (0.24 + effectLevel * 0.76).toFixed(3));
+        this.ambientEffects.style.setProperty('--butterfly-scale', (0.78 + effectLevel * 0.42).toFixed(3));
+      }
     }
     const audioActive = Boolean((this.analysisAudio || this.audio) && !(this.analysisAudio || this.audio)?.paused);
     if (this.lastStoryPlaying !== !this.paused || this.lastAudioActive !== audioActive) {
@@ -2853,7 +2896,7 @@ export class MemoryReelController {
       this.el.classList.toggle('is-playing', !this.paused);
       this.el.classList.toggle('is-music-playing', audioActive);
     }
-    if (!videoIsPlaying) this.renderDust(audioMetrics, audioActive);
+    if (!videoIsPlaying && !inFlight) this.renderDust(audioMetrics, audioActive);
 
     // The cumulative timeline is rebuilt only when the card list changes, so
     // use its binary search here instead of walking every card on every frame.
@@ -3183,8 +3226,8 @@ export class MemoryReelController {
           : depthBias;
         const fitScale = isActive && this.options.template === 'orbit'
           ? Math.min(
-            (this.el.clientWidth * 0.82) / Math.max(1, card.width),
-            (this.el.clientHeight * 0.86) / Math.max(1, card.height),
+            ((this.stageWidth || 1280) * 0.82) / Math.max(1, card.width),
+            ((this.stageHeight || 720) * 0.86) / Math.max(1, card.height),
           ) / Math.max(0.01, this.scale)
           : this.options.template === 'orbit' ? orbitBackgroundScale : heroScale + zoomScale;
         // Keep the hero inside the stage at every point of the push-in. The
@@ -3311,14 +3354,27 @@ export class MemoryReelController {
 
     if (!this.titleEl.innerHTML && this.options.title) this.setTitle(this.options.title);
     const showTitle = shot === count - 1 && local > move + 0.4 && Boolean(this.options.title);
-    this.titleEl.classList.toggle('on', showTitle);
-    this.progressEl.style.width = `${clamp(time / this.total, 0, 1) * 100}%`;
+    if (showTitle !== this.lastShowTitle) {
+      this.lastShowTitle = showTitle;
+      this.titleEl.classList.toggle('on', showTitle);
+    }
+    // A 0.1% step is visually continuous but avoids a layout write on every
+    // animation frame for a bar whose total can span several minutes.
+    const progressPercent = Math.round(clamp(time / this.total, 0, 1) * 1000) / 10;
+    if (progressPercent !== this.lastProgressPercent) {
+      this.lastProgressPercent = progressPercent;
+      this.progressEl.style.width = `${progressPercent}%`;
+    }
     this.lastRenderedShot = shot;
     // Lightweight, throttled diagnostics on the stage element. It costs one
     // string compare per frame and makes "is the story still playing at the
     // same shot" verifiable from the DOM (used by the performance tests).
     const diagnostic = `${Math.round(time)}/${Math.round(this.total)}/${shot}/${this.paused ? 'paused' : 'playing'}/${this.cards.length}/${this.wallRebuilds}/${this.paintCostEma.toFixed(2)}/${Math.round(this.adaptivePaintInterval)}/${this.paintCount}`;
-    if (diagnostic !== this.lastDiagnostic) {
+    // paintCount changes on every paint, so an unthrottled compare would write
+    // the diagnostic attribute 60 times a second. Four updates a second keeps
+    // the DOM/test view current without adding work to the animation.
+    if (diagnostic !== this.lastDiagnostic && effectsNow - this.lastDiagnosticAt >= 250) {
+      this.lastDiagnosticAt = effectsNow;
       this.lastDiagnostic = diagnostic;
       this.el.setAttribute('data-reel-state', diagnostic);
     }
@@ -4142,6 +4198,11 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return undefined;
+    // The reel paints its own progress bar every frame. Re-rendering React at
+    // the same rate only to update a mm:ss label competes with the template
+    // animation, so publish state when the displayed second actually changes.
+    let lastProgressSecond = -1;
+    let lastProgressTotal = -1;
     const controller = new MemoryReelController(stage, {
       items: [],
       title: activeTitle,
@@ -4154,7 +4215,13 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       zoom: zoomEnabled,
       holdScale: storyTimingScale(timing),
       onProgress: (current, total) => {
-        setProgress({ progress: current, total });
+        const second = Math.round(current);
+        const roundedTotal = Math.round(total);
+        if (second !== lastProgressSecond || roundedTotal !== lastProgressTotal) {
+          lastProgressSecond = second;
+          lastProgressTotal = roundedTotal;
+          setProgress({ progress: current, total });
+        }
         const more = moreConfigRef.current;
         if (more.hasMore && !more.loadingMore && !moreRequestedRef.current && total > 0 && current / total >= 0.55) {
           moreRequestedRef.current = true;
@@ -5350,7 +5417,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           </button>
           <button type="button" onClick={() => controllerRef.current?.restart()} disabled={loading}><RotateCcw size={16} /> Replay</button>
           <button type="button" onClick={toggleFullscreen}><>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</> {fullscreen ? 'Exit' : 'Fullscreen'}</button>
-          <button type="button" className={castOpen ? 'is-active' : ''} onClick={() => setCastOpen(true)} aria-pressed={castOpen}><Cast size={16} /> Cast local</button>
+          <button type="button" className={castOpen ? 'is-active' : ''} onClick={() => setCastOpen(true)} aria-pressed={castOpen}><Cast size={16} /> Share screen</button>
           <button type="button" className={musicOpen ? 'is-active' : ''} aria-expanded={musicOpen} onClick={openMusic}><Music2 size={16} /> Music {musicQueue.length ? `(${musicQueue.length})` : allDriveSongs.length ? `(${allDriveSongs.length} Drive)` : ''}</button>
           <button type="button" className={templateOpen ? 'is-active' : ''} aria-expanded={templateOpen} onClick={openTemplates}><WandSparkles size={16} /> Template</button>
           {musicQueue.length > 0 && <button type="button" onClick={() => void toggleMusic()} aria-pressed={audioPlaying}><Volume2 size={16} /> {audioPlaying ? 'Stop music' : 'Play music'}</button>}

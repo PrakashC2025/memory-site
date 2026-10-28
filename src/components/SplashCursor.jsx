@@ -4,6 +4,18 @@ import { useEffect, useRef } from 'react';
 import { isHeavyVisualPaused, onHeavyVisualPauseChange } from '../utils/visualActivity';
 import './SplashCursor.css';
 
+// This effect is a full-screen blurred canvas composited with screen blending.
+// On touch devices it has no cursor to follow and costs a lot of GPU time, so
+// skip it entirely instead of running it underneath the page.
+const shouldSkipSplashCursor = () => {
+  if (typeof window === 'undefined') return true;
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return true;
+  if (window.matchMedia?.('(pointer: coarse)').matches) return true;
+  if (window.innerWidth <= 900) return true;
+  const memory = Number(navigator.deviceMemory || 8);
+  return memory <= 4;
+};
+
 function hexToRgb(hex) {
   const value = hex.replace('#', '');
   const normalized = value.length === 3 ? value.split('').map(char => char + char).join('') : value;
@@ -57,6 +69,7 @@ function SplashCursor({
   const pointerRef = useRef({ x: 0, y: 0, px: 0, py: 0, hue: Math.random() });
 
   useEffect(() => {
+    if (shouldSkipSplashCursor()) return undefined;
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
     const ctx = canvas.getContext('2d', { alpha: true });
@@ -250,6 +263,8 @@ function SplashCursor({
     RAINBOW_MODE,
     COLOR,
   ]);
+
+  if (shouldSkipSplashCursor()) return null;
 
   return (
     <div className="splash-cursor" aria-hidden="true">

@@ -304,18 +304,17 @@ const Memoriya: React.FC = () => {
             const existingIds = new Set(replaced.map(memory => memory.driveFileId || memory.id));
             const fresh = imported.filter(memory => !existingIds.has(memory.driveFileId || memory.id));
             const removedCount = current.length - kept.length;
-            const replacedChanged = replaced.some((memory, index) => memory !== kept[index]);
-            const hasChanges = removedCount > 0 || fresh.length > 0 || replacedChanged || (initial && current.length !== replaced.length);
-            if (!hasChanges) return current;
             if (removedCount) {
               setSelected(selectedMemory => selectedMemory?.driveFileId && idsToRemove.has(selectedMemory.driveFileId) ? null : selectedMemory);
               setViewerMemory(viewer => viewer?.driveFileId && idsToRemove.has(viewer.driveFileId) ? null : viewer);
             }
-            setMessage(removedCount
-              ? `${removedCount} deleted Drive ${removedCount === 1 ? 'memory was' : 'memories were'} removed from your story.`
-              : fresh.length
-                ? `${fresh.length} new Drive ${fresh.length === 1 ? 'memory is' : 'memories are'} now in your story.`
-                : `Drive memories refreshed.`);
+            if (removedCount || fresh.length || (initial && current.length !== replaced.length)) {
+              setMessage(removedCount
+                ? `${removedCount} deleted Drive ${removedCount === 1 ? 'memory was' : 'memories were'} removed from your story.`
+                : fresh.length
+                  ? `${fresh.length} new Drive ${fresh.length === 1 ? 'memory is' : 'memories are'} now in your story.`
+                  : `Drive memories refreshed.`);
+            }
             const merged = [...replaced, ...fresh].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             // This poll runs in the same page as Story Mode. Update the
             // mounted reel in the same state transaction so a root upload or
@@ -367,8 +366,7 @@ const Memoriya: React.FC = () => {
             // here; the reel still streams the original in the background.
             const latestPage = await googleDriveService.listMediaPage(accessToken, '', driveFolderId, 100);
             const changedIds = new Set(changedFiles.map(file => file.id));
-            const knownIds = new Set(memoriesRef.current.map(memory => memory.driveFileId).filter(Boolean));
-            changedFiles.push(...latestPage.files.filter(file => !changedIds.has(file.id) && !knownIds.has(file.id)));
+            changedFiles.push(...latestPage.files.filter(file => !changedIds.has(file.id)));
           }
           applyChanges(changedFiles, removedIds);
           const nextToken = newStartPageToken || changePageToken;
@@ -785,13 +783,22 @@ const Memoriya: React.FC = () => {
       } satisfies Memory;
     });
 
-    setMemories(current => {
+    const mergeLocal = (current: Memory[]) => {
       const ids = new Set(current.map(memory => memory.id));
-      const next = [...imported.filter(memory => !ids.has(memory.id)), ...current]
+      return [...imported.filter(memory => !ids.has(memory.id)), ...current]
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    };
+    setMemories(current => {
+      const next = mergeLocal(current);
       if (!selected && next[0]) setSelected(next[0]);
       return next;
     });
+    // An already-open story may have been started from an album or from the
+    // live gallery. Push the picked files into that reel immediately instead
+    // of waiting for the next Drive poll or a reopen.
+    setReelConfig(current => current
+      ? { ...current, memories: withLivePreviews(mergeLocal(current.memories)) }
+      : current);
     setMessage(imported.length === 1
       ? `Added 1 local memory from this device.`
       : `Added ${imported.length} local memories from this device.`);

@@ -15,8 +15,33 @@ type LocalCastControllerProps = {
 };
 
 const castSocketUrl = () => {
+  // A live static host (Vercel/Netlify) cannot run the long-lived WebSocket
+  // relay. Point the browser at the separately deployed relay with
+  // VITE_CAST_WS_URL (or the legacy VITE_MEMORIYA_WS_URL). Local development
+  // keeps using the Vite proxy on the same origin.
+  const configured = String(
+    import.meta.env.VITE_CAST_WS_URL || import.meta.env.VITE_MEMORIYA_WS_URL || '',
+  ).trim();
+  if (configured) {
+    try {
+      const url = new URL(configured);
+      if (url.protocol === 'http:') url.protocol = 'ws:';
+      else if (url.protocol === 'https:') url.protocol = 'wss:';
+      if (!url.pathname || url.pathname === '/') url.pathname = '/__memoriya-cast';
+      return url.toString();
+    } catch {
+      // Fall through to same-origin when the value is not a valid URL.
+    }
+  }
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${protocol}//${window.location.host}/__memoriya-cast`;
+};
+
+const castServiceHint = () => {
+  if (import.meta.env.DEV) {
+    return 'Local TV sharing service is not running. Start “npm run realtime” on the PC.';
+  }
+  return 'TV sharing service is unreachable. Deploy server/realtime-server.js and set VITE_CAST_WS_URL to its wss:// URL, then redeploy the site.';
 };
 
 const makeRoomCode = () => String(Math.floor(100000 + Math.random() * 900000));
@@ -73,7 +98,7 @@ export const LocalCastController: React.FC<LocalCastControllerProps> = ({ open, 
     void wakeLockRef.current?.release().catch(() => undefined);
     wakeLockRef.current = null;
     setCasting(false);
-    setStatus(socketReady ? 'Looking for TVs on this Wi-Fi…' : 'Starting local cast service…');
+    setStatus(socketReady ? 'Looking for TVs on this Wi-Fi…' : 'Starting TV sharing service…');
   };
 
   useEffect(() => {
@@ -100,17 +125,17 @@ export const LocalCastController: React.FC<LocalCastControllerProps> = ({ open, 
       if (message.type === 'cast:receiver-offline' && message.room) {
         setReceivers(current => current.filter(item => item.room !== message.room));
         if (roomRef.current === message.room && (peerRef.current || streamRef.current)) {
-          setError('The TV went offline. Reconnect the TV and start casting again.');
+          setError('The TV went offline. Reconnect the TV and start sharing again.');
           stopCasting();
         }
       }
-      if (message.type === 'cast:error') setError(message.message || 'The local cast service rejected this connection.');
+      if (message.type === 'cast:error') setError(message.message || 'The TV sharing service rejected this connection.');
       if (message.type === 'cast:answer' && message.description && peerRef.current) {
         const peer = peerRef.current;
         void peer.setRemoteDescription(message.description).then(async () => {
           for (const candidate of pendingCandidatesRef.current.splice(0)) await peer.addIceCandidate(candidate).catch(() => undefined);
         }).catch(() => {
-          setError('The TV could not accept this cast. Reconnect the TV and try again.');
+          setError('The TV could not accept this share. Reconnect the TV and try again.');
         });
       }
       if (message.type === 'cast:ice' && message.candidate && peerRef.current) {
@@ -121,7 +146,7 @@ export const LocalCastController: React.FC<LocalCastControllerProps> = ({ open, 
     };
     socket.onerror = () => {
       setSocketReady(false);
-      setError('Local cast service is not running. Start “npm run realtime” on the PC.');
+      setError(castServiceHint());
     };
     socket.onclose = () => {
       setSocketReady(false);
@@ -169,7 +194,7 @@ export const LocalCastController: React.FC<LocalCastControllerProps> = ({ open, 
       return;
     }
     if (!socketReady) {
-      setError('The local cast service is not connected. Start “npm run realtime” on the PC.');
+      setError(castServiceHint());
       return;
     }
     if (!navigator.mediaDevices?.getDisplayMedia) {
@@ -177,7 +202,7 @@ export const LocalCastController: React.FC<LocalCastControllerProps> = ({ open, 
       return;
     }
     if (peerRef.current || streamRef.current) {
-      setError('A cast is already starting. Stop it before starting another cast.');
+      setError('Sharing is already starting. Stop it before starting another share.');
       return;
     }
     try {
@@ -203,7 +228,7 @@ export const LocalCastController: React.FC<LocalCastControllerProps> = ({ open, 
             window.clearTimeout(disconnectTimerRef.current);
             disconnectTimerRef.current = null;
           }
-          setStatus('Casting Story Mode to TV');
+          setStatus('Sharing Story Mode to TV');
         }
         if (peer.connectionState === 'disconnected') {
           setStatus('TV connection interrupted. Reconnecting…');
@@ -225,21 +250,21 @@ export const LocalCastController: React.FC<LocalCastControllerProps> = ({ open, 
       wakeLockRef.current = await requestLocalWakeLock();
     } catch (castError) {
       stopCasting();
-      if (castError instanceof DOMException && castError.name === 'NotAllowedError') setError('Screen sharing was cancelled. Tap Cast again and allow it.');
+      if (castError instanceof DOMException && castError.name === 'NotAllowedError') setError('Screen sharing was cancelled. Tap Start sharing again and allow it.');
       else setError('Could not start local screen sharing on this phone.');
     }
   };
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Cast Story Mode locally">
+    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Share Story Mode screen and audio to the TV">
       <section className="w-full max-w-md rounded-2xl border border-cyan-300/30 bg-slate-950 p-5 text-white shadow-2xl">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-black">Cast to TV</h2>
-            <p className="mt-1 text-xs text-white/60">Offline local screen sharing over this Wi‑Fi</p>
+            <h2 className="text-lg font-black">Share screen to TV</h2>
+            <p className="mt-1 text-xs text-white/60">Sends the Story Mode tab’s video + audio over this Wi‑Fi. Not Chromecast.</p>
           </div>
-          <button type="button" className="rounded-xl border border-white/15 px-3 py-2" onClick={() => { stopCasting(); onClose(); }} aria-label="Close cast panel">×</button>
+          <button type="button" className="rounded-xl border border-white/15 px-3 py-2" onClick={() => { stopCasting(); onClose(); }} aria-label="Close share panel">×</button>
         </div>
         <label className="mt-5 block text-xs font-bold uppercase tracking-[0.14em] text-white/60">
           Available TVs / TV code
@@ -249,13 +274,13 @@ export const LocalCastController: React.FC<LocalCastControllerProps> = ({ open, 
           </select>
         </label>
         <input className="mt-3 w-full rounded-xl border border-white/15 bg-white/10 px-3 py-3 text-sm" inputMode="numeric" maxLength={6} placeholder="Or enter TV code" value={room} onChange={event => setRoom(event.target.value.replace(/\D/g, '').slice(0, 6))} />
-        <p className="mt-3 text-xs leading-5 text-white/60">Open <code>?cast=receiver</code> on the TV first. When the browser asks, select the Story Mode tab/window and enable audio sharing.</p>
+        <p className="mt-3 text-xs leading-5 text-white/60">Open <code>?cast=receiver</code> on the TV first. Then tap Start sharing, choose the <strong>Story Mode tab</strong> (not the whole desktop), and tick <strong>Share tab audio</strong>.</p>
         {error && <p className="mt-3 rounded-xl border border-rose-300/30 bg-rose-400/10 px-3 py-2 text-xs text-rose-100">{error}</p>}
         <p className="mt-3 text-xs text-cyan-200" aria-live="polite">{status}</p>
         <div className="mt-5 flex gap-3">
           {!casting
-            ? <button type="button" className="flex-1 rounded-xl bg-cyan-300 px-4 py-3 font-black text-slate-950 disabled:opacity-50" disabled={!socketReady} onClick={() => void startCasting()}>Start casting</button>
-            : <button type="button" className="flex-1 rounded-xl bg-rose-400 px-4 py-3 font-black text-slate-950" onClick={stopCasting}>Stop casting</button>}
+            ? <button type="button" className="flex-1 rounded-xl bg-cyan-300 px-4 py-3 font-black text-slate-950 disabled:opacity-50" disabled={!socketReady} onClick={() => void startCasting()}>Start sharing</button>
+            : <button type="button" className="flex-1 rounded-xl bg-rose-400 px-4 py-3 font-black text-slate-950" onClick={stopCasting}>Stop sharing</button>}
           <button type="button" className="rounded-xl border border-white/15 px-4 py-3 disabled:opacity-40" disabled={casting} onClick={onClose}>{casting ? 'Stop first' : 'Done'}</button>
         </div>
       </section>
@@ -327,7 +352,7 @@ export const LocalCastReceiver: React.FC = () => {
             await peer.setLocalDescription(answer);
             sendSignal(socket, { type: 'cast:answer', room: code, description: answer });
           })
-          .catch(() => setError('The TV could not open the phone stream. Try casting again.'));
+          .catch(() => setError('The TV could not open the phone stream. Try sharing again.'));
       }
       if (message.type === 'cast:ice' && message.candidate) {
         if (peerRef.current?.remoteDescription) void peerRef.current.addIceCandidate(message.candidate).catch(() => undefined);
@@ -341,10 +366,10 @@ export const LocalCastReceiver: React.FC = () => {
         setHasStream(false);
         setArmed(false);
         armedRef.current = false;
-        setStatus('Phone stopped casting. Waiting…');
+        setStatus('Phone stopped sharing. Waiting…');
       }
     };
-    socket.onerror = () => setError('Start “npm run realtime” on the PC, then reload this TV page.');
+    socket.onerror = () => setError(castServiceHint());
     return () => {
       peerRef.current?.close();
       socket.close();
@@ -361,8 +386,8 @@ export const LocalCastReceiver: React.FC = () => {
             <div>
               <div className="text-sm font-bold uppercase tracking-[0.3em] text-cyan-200">Memoriya local TV</div>
               <div className="mt-5 text-7xl font-black tracking-[0.18em]">{code}</div>
-              <p className="mt-4 text-white/60">Open Story Mode on your phone and choose this TV.</p>
-              <button type="button" className="mt-6 rounded-xl bg-cyan-300 px-5 py-3 font-black text-slate-950" onClick={() => { armedRef.current = true; setArmed(true); void videoRef.current?.play(); }}>{connected ? (hasStream ? 'Play cast' : 'Ready for phone') : 'Connect to local service'}</button>
+              <p className="mt-4 text-white/60">Open Story Mode on your device and choose this TV.</p>
+              <button type="button" className="mt-6 rounded-xl bg-cyan-300 px-5 py-3 font-black text-slate-950" onClick={() => { armedRef.current = true; setArmed(true); void videoRef.current?.play(); }}>{connected ? (hasStream ? 'Play share' : 'Ready for sharing') : 'Connect to sharing service'}</button>
             </div>
           </div>
         )}

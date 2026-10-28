@@ -36,15 +36,16 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const driveAuthRequiredRef = useRef(readDriveAuthRequired());
   const storyMemories = useMemo(() => {
     const byKey = new Map<string, Memory>();
-    // Drive is the authoritative Story Mode source whenever it is connected.
-    // Do not append local picker items to the Drive story: that created
-    // duplicate-looking frames and made the loaded count differ from Drive.
+    // Drive is the authoritative source whenever it is connected, but files
+    // the user just picked from this device must still appear immediately.
+    // Keep Drive first so its ordering wins, then append local picks; the map
+    // below removes any exact key collision.
     // Drive metadata and IndexedDB media are device-local. After a phone
     // refresh the short-lived OAuth token may be gone even though the phone
     // still has an offline Drive snapshot. Keep that snapshot playable rather
     // than switching the story to an empty local-picker list.
     const sourceMemories = driveAccessToken || driveMemories.length
-      ? driveMemories
+      ? [...driveMemories, ...localMemories]
       : localMemories;
     sourceMemories.forEach(memory => {
       byKey.set(memory.driveFileId || memory.id, memory);

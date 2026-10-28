@@ -28,7 +28,7 @@
   display: grid;
   place-items: center;
   overflow: hidden;
-  touch-action: none;
+  touch-action: pan-y;
   user-select: none;
   -webkit-user-select: none;
   background: transparent;
@@ -217,5 +217,18 @@
 
   .dg-item__image {
     inset: 7px;
+  }
+}
+
+@media (max-width: 900px), (pointer: coarse) {
+  .dg-overlay--blur,
+  .dg-scrim {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .dg-item__image:hover {
+    transform: translateZ(0);
+    box-shadow: 0 16px 38px rgba(0, 0, 0, 0.28);
   }
 }
