@@ -154,7 +154,7 @@ export const readDriveFolders = () => {
   return folders.filter(folder => folder.id && folder.id !== 'drive-root');
 };
 
-export const saveDriveMemories = (memories: Memory[], accessToken: string, driveFolderId = '') => {
+export const saveDriveMemories = (memories: Memory[], accessToken: string, driveFolderId = '', notify = true) => {
   const visualMemories = visualMemoriesOnly(memories);
   try {
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
@@ -169,7 +169,7 @@ export const saveDriveMemories = (memories: Memory[], accessToken: string, drive
       importCount: visualMemories.length,
       savedAt: Date.now(),
     }));
-    window.dispatchEvent(new CustomEvent(DRIVE_MEMORIES_UPDATED_EVENT));
+    if (notify) window.dispatchEvent(new CustomEvent(DRIVE_MEMORIES_UPDATED_EVENT));
   } catch {
     // Session storage is optional; IndexedDB remains the playback cache.
   }

@@ -4542,12 +4542,22 @@ body.memoriya-camera-active {
 
 .memoriya-camera-review-preview.is-crop-portrait { aspect-ratio: 4 / 5; }
 .memoriya-camera-review-preview.is-crop-landscape { aspect-ratio: 16 / 9; }
+.memoriya-camera-review-preview.is-preview-landscape {
+  aspect-ratio: 16 / 9;
+}
 .memoriya-camera-review-preview.is-crop-square img,
 .memoriya-camera-review-preview.is-crop-portrait img,
 .memoriya-camera-review-preview.is-crop-landscape img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.memoriya-camera-review-preview.is-preview-landscape img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
 }
 
 .memoriya-camera-review-actions {
@@ -11256,8 +11266,13 @@ html.legacy-tv-browser .memoriya-page-loader {
 
 /* Every look has a different camera language. The current memory is always
    the sharp, elevated hero; nearby cards add context without covering it. */
-.memory-reel-stage[class*="memory-reel-template-"] .world { transition: transform 700ms cubic-bezier(.22, .61, .36, 1); }
-.memory-reel-stage[class*="memory-reel-template-"] .card { will-change: transform, opacity, filter; }
+/* The controller supplies a continuous eased transform every animation frame.
+   A second 700ms CSS transition queues behind those writes and makes the
+   camera feel stuck or blink during downloads. */
+.memory-reel-stage[class*="memory-reel-template-"] .world { transition: none; }
+.memory-reel-stage[class*="memory-reel-template-"] .card { will-change: auto; }
+.memory-reel-stage[class*="memory-reel-template-"] .card.is-active,
+.memory-reel-stage[class*="memory-reel-template-"] .card.is-neighbor { will-change: transform, opacity, filter; }
 .memory-reel-stage[class*="memory-reel-template-"] .card.is-active { z-index: 50 !important; opacity: 1 !important; filter: none !important; }
 .memory-reel-stage[class*="memory-reel-template-"] .card.is-active > .m { object-fit: contain; }
 

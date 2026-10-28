@@ -97,7 +97,6 @@ const DriveLiveSync: React.FC = () => {
         }
         const { imported, removed, filesToCache } = result;
         if (!active) return;
-        const next = mergeDriveMemories(readDriveMemories(), imported, removed);
         if (removed.size) {
           void Promise.all(Array.from(removed).flatMap(id => [deleteCachedDriveMedia(id), deleteCachedStoryMedia(id)]));
         }
@@ -112,13 +111,13 @@ const DriveLiveSync: React.FC = () => {
           saveDriveMemories(latest, accessToken, folderId);
         }
         if (filesToCache.length) {
-          // The first event makes the new metadata visible immediately. The
-          // second event swaps the new item to its local blob after the
-          // background download finishes, so Story Mode never gets stuck on a
-          // missing preview or waits for a manual refresh.
+          // The first event makes new metadata visible immediately. Persist
+          // the completed cache silently; dispatching the same metadata again
+          // makes Story Mode rebuild/redecode unchanged cards while the camera
+          // is moving.
           void cachePromise.then(() => {
             if (active && readDriveFolderId() === folderId && readDriveAccessToken() === accessToken && (removed.size || imported.length)) {
-              saveDriveMemories(readDriveMemories(), accessToken, folderId);
+              saveDriveMemories(readDriveMemories(), accessToken, folderId, false);
             }
           });
         }

@@ -83,9 +83,6 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       const generation = ++cacheHydrationGenerationRef.current;
       const next = readDriveMemories().filter(memory => isVisualMemory(memory) && (!selectedFolderId || memory.driveFileId));
       knownDriveMemoriesRef.current = next;
-      // Publish the fresh Drive metadata immediately. Waiting for every
-      // cached original in a large library made a newly uploaded photo miss
-      // the live reel even though Drive had already found it.
       setDriveMemories(next);
       setDriveLoading(false);
       const hydrated = await hydrateCachedDriveMemories(next);

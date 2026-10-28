@@ -140,7 +140,7 @@ export const deleteCachedDriveMedia = async (id: string) => {
   });
 };
 
-export const ensureCachedDriveMedia = (file: DriveMediaFile, accessToken: string) => {
+export const ensureCachedDriveMedia = (file: DriveMediaFile, accessToken: string, priority = 0) => {
   const taskKey = `${file.id}:${file.modifiedTime || ''}`;
   const existingTask = inFlightDownloads.get(taskKey);
   if (existingTask) return existingTask;
@@ -150,13 +150,18 @@ export const ensureCachedDriveMedia = (file: DriveMediaFile, accessToken: string
       return { blob: existing.blob, accessToken };
     }
     try {
-      const result = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(accessToken, file.id));
-      await writeCached({
+      const result = await withMediaFetch(
+        () => googleDriveService.downloadMediaFileWithReconnect(accessToken, file.id),
+        undefined,
+        priority,
+      );
+      const saved = await writeCached({
         id: file.id,
         modifiedTime: file.modifiedTime,
         mimeType: file.mimeType,
         blob: result.blob,
       });
+      if (!saved) throw new Error('Drive media could not be saved locally.');
       return result;
     } catch {
       // A cache miss must never prevent the live Drive story from playing.
@@ -170,8 +175,18 @@ export const ensureCachedDriveMedia = (file: DriveMediaFile, accessToken: string
   return task;
 };
 
-const downloadDriveMedia = async (file: DriveMediaFile, accessToken: string) =>
-  Boolean(await ensureCachedDriveMedia(file, accessToken));
+const downloadDriveMedia = async (file: DriveMediaFile, accessToken: string) => {
+  // Visible story requests use positive priorities and jump ahead of this
+  // background cache request without cancelling the download.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await ensureCachedDriveMedia(file, accessToken, -10)) return true;
+    if (attempt < 2) {
+      await waitForCacheResume();
+      await new Promise<void>(resolve => window.setTimeout(resolve, 350 * (attempt + 1)));
+    }
+  }
+  return false;
+};
 
 export interface DriveCacheProgress {
   completed: number;
@@ -193,23 +208,28 @@ const MAX_WARMED_FILES = 48;
 const getCacheWorkerCount = () => {
   const connection = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
   if (connection?.saveData || connection?.effectiveType === 'slow-2g' || connection?.effectiveType === '2g') return 1;
+  // Folder warming is deliberately background work. Keeping it to one worker
+  // on touch/low-memory devices leaves decoder, input, casting and animation
+  // time available while the browser is downloading the rest of the folder.
+  const coarsePointer = typeof window.matchMedia === 'function'
+    && window.matchMedia('(pointer: coarse)').matches;
+  const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory || 8;
+  if (deviceMemory <= 2) return 1;
+  if (coarsePointer) return 3;
   return 4;
 };
 
-// Background warming must yield to the live story when the browser has no
-// connection or the page is hidden. Waiting for the browser events preserves
-// the queue position, so a return to the page continues instead of restarting
-// or marking every remaining file as failed.
+const yieldToBrowser = () => new Promise<void>(resolve => {
+  window.setTimeout(resolve, 0);
+});
+
+// Background warming must wait only for the network. A Story Mode cache job
+// is intentionally allowed to continue while the tab is hidden or another
+// app is in front, so Drive images and videos are ready when the user returns.
 const waitForCacheResume = async () => {
-  while (navigator.onLine === false || document.hidden) {
+  while (navigator.onLine === false) {
     await new Promise<void>(resolve => {
-      const onResume = () => {
-        window.removeEventListener('online', onResume);
-        document.removeEventListener('visibilitychange', onResume);
-        resolve();
-      };
-      window.addEventListener('online', onResume, { once: true });
-      document.addEventListener('visibilitychange', onResume, { once: true });
+      window.addEventListener('online', resolve, { once: true });
     });
   }
 };
@@ -233,16 +253,30 @@ export const cacheDriveMediaFiles = async (files: DriveMediaFile[], accessToken:
         if (await downloadDriveMedia(file, accessToken)) progress.completed += 1;
         else progress.failed += 1;
         options?.onProgress?.({ ...progress });
+        // Do not let a completed fetch/write callback start the next request
+        // in the same task. This small yield keeps button taps, animation and
+        // wireless-display input responsive during a large background sync.
+        await yieldToBrowser();
       }
     };
     await Promise.all(Array.from({ length: Math.min(getCacheWorkerCount(), phaseFiles.length) }, () => worker()));
   };
-  // All callers share this image barrier. A later page cannot start its video
-  // phase while another page is still warming Drive images.
-  const imagePhase = imageWarmChain.then(() => runPhase(imageFiles));
-  imageWarmChain = imagePhase.then(() => undefined, () => undefined);
-  await imagePhase;
-  await runPhase(videoFiles);
+  // Share one background queue across callers, but interleave a video after a
+  // small image group. This keeps image discovery fast while ensuring videos
+  // do not wait for hundreds of images before their local copies begin.
+  const orderedFiles: DriveMediaFile[] = [];
+  let videoIndex = 0;
+  imageFiles.forEach((file, index) => {
+    orderedFiles.push(file);
+    if ((index + 1) % 8 === 0 && videoIndex < videoFiles.length) {
+      orderedFiles.push(videoFiles[videoIndex]);
+      videoIndex += 1;
+    }
+  });
+  orderedFiles.push(...videoFiles.slice(videoIndex));
+  const cachePhase = imageWarmChain.then(() => runPhase(orderedFiles));
+  imageWarmChain = cachePhase.then(() => undefined, () => undefined);
+  await cachePhase;
 };
 
 export const warmDriveFolderCache = async (accessToken: string, folderId = '') => {
@@ -257,37 +291,37 @@ export const cacheDriveMemories = (memories: Memory[], accessToken: string) => {
     .map(memory => ({
       id: memory.driveFileId as string,
       name: memory.title,
-      mimeType: memory.mimeType || (memory.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+      // Some older saved memories have an image MIME type even when their
+      // memory type is video. Keep those files in the video cache phase.
+      mimeType: (memory.type === 'video' || memory.mimeType?.startsWith('video/'))
+        ? (memory.mimeType?.startsWith('video/') ? memory.mimeType : 'video/mp4')
+        : (memory.mimeType || 'image/jpeg'),
       thumbnailUrl: memory.thumbnail || '',
       createdTime: memory.date,
       modifiedTime: memory.modifiedTime,
     } satisfies DriveMediaFile));
-  // Story Mode needs the original video locally so playback can start without
-  // waiting on a second Drive request after the cinematic reel opens.
+  // Story Mode needs the original videos locally too, so playback does not
+  // issue a second Drive request when it reaches the video portion.
   return cacheDriveMediaFiles(files, accessToken, { includeVideos: true });
 };
 
-// Cap how many cached originals become live blob URLs at once. Hundreds of
-// simultaneous object URLs pin decoded images in memory and make large
-// libraries stutter; the reel loads the rest on demand.
-const MAX_HYDRATED_URLS = 60;
+  const MAX_HYDRATED_URLS = 60;
 
 export const hydrateCachedDriveMemories = async (memories: Memory[]) => {
   const objectUrls: string[] = [];
   let remainingUrls = MAX_HYDRATED_URLS;
   const hydrated = await Promise.all(memories.map(async memory => {
-    if (!memory.driveFileId) return memory;
-    if (remainingUrls <= 0) return memory;
-    const cached = await readCached(memory.driveFileId);
-    if (!cached) return memory;
-    if (remainingUrls <= 0) return memory;
-    remainingUrls -= 1;
-    const url = URL.createObjectURL(cached.blob);
-    objectUrls.push(url);
-    // Keep the Drive thumbnail URL stable. The blob URL is only a fast local
-    // source; replacing the thumbnail made a later hydration revoke the URL
-    // while MemoryReel was still decoding it, producing ERR_FILE_NOT_FOUND.
-    return { ...memory, url, mimeType: cached.mimeType };
+      if (!memory.driveFileId) return memory;
+      const cached = await readCached(memory.driveFileId);
+      if (!cached) return memory;
+      if (remainingUrls <= 0) return memory;
+      remainingUrls -= 1;
+      const url = URL.createObjectURL(cached.blob);
+      objectUrls.push(url);
+      // Keep the Drive thumbnail URL stable. The blob URL is only a fast local
+      // source; replacing the thumbnail made a later hydration revoke the URL
+      // while MemoryReel was still decoding it, producing ERR_FILE_NOT_FOUND.
+      return { ...memory, url, mimeType: cached.mimeType };
   }));
   return { memories: hydrated, objectUrls };
 };

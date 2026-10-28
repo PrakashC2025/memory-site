@@ -293,6 +293,7 @@ export const LocalCastReceiver: React.FC = () => {
   const socketRef = useRef<WebSocket | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const receiverStreamRef = useRef<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState('Waiting for phone…');
@@ -317,6 +318,7 @@ export const LocalCastReceiver: React.FC = () => {
       }
       if (message.type === 'cast:offer' && message.description) {
         pendingCandidatesRef.current = [];
+        receiverStreamRef.current = null;
         const peer = new RTCPeerConnection();
         peerRef.current?.close();
         peerRef.current = peer;
@@ -324,12 +326,19 @@ export const LocalCastReceiver: React.FC = () => {
           if (iceEvent.candidate) sendSignal(socketRef.current, { type: 'cast:ice', room: code, candidate: iceEvent.candidate.toJSON() });
         };
         peer.ontrack = trackEvent => {
-          const stream = trackEvent.streams[0] || new MediaStream([trackEvent.track]);
-          if (videoRef.current && stream) {
+          // A shared tab arrives as separate video and audio track events.
+          // Replacing srcObject for the second event restarted the receiver
+          // and made the same Story Mode frame appear repeatedly on TVs.
+          const stream = receiverStreamRef.current || trackEvent.streams[0] || new MediaStream();
+          receiverStreamRef.current = stream;
+          if (!stream.getTracks().some(track => track.id === trackEvent.track.id)) {
+            stream.addTrack(trackEvent.track);
+          }
+          if (videoRef.current && videoRef.current.srcObject !== stream) {
             videoRef.current.srcObject = stream;
             setHasStream(true);
-            if (armedRef.current) void videoRef.current.play().catch(() => undefined);
           }
+          if (armedRef.current) void videoRef.current?.play().catch(() => undefined);
         };
         peer.onconnectionstatechange = () => {
           if (peerRef.current !== peer) return;
@@ -337,6 +346,7 @@ export const LocalCastReceiver: React.FC = () => {
             peerRef.current = null;
             peer.close();
             pendingCandidatesRef.current = [];
+            receiverStreamRef.current = null;
             if (videoRef.current) videoRef.current.srcObject = null;
             setHasStream(false);
             setArmed(false);
@@ -362,6 +372,7 @@ export const LocalCastReceiver: React.FC = () => {
         peerRef.current?.close();
         peerRef.current = null;
         pendingCandidatesRef.current = [];
+        receiverStreamRef.current = null;
         if (videoRef.current) videoRef.current.srcObject = null;
         setHasStream(false);
         setArmed(false);

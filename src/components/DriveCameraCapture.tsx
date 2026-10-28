@@ -3,6 +3,8 @@ import {
   ArrowLeft,
   Camera,
   Check,
+  Crop,
+  Edit3,
   Grid3X3,
   Images,
   Lightbulb,
@@ -10,6 +12,8 @@ import {
   Maximize2,
   Minimize2,
   RefreshCw,
+  RotateCcw,
+  Share2,
   Sparkles,
   Trash2,
   X,
@@ -117,6 +121,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const [capturedGallery, setCapturedGallery] = useState<CapturedPhoto[]>([]);
   const [uploadedFile, setUploadedFile] = useState<DriveMediaFile | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [previewFrame, setPreviewFrame] = useState<CameraCrop>('original');
   const [landscape, setLandscape] = useState(() => typeof window !== 'undefined' && window.innerWidth > window.innerHeight);
   const [deviceLandscape, setDeviceLandscape] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -143,6 +148,13 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const cancelledUploadIdsRef = useRef(new Set<string>());
   const previewRecoveryRef = useRef(new Set<string>());
   capturedGalleryRef.current = capturedGallery;
+
+  const isHorizontalCaptureActive = () => {
+    const windowAngle = Number((window as Window & { orientation?: number }).orientation);
+    return landscape || deviceLandscape
+      || Math.abs(physicalGammaRef.current || 0) > 45
+      || (Number.isFinite(windowAngle) && Math.abs(windowAngle) === 90);
+  };
 
   const updateUploadStatus = (queueId: string, status: CameraUploadStatus) => {
     if (!queueId) return;
@@ -494,7 +506,10 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     const viewfinderAspect = viewfinder && viewfinder.clientHeight > 0
       ? viewfinder.clientWidth / viewfinder.clientHeight
       : video.videoWidth / video.videoHeight;
-    const captureAspect = deviceLandscape && !landscape
+    // Keep the saved pixels aligned with the horizontal camera frame. The
+    // browser can report a portrait viewport while the phone is physically
+    // held sideways, and vice versa, so use both signals here.
+    const captureAspect = isHorizontalCaptureActive()
       ? Math.max(viewfinderAspect, 16 / 9)
       : viewfinderAspect;
     const zoomFactor = hardwareZoomRef.current ? 1 : Math.max(1, zoomRef.current);
@@ -519,11 +534,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   };
 
   const normalizeHorizontalCapture = async (blob: Blob) => {
-    const windowAngle = Number((window as Window & { orientation?: number }).orientation);
-    const heldSideways = !landscape && (deviceLandscape
-      || Math.abs(physicalGammaRef.current || 0) > 45
-      || (Number.isFinite(windowAngle) && Math.abs(windowAngle) === 90));
-    if (!heldSideways || typeof createImageBitmap !== 'function') return blob;
+    if (!isHorizontalCaptureActive() || typeof createImageBitmap !== 'function') return blob;
     let bitmap: ImageBitmap;
     try {
       bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
@@ -763,6 +774,14 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   };
 
   const openReview = () => {
+    // Keep the tap synchronous and recover from a state update that has not
+    // committed yet (common when tapping the thumbnail immediately after a
+    // mobile capture).
+    const photo = capturedPhoto || capturedGalleryRef.current[capturedGalleryRef.current.length - 1];
+    if (!photo) return;
+    setCapturedPhoto(photo);
+    setUploadedFile(photo.uploadedFile || null);
+    setPreviewUrl(photo.url);
     setReviewOpen(true);
     setShowLastShot(true);
   };
@@ -773,6 +792,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     setCapturedPhoto(photo);
     setUploadedFile(photo.uploadedFile || null);
     setPreviewUrl(photo.url);
+    setPreviewFrame('original');
     setEditMode(false);
     setEditRotation(0);
     setEditCrop('original');
@@ -842,6 +862,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       setCapturedGallery(current => [...current, photo]);
       setUploadedFile(null);
       setPreviewUrl(localPreviewUrl);
+      setPreviewFrame('original');
       setEditFilter('natural');
       setEditRotation(0);
       setEditCrop('original');
@@ -885,6 +906,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     setCapturedPhoto(latest);
     setUploadedFile(null);
     setPreviewUrl(latest.url);
+    setPreviewFrame('original');
     setShowLastShot(true);
     setReviewOpen(false);
     setError('');
@@ -1058,6 +1080,13 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     };
     reader.onerror = () => setError('The captured photo is saved locally, but this browser could not display its preview.');
     reader.readAsDataURL(photo.sourceBlob);
+  };
+
+  const handlePreviewLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget;
+    if (!image.naturalWidth || !image.naturalHeight) return;
+    const aspect = image.naturalWidth / image.naturalHeight;
+    setPreviewFrame(aspect > 1.08 ? 'landscape' : aspect < 0.92 ? 'portrait' : 'square');
   };
 
   const toggleCameraFullscreen = async () => {
@@ -1240,8 +1269,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
               <button type="button" onClick={closeReview} aria-label="Close photo review"><X size={19} /></button>
             </div>
             <div className="memoriya-camera-review-body">
-              <div className={`memoriya-camera-review-preview is-crop-${editMode ? editCrop : 'original'}`}>
-                <img src={capturedPhoto.url} alt="Captured memory preview" onError={() => recoverPreview(capturedPhoto)} style={{ filter: CAMERA_FILTERS[editMode ? editFilter : 'natural'].css, transform: `rotate(${editRotation}deg)` }} />
+              <div className={`memoriya-camera-review-preview is-crop-${editMode ? editCrop : 'original'}${!editMode && previewFrame === 'landscape' ? ' is-preview-landscape' : ''}`}>
+                <img src={capturedPhoto.url} alt="Captured memory preview" onLoad={handlePreviewLoad} onError={() => recoverPreview(capturedPhoto)} style={{ filter: CAMERA_FILTERS[editMode ? editFilter : 'natural'].css, transform: `rotate(${editRotation}deg)` }} />
               </div>
               {recentGallery.length > 1 && (
                 <div className="memoriya-camera-review-gallery" aria-label="All captured photos">
