@@ -4789,53 +4789,55 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   // Avoid polling every ten seconds: it repeatedly checks Drive while the
   // story is playing and can trigger unnecessary requests on low-data phones.
 
+  const warmSelectedDriveAudio = (song: DriveAudioFile, cacheKey: string, token: string, account: 'primary' | 'secondary' = 'primary') => {
+    const existing = driveCacheTasksRef.current.get(cacheKey);
+    if (existing) return existing;
+    // Selecting a Drive song must cache it immediately instead of waiting
+    // behind the full folder warm-up. That makes the tapped song playable
+    // offline even when the phone leaves Story Mode before the batch ends.
+    const task = warmDriveAudioCache(song, cacheKey, token, account);
+    driveCacheTasksRef.current.set(cacheKey, task);
+    void task.finally(() => {
+      if (driveCacheTasksRef.current.get(cacheKey) === task) driveCacheTasksRef.current.delete(cacheKey);
+    });
+    return task;
+  };
+
   const chooseDriveSong = (song: DriveAudioFile) => {
     const isSecondaryDriveSong = secondaryDriveSongs.some(item => item.id === song.id);
+    const account: 'primary' | 'secondary' = isSecondaryDriveSong ? 'secondary' : 'primary';
     const token = isSecondaryDriveSong
       ? secondaryDriveAccessTokenRef.current
       : driveAccessTokenRef.current || driveAccessToken;
-    const trackId = `drive-audio-${song.id}`;
-    const existingTrack = musicQueue.find(item => item.driveFileId === song.id || item.id === trackId);
-    if (existingTrack) {
-      audioManuallyStoppedRef.current = true;
-      audioPauseGuardRef.current = true;
-      audioPlayerRef.current?.pause();
-      audioPauseGuardRef.current = false;
-      setAudioPlaying(false);
-      setMusicName(existingTrack.label);
-      setMusicQueue(current => [existingTrack, ...current.filter(item => item.id !== existingTrack.id)]);
-      setMusicError('');
-      return;
-    }
-    setMusicError('');
     const cacheKey = driveAudioCacheKey(song);
-    // Queue insertion is immediate. The authenticated Drive URL lets the
-    // native audio element start directly from the user's tap on mobile and
-    // TV, while the IndexedDB cache warms without blocking the UI.
+    const existingTrack = musicQueueRef.current.find(item => item.driveFileId === song.id);
     const selectedTrack = {
-      id: trackId,
-      src: token ? driveAudioUrl(song, token) : '',
+      ...(existingTrack || { id: `drive-audio-${song.id}` }),
+      src: existingTrack?.src || (token ? driveAudioUrl(song, token) : ''),
       label: song.name,
-      source: 'drive',
+      source: 'drive' as const,
       driveFileId: song.id,
       cacheKey,
-      driveAccount: isSecondaryDriveSong ? 'secondary' : 'primary',
+      driveAccount: account,
     } satisfies MusicQueueItem;
+    setMusicError('');
     pendingMusicResumeRef.current = null;
-    audioRecoveryRef.current.delete(trackId);
+    audioRecoveryRef.current.delete(selectedTrack.id);
     audioManuallyStoppedRef.current = true;
     audioPauseGuardRef.current = true;
     audioPlayerRef.current?.pause();
     audioPauseGuardRef.current = false;
     setAudioPlaying(false);
     setMusicName(song.name);
-    const nextQueue = [selectedTrack, ...musicQueueRef.current.filter(item => item.driveFileId !== song.id && item.id !== trackId)];
+    const nextQueue = [selectedTrack, ...musicQueueRef.current.filter(item => item.driveFileId !== song.id)];
     musicQueueRef.current = nextQueue;
     setMusicQueue(nextQueue);
     setCurrentMusic(selectedTrack.id);
     audioManuallyStoppedRef.current = false;
+    // Play and cache from the same tap. The direct Drive URL starts instantly;
+    // the local copy is written for offline playback in parallel.
     void playStoryAudio(true);
-    if (token) void warmDriveAudioCacheOnce(song, cacheKey, token);
+    if (token) void warmSelectedDriveAudio(song, cacheKey, token, account);
   };
 
   const uploadSongsToDrive = async (files: FileList | File[]) => {
@@ -4933,7 +4935,10 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
   const playStoryAudio = async (fromUserGesture = false) => {
     const element = audioPlayerRef.current;
-    const sourceTrack = musicQueue.find(track => track.id === currentMusicIdRef.current) || musicQueue[0];
+    // Use the ref so a Drive song selected in the same tap is visible here
+    // before React has re-rendered the queue state.
+    const queue = musicQueueRef.current;
+    const sourceTrack = queue.find(track => track.id === currentMusicIdRef.current) || queue[0];
     const source = sourceTrack?.src || '';
     if (!element || (!source && sourceTrack?.source !== 'drive') || audioManuallyStoppedRef.current) return false;
     failedMusicIdsRef.current.delete(sourceTrack.id);
@@ -4990,7 +4995,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           ? 'Google Drive authorization expired. Tap Reconnect Drive, then play the queued song again.'
           : 'Drive audio could not be downloaded for playback. Check the file format and try again.')
         : 'Tap Play music once to allow audio on this device.');
-      if (sourceTrack && musicQueue.length > 1 && isSkippableAudioFailure(error)) {
+      if (sourceTrack && queue.length > 1 && isSkippableAudioFailure(error)) {
         failedMusicIdsRef.current.add(sourceTrack.id);
         void advanceMusic();
       }
