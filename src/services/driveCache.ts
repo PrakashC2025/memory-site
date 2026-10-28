@@ -12,21 +12,50 @@ interface CachedDriveMedia {
   blob: Blob;
 }
 
+const OPEN_TIMEOUT_MS = 10_000;
+const REQUEST_TIMEOUT_MS = 20_000;
+
 const openCache = () => new Promise<IDBDatabase | null>(resolve => {
   if (typeof indexedDB === 'undefined') {
     resolve(null);
     return;
   }
-  const request = indexedDB.open(DB_NAME, 1);
-  request.onupgradeneeded = () => {
-    request.result.createObjectStore(STORE_NAME, { keyPath: 'id' });
+  let settled = false;
+  const finish = (db: IDBDatabase | null) => {
+    if (settled) return;
+    settled = true;
+    window.clearTimeout(timeout);
+    resolve(db);
   };
-  request.onsuccess = () => resolve(request.result);
-  request.onerror = () => resolve(null);
+  const timeout = window.setTimeout(() => finish(null), OPEN_TIMEOUT_MS);
+  let request: IDBOpenDBRequest;
+  try {
+    request = indexedDB.open(DB_NAME, 1);
+  } catch {
+    finish(null);
+    return;
+  }
+  request.onupgradeneeded = () => {
+    if (!request.result.objectStoreNames.contains(STORE_NAME)) {
+      request.result.createObjectStore(STORE_NAME, { keyPath: 'id' });
+    }
+  };
+  request.onsuccess = () => {
+    if (settled) {
+      request.result.close();
+      return;
+    }
+    finish(request.result);
+  };
+  request.onerror = () => finish(null);
+  request.onblocked = () => finish(null);
 });
 
 let cacheDbPromise: Promise<IDBDatabase | null> | undefined;
-const getCache = () => cacheDbPromise || (cacheDbPromise = openCache());
+const getCache = () => cacheDbPromise || (cacheDbPromise = openCache().then(db => {
+  if (!db) cacheDbPromise = undefined;
+  return db;
+}));
 const inFlightDownloads = new Map<string, Promise<{ blob: Blob; accessToken: string } | null>>();
 let imageWarmChain: Promise<void> = Promise.resolve();
 
@@ -34,9 +63,21 @@ const readCached = async (id: string) => {
   const db = await getCache();
   if (!db) return undefined;
   return new Promise<CachedDriveMedia | undefined>(resolve => {
-    const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(id);
-    request.onsuccess = () => resolve(request.result as CachedDriveMedia | undefined);
-    request.onerror = () => resolve(undefined);
+    let settled = false;
+    const finish = (value?: CachedDriveMedia) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve(value);
+    };
+    const timeout = window.setTimeout(() => finish(undefined), REQUEST_TIMEOUT_MS);
+    try {
+      const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(id);
+      request.onsuccess = () => finish(request.result as CachedDriveMedia | undefined);
+      request.onerror = () => finish(undefined);
+    } catch {
+      finish(undefined);
+    }
   });
 };
 
@@ -50,11 +91,43 @@ const writeCached = async (item: CachedDriveMedia) => {
   const db = await getCache();
   if (!db) return false;
   return new Promise<boolean>(resolve => {
-    const request = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put(item);
-    request.onsuccess = () => resolve(true);
-    request.onerror = () => resolve(false);
+    let settled = false;
+    const finish = (saved: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve(saved);
+    };
+    const timeout = window.setTimeout(() => finish(false), REQUEST_TIMEOUT_MS);
+    try {
+      const request = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put(item);
+      request.onsuccess = () => finish(true);
+      request.onerror = () => finish(false);
+    } catch {
+      finish(false);
+    }
   });
 };
+
+// A cached File is still the same picture when Drive did not supply (or the
+// saved snapshot lost) a modifiedTime. Requiring both timestamps to match made
+// older libraries download every original again on each refresh.
+const cacheMatchesFile = (cached: CachedDriveMedia, modifiedTime?: string) =>
+  !cached.modifiedTime || !modifiedTime || cached.modifiedTime === modifiedTime;
+
+export const writeCachedDriveMedia = (
+  file: { id: string; modifiedTime?: string; mimeType: string },
+  blob: Blob,
+) => {
+  if (!file.id || !blob.size) return Promise.resolve(false);
+  return writeCached({
+    id: file.id,
+    modifiedTime: file.modifiedTime,
+    mimeType: file.mimeType || blob.type,
+    blob,
+  });
+};
+
 
 export const deleteCachedDriveMedia = async (id: string) => {
   if (!id) return;
@@ -73,7 +146,7 @@ export const ensureCachedDriveMedia = (file: DriveMediaFile, accessToken: string
   if (existingTask) return existingTask;
   const task = (async () => {
     const existing = await readCached(file.id);
-    if (existing && existing.modifiedTime === file.modifiedTime) {
+    if (existing && cacheMatchesFile(existing, file.modifiedTime)) {
       return { blob: existing.blob, accessToken };
     }
     try {

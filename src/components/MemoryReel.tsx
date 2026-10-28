@@ -9,8 +9,8 @@ import { beginHeavyVisualPause } from '../utils/visualActivity';
 import { googleDriveService, isAudioDriveFile, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
 import { readDriveAuthRequired, saveDriveAccessToken, saveDriveAuthRequired } from '../services/driveLibrary';
 import { searchOpenSourceMusic, type OpenSourceMusicTrack } from '../services/openSourceMusic';
-import { cacheDriveMediaFiles, readCachedDriveMedia } from '../services/driveCache';
-import { readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
+import { cacheDriveMediaFiles, readCachedDriveMedia, writeCachedDriveMedia } from '../services/driveCache';
+import { readCachedStoryMedia, requestPersistentStoryStorage, writeCachedStoryMedia } from '../services/storyMediaCache';
 import { withMediaFetch } from '../utils/mediaQueue';
 import { isAndroidTvBrowser, isLegacyTvBrowser } from '../utils/legacyBrowser';
 import { getMediaFrameKind, getMediaFrameSize } from '../utils/mediaFrames';
@@ -1798,7 +1798,7 @@ export class MemoryReelController {
       readCachedDriveMedia(item.driveFileId),
       readCachedStoryMedia(cacheKey),
     ]);
-    const validDriveCache = driveCached && (!item.modifiedTime || driveCached.modifiedTime === item.modifiedTime)
+    const validDriveCache = driveCached && (!item.modifiedTime || !driveCached.modifiedTime || driveCached.modifiedTime === item.modifiedTime)
       ? driveCached.blob
       : null;
     const cached = validDriveCache || (!item.modifiedTime ? storyCached : null);
@@ -1825,12 +1825,19 @@ export class MemoryReelController {
     const blob = result.blob;
     const objectUrl = URL.createObjectURL(blob);
     this.objectUrls.add(objectUrl);
-    // Reveal the sharp original immediately. IndexedDB persistence is useful
-    // for the next visit, but must never hold the current frame in a blurry
-    // preview while the cache write is finishing.
+    // Reveal the sharp original immediately. Persist it in the same Drive
+    // cache used by the folder warm-up so it is never downloaded a second
+    // time and is instantly available on the next refresh/offline.
     if (!cached) {
       void (async () => {
-        await writeCachedStoryMedia(cacheKey, blob, item.type === 'video' ? 'video/mp4' : blob.type);
+        const savedToDriveCache = await writeCachedDriveMedia({
+          id: item.driveFileId!,
+          modifiedTime: item.modifiedTime,
+          mimeType: blob.type || (item.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+        }, blob);
+        if (!savedToDriveCache) {
+          await writeCachedStoryMedia(cacheKey, blob, item.type === 'video' ? 'video/mp4' : blob.type);
+        }
       })();
     }
     return objectUrl;
@@ -1842,7 +1849,7 @@ export class MemoryReelController {
       readCachedDriveMedia(item.driveFileId),
       readCachedStoryMedia(item.driveFileId),
     ]);
-    const validDriveCache = driveCached && (!item.modifiedTime || driveCached.modifiedTime === item.modifiedTime)
+    const validDriveCache = driveCached && (!item.modifiedTime || !driveCached.modifiedTime || driveCached.modifiedTime === item.modifiedTime)
       ? driveCached.blob
       : null;
     const cached = validDriveCache || (!item.modifiedTime ? storyCached : null);
@@ -1971,8 +1978,18 @@ export class MemoryReelController {
   async resumeAudioAnalysis() {
     const analysisAudio = this.analysisAudio || this.audio;
     if (!analysisAudio) return;
-    if (!this.audioContext) this.connectAudioAnalysis();
-    if (this.audioContext?.state === 'suspended') await this.audioContext.resume();
+    const userActivated = navigator.userActivation?.isActive === true;
+    // Re-routing an already-playing element into a suspended AudioContext
+    // makes the song silent on phones. Only build the analyser graph when we
+    // can also resume the context from a user gesture.
+    if (!this.audioContext) {
+      if (!userActivated) return;
+      this.connectAudioAnalysis();
+    }
+    if (this.audioContext?.state === 'suspended') {
+      if (!userActivated) return;
+      await this.audioContext.resume();
+    }
   }
 
   private playMutedVideo(video: HTMLVideoElement) {
@@ -3256,7 +3273,7 @@ const resolveReelSources = async (memories: Memory[], signal: AbortSignal, drive
     const driveMediaUrl = localMediaUrl || driveOriginalUrl || memory.url;
     // Drive thumbnails are safe, fast first paint. Originals are fetched by
     // the controller after the thumbnail is visible.
-    const preview = video ? driveMediaUrl || memory.thumbnail : memory.thumbnail || driveMediaUrl;
+    const preview = video ? driveMediaUrl || memory.thumbnail : localMediaUrl || memory.thumbnail || driveMediaUrl;
     const fallbackSrc = driveBacked && driveOriginalUrl && driveOriginalUrl !== preview
       ? driveOriginalUrl
       : (!video && driveMediaUrl && driveMediaUrl !== preview ? driveMediaUrl : undefined);
@@ -4371,7 +4388,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         // Do not re-run FFmpeg or touch Drive when Story Mode is reopened.
         if (cached) return true;
         await waitForNetworkResume();
-        const downloaded = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id));
+        const downloaded = await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id), undefined, 25);
         if (downloaded?.accessToken && downloaded.accessToken !== token) {
           if (account === 'primary') {
             driveAccessTokenRef.current = downloaded.accessToken;
@@ -4447,11 +4464,14 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     // Count the cache before starting the serial chain. A song may already be
     // playable from a previous session (or another tab), so progress must not
     // begin at zero and under-report what the player can already use.
-    const countPlayableSongs = async () => {
-      const cached = await Promise.all(songs.map(song => readCachedStoryMedia(driveAudioCacheKey(song))));
-      return cached.reduce((count, blob) => count + (blob ? 1 : 0), 0);
-    };
-    let completed = await countPlayableSongs();
+    const cachedAtStart = new Map<string, boolean>();
+    const cached = await Promise.all(songs.map(async song => {
+      const cacheKey = driveAudioCacheKey(song);
+      const blob = await readCachedStoryMedia(cacheKey);
+      cachedAtStart.set(cacheKey, Boolean(blob));
+      return blob;
+    }));
+    let completed = cached.reduce((count, blob) => count + (blob ? 1 : 0), 0);
     let failed = 0;
     setDriveCacheProgress(current => sameBatch
       ? { ...current, completed, total: songs.length }
@@ -4459,11 +4479,14 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     for (let index = 0; index < songs.length; index += 1) {
       const cacheKey = driveAudioCacheKey(songs[index]);
       const cachedSuccessfully = await warmDriveAudioCacheOnce(songs[index], cacheKey, token, account);
-      // Re-count the actual IDB cache after each item. This handles an item
-      // that was cached by another queued request and keeps the displayed
-      // playable total equal to what the audio player can open now.
-      completed = await countPlayableSongs();
-      const isPlayable = Boolean(await readCachedStoryMedia(cacheKey));
+      // Check only the current key instead of re-reading the whole folder on
+      // every step; a 60-song folder otherwise performs thousands of IDB reads
+      // and makes the offline counter look frozen.
+      const isPlayable = cachedSuccessfully || Boolean(await readCachedStoryMedia(cacheKey));
+      if (isPlayable && !cachedAtStart.get(cacheKey)) {
+        cachedAtStart.set(cacheKey, true);
+        completed += 1;
+      }
       if (!isPlayable && !cachedSuccessfully) failed += 1;
       setDriveCacheFailures(Array.from(driveCacheFailuresRef.current.values()));
       setDriveCacheProgress({
@@ -4557,7 +4580,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
     const createSource = async (token: string, forceConversion = false) => {
       const cached = await readCachedStoryMedia(cacheKey);
-      const sourceBlob = cached || await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id).then(result => result.blob));
+      const sourceBlob = cached || await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id).then(result => result.blob), undefined, 25);
       const playableBlob = await preparePlayableAudioBlob(sourceBlob, song, forceConversion);
       if (!cached || playableBlob !== cached) await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
       const objectUrl = URL.createObjectURL(playableBlob);
@@ -4717,6 +4740,9 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     driveSongsRequestRef.current = true;
     setDriveSongsLoading(true);
     setMusicError('');
+    // Ask the browser to keep large audio blobs instead of evicting them when
+    // the phone is low on space. This is best-effort and safe to ignore.
+    void requestPersistentStoryStorage();
     try {
       // Loading is an explicit user action. A cached story can still be
       // playing after the short-lived Drive session has disappeared, so ask
@@ -4957,17 +4983,32 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           element.load();
         }
         audioPauseGuardRef.current = false;
+        // Build/resume the analyser only after the new source is attached and
+        // while the tap is still active. Doing it from onPlaying later can
+        // route sound into a suspended AudioContext and mute the song.
+        if (fromUserGesture) void controllerRef.current?.resumeAudioAnalysis().catch(() => undefined);
         applyPendingMusicResume();
         try {
-          await playAudioWithTimeout(element);
+          // Drive can redirect and buffer slowly on a phone; tearing the
+          // element down after 12s made a stream that was about to start look
+          // like a broken file. Give the authenticated stream enough time and
+          // accept a late start instead of immediately replacing it.
+          await playAudioWithTimeout(element, 30_000);
           if (element.error) throw new Error('Drive audio format was rejected by this browser.');
           audioRecoveryRef.current.delete(sourceTrack.id);
           setAudioPlaying(true);
           setMusicError('');
           return true;
-        } catch {
+        } catch (directError) {
+          if (!element.paused && !element.error) {
+            audioRecoveryRef.current.delete(sourceTrack.id);
+            setAudioPlaying(true);
+            setMusicError('');
+            return true;
+          }
           // The direct stream may fail on an older browser; use the local
           // object URL fallback below.
+          void directError;
         }
       }
       // If the authenticated Drive stream was rejected by this browser, force
