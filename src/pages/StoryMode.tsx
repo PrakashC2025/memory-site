@@ -272,7 +272,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
             const key = memory.driveFileId || memory.id;
             return !knownIds.has(key) && (!memory.driveFileId || !removed.has(memory.driveFileId));
           });
-          saveDriveMemories([...known, ...freshPublished], token, folderId);
+          known = [...known, ...freshPublished].sort(compareDriveMemories); knownDriveMemoriesRef.current = known; saveDriveMemories(known, token, folderId);
           setDriveMemories(current => {
             const currentById = new Map(current.map(memory => [memory.driveFileId || memory.id, memory]));
             known.forEach(memory => currentById.set(memory.driveFileId || memory.id, memory));

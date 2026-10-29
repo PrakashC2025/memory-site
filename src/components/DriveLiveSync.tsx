@@ -38,7 +38,7 @@ const DriveLiveSync: React.FC = () => {
       // payload, or reject an old cursor. A fresh metadata-only folder snapshot
       // keeps additions and deletions live without downloading the
       // media before it is needed.
-      const snapshotFiles = await googleDriveService.listAllMedia(accessToken, folderId);
+      const preScanIds = new Set(readDriveMemories().map(m => m.driveFileId).filter(Boolean)); const snapshotFiles = await googleDriveService.listAllMedia(accessToken, folderId === 'drive-root' ? '' : folderId);
       const snapshotVisualFiles = snapshotFiles.filter(file => isVisualMedia(file) && !file.trashed);
       const current = readDriveMemories();
       const currentByDriveId = new Map(
@@ -62,7 +62,7 @@ const DriveLiveSync: React.FC = () => {
       const importedIds = new Set(imported.map(memory => memory.driveFileId).filter(Boolean));
       const snapshotIds = new Set(snapshotVisualFiles.map(file => file.id));
       const removed = new Set(current
-        .filter(memory => memory.driveFileId && !snapshotIds.has(memory.driveFileId))
+        .filter(memory => memory.driveFileId && preScanIds.has(memory.driveFileId) && !snapshotIds.has(memory.driveFileId))
         .map(memory => memory.driveFileId as string));
       const filesToCache = snapshotVisualFiles.filter(file => {
         const existing = currentByDriveId.get(file.id);

@@ -276,7 +276,7 @@ export class GoogleDriveService {
         q: "(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false",
         pageSize: '40',
         orderBy: 'createdTime desc',
-        fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
+        fields: 'nextPageToken,files(id,name,mimeType,parents,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
         includeItemsFromAllDrives: 'true',
         supportsAllDrives: 'true',
       });
@@ -302,7 +302,7 @@ export class GoogleDriveService {
     return allFiles;
   }
 
-  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40, orderBy = 'createdTime desc'): Promise<DriveMediaPage> {
+  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40, orderBy = 'createdTime desc'): Promise<DriveMediaPage> { folderId = folderId === 'drive-root' ? '' : folderId;
     const locationQuery = folderId ? `'${folderId}' in parents and ` : '';
     const params = new URLSearchParams({
       q: `${locationQuery}(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false`,
