@@ -302,7 +302,7 @@ export class GoogleDriveService {
     return allFiles;
   }
 
-  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40, orderBy = 'createdTime desc'): Promise<DriveMediaPage> { folderId = folderId === 'drive-root' ? '' : folderId; folderId = folderId === 'drive-root' ? '' : folderId;
+  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40, orderBy = 'createdTime desc'): Promise<DriveMediaPage> { folderId = folderId === 'drive-root' ? '' : folderId; folderId = folderId === 'drive-root' ? '' : folderId; folderId = folderId === 'drive-root' ? '' : folderId;
     const locationQuery = folderId ? `'${folderId}' in parents and ` : '';
     const params = new URLSearchParams({
       q: `${locationQuery}(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false`,
