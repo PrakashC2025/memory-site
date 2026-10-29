@@ -20,6 +20,9 @@ import { deleteCachedStoryMedia } from '../services/storyMediaCache';
 const isVisualMedia = (file: DriveMediaFile) =>
   isVisualDriveFile(file);
 
+const normalizeFolderId = (folderId?: string) =>
+  !folderId || folderId === 'drive-root' ? '' : folderId;
+
 const DriveLiveSync: React.FC = () => {
   useEffect(() => {
     let active = true;
@@ -34,11 +37,16 @@ const DriveLiveSync: React.FC = () => {
     window.addEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
 
     const reconcileFolderSnapshot = async (accessToken: string, folderId: string) => {
-      // The Drive changes feed can occasionally lag, omit a usable file
-      // payload, or reject an old cursor. A fresh metadata-only folder snapshot
-      // keeps additions and deletions live without downloading the
-      // media before it is needed.
-      const preScanIds = new Set(readDriveMemories().map(m => m.driveFileId).filter(Boolean)); const snapshotFiles = await googleDriveService.listAllMedia(accessToken, folderId === 'drive-root' ? '' : folderId);
+      // Record the set of Drive IDs present BEFORE starting the network scan.
+      // Any photo uploaded to Drive or captured via DriveCameraCapture while
+      // listAllMedia is in flight was NOT in preScanIds and must never be
+      // treated as deleted if Drive's index has not yet surfaced it.
+      const preScanIds = new Set(
+        readDriveMemories()
+          .map(memory => memory.driveFileId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const snapshotFiles = await googleDriveService.listAllMedia(accessToken, folderId);
       const snapshotVisualFiles = snapshotFiles.filter(file => isVisualMedia(file) && !file.trashed);
       const current = readDriveMemories();
       const currentByDriveId = new Map(
@@ -61,6 +69,8 @@ const DriveLiveSync: React.FC = () => {
         });
       const importedIds = new Set(imported.map(memory => memory.driveFileId).filter(Boolean));
       const snapshotIds = new Set(snapshotVisualFiles.map(file => file.id));
+      // Only remove files that existed BEFORE the scan started and are now absent
+      // from the snapshot; never remove a freshly uploaded photo published mid-scan.
       const removed = new Set(current
         .filter(memory => memory.driveFileId && preScanIds.has(memory.driveFileId) && !snapshotIds.has(memory.driveFileId))
         .map(memory => memory.driveFileId as string));
@@ -73,6 +83,11 @@ const DriveLiveSync: React.FC = () => {
 
     const sync = async () => {
       if (!active || !dueForSync()) return;
+      // Yield to Story Mode's fast 2s changes-feed poller while the camera wall
+      // is active so a full-library scan never blocks live Story Mode insertions.
+      if (document.documentElement.classList.contains('heavy-visual-paused') || document.querySelector('[data-reel-state]')) {
+        return;
+      }
       if (driveAuthRequiredRef.current || readDriveAuthRequired() || !acquireDriveSyncLock()) return;
       lastSyncAt = Date.now();
       let accessToken = readDriveAccessToken();
@@ -80,15 +95,13 @@ const DriveLiveSync: React.FC = () => {
         releaseDriveSyncLock();
         return;
       }
-      const folderId = readDriveFolderId();
+      const folderId = normalizeFolderId(readDriveFolderId());
       try {
         let result: Awaited<ReturnType<typeof reconcileFolderSnapshot>>;
         try {
           result = await reconcileFolderSnapshot(accessToken, folderId);
         } catch (error) {
           if (!isDriveAuthorizationError(error)) throw error;
-          // Access tokens expire while the TV/story screen stays open. Try a
-          // prompt-free GIS refresh before giving up on live synchronization.
           accessToken = await googleDriveService.refreshAccessToken(undefined, true);
           saveDriveAccessToken(accessToken);
           driveAuthRequiredRef.current = false;
@@ -104,19 +117,12 @@ const DriveLiveSync: React.FC = () => {
           ? cacheDriveMediaFiles(filesToCache, accessToken)
           : Promise.resolve();
         if (removed.size || imported.length) {
-          // A camera upload can publish between the snapshot request and this
-          // write. Re-read the shared snapshot immediately before publishing
-          // so an older background scan cannot erase that fresh photo.
           const latest = mergeDriveMemories(readDriveMemories(), imported, removed);
           saveDriveMemories(latest, accessToken, folderId);
         }
         if (filesToCache.length) {
-          // The first event makes new metadata visible immediately. Persist
-          // the completed cache silently; dispatching the same metadata again
-          // makes Story Mode rebuild/redecode unchanged cards while the camera
-          // is moving.
           void cachePromise.then(() => {
-            if (active && readDriveFolderId() === folderId && readDriveAccessToken() === accessToken && (removed.size || imported.length)) {
+            if (active && normalizeFolderId(readDriveFolderId()) === folderId && readDriveAccessToken() === accessToken && (removed.size || imported.length)) {
               saveDriveMemories(readDriveMemories(), accessToken, folderId, false);
             }
           });
@@ -132,10 +138,6 @@ const DriveLiveSync: React.FC = () => {
       }
     };
 
-    // Drive scans are the most expensive work this page does. Keep the
-    // background reconciler on a long cadence and cooldown rapid-fire triggers
-    // (focus / online / visibility) so a large library never blocks the UI or
-    // stacks up overlapping Drive requests.
     const SYNC_INTERVAL_MS = 60000;
     const SYNC_COOLDOWN_MS = 45000;
     let lastSyncAt = 0;
@@ -158,7 +160,7 @@ const DriveLiveSync: React.FC = () => {
       syncNow = null;
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('online', onOnline);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
     };
   }, []);
