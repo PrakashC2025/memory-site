@@ -3059,9 +3059,7 @@ export class MemoryReelController {
     // use its binary search here instead of walking every card on every frame.
     // This is the other large-library hitch: 1000 cards meant 1000 additions
     // per animation frame before this path was indexed.
-    let shot = activeShotIndex;
-    this.promoteImagesNear(shot);
-    const local = Math.max(0, time - this.shotStartAt(shot));
+    let shot = activeShotIndex; const local = Math.max(0, time - this.shotStartAt(shot)); if (local >= this.options.move) this.promoteImagesNear(shot);
     const shotHold = this.cardHold(this.cards[shot]);
     let from = this.target(shot);
     let to = from;
@@ -3277,7 +3275,7 @@ export class MemoryReelController {
         this.clearCandidates();
         // Orbit culls to the nearest N cards; every other template culls by
         // radius. Both search outward from the camera only.
-        this.collectWithin(camera.x, camera.y, renderRadius, this.options.template === 'orbit' ? orbitVisibleLimit : 1);
+        this.collectWithin(camera.x, camera.y, renderRadius, orbitVisibleLimit);
         let nearest = -1;
         let nearestDistance = Infinity;
         for (const index of this.candidates) {
@@ -3320,18 +3318,14 @@ export class MemoryReelController {
       // The previous implementation still visited every loaded card here,
       // which made a 300-1000 photo Drive folder feel like it was hanging.
       const gridTemplate = isGridTemplate(this.options.template);
-      const visibleIndices = gridTemplate
-        ? this.getAllCardIndices()
-        : new Set<number>(nearestOrbitCards || this.candidates);
+      const visibleIndices = new Set<number>(nearestOrbitCards || this.candidates);
       visibleIndices.add(shot);
       visibleIndices.add(focusedIndex);
       this.renderedCardIndices.forEach(index => {
         if (visibleIndices.has(index)) return;
         const card = this.cards[index];
         if (!card) return;
-        if (this.options.template === 'orbit') {
-          card.card.remove();
-        } else if (card.card.dataset.reelHidden !== 'true') {
+        if (card.card.dataset.reelHidden !== 'true') {
           card.card.dataset.reelHidden = 'true';
           card.card.style.opacity = '0';
           card.card.style.filter = 'none';
@@ -4249,9 +4243,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     memory.mimeType || '',
     memory.modifiedTime || '',
     memory.date,
-    memory.driveFileId
-      ? (memory.url?.startsWith('blob:') || memory.thumbnail?.startsWith('blob:') ? 'cached-local' : '')
-      : memory.url,
+    memory.driveFileId?'drive':memory.url,
   ].join(':')).join('|');
   resolvedSourcesRef.current = resolvedSources;
 
@@ -5660,7 +5652,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
             <div className="memory-reel-folder-summary">
               <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
-              <span className="memory-reel-folder-count" aria-live="polite">{Math.min(storyAvailableCount || visualMemories.length, Math.max(storyLoadedCount, resolvedSources.length))}/{storyAvailableCount || visualMemories.length} loaded · {visualMemories.filter(m => m.type !== "video").length} pics · {visualMemories.filter(m => m.type === "video").length} videos</span>
+              <span className="memory-reel-folder-count" aria-live="polite">{Math.min(storyAvailableCount||visualMemories.length,Math.max(storyLoadedCount,resolvedSources.length))}/{storyAvailableCount||visualMemories.length} loaded · {visualMemories.filter(m=>m.type!=="video").length} pics · {visualMemories.filter(m=>m.type==="video").length} videos</span>
             </div>
           )}
           <button type="button" onClick={toggleLoop} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
