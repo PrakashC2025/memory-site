@@ -189,7 +189,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       try {
         let files: Awaited<ReturnType<typeof googleDriveService.listAllMedia>> = [];
         let removedFromFeed: string[] = [];
-        const fullReconcileDue = !lastFullReconcileAt || Date.now() - lastFullReconcileAt >= 30000;
+        const fullReconcileDue = !lastFullReconcileAt || Date.now() - lastFullReconcileAt >= 60000;
         let fullSnapshot = !changePageToken || fullReconcileDue;
         const readDriveUpdates = async () => {
           if (!changePageToken || fullReconcileDue) {
@@ -332,10 +332,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       }
     };
 
-    const LIVE_STORY_POLL_MS = 8000;
+    const LIVE_STORY_POLL_MS = 5000;
     const LIVE_STORY_COOLDOWN_MS = 6000;
-    const LIVE_STORY_FAST_POLL_MS = 2000;
-    const LIVE_STORY_ACTIVE_COOLDOWN_MS = 1000;
+        const LIVE_STORY_ACTIVE_COOLDOWN_MS = 4000;
     let lastSyncAt = 0;
 
     const retryDrive = () => {
@@ -361,11 +360,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     document.addEventListener('visibilitychange', onVisibilityChange);
     void syncDrive();
     const interval = window.setInterval(retryDrive, LIVE_STORY_POLL_MS);
-    const fastInterval = window.setInterval(retryDrive, LIVE_STORY_FAST_POLL_MS);
     return () => {
       active = false;
       window.clearInterval(interval);
-      window.clearInterval(fastInterval);
       window.removeEventListener('online', retryDrive);
       window.removeEventListener('focus', retryDrive);
       document.removeEventListener('visibilitychange', onVisibilityChange);

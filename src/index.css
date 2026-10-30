@@ -14290,3 +14290,126 @@ html:not(.legacy-tv-browser) .memory-reel-stage .card.active {
     padding-right: 12px !important;
   }
 }
+
+/* ===========================================================================
+   Memoriya polish layer (final overrides)
+   - Memory tree: reliably scrollable, light enough to scroll at 60fps
+   - Cards / settings / events: calmer, more consistent look
+   - Performance: containment, no always-on heavy filters
+   =========================================================================== */
+:root {
+  --mem-radius: 14px;
+  --mem-border: rgba(255, 255, 255, 0.11);
+  --mem-surface: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.025));
+  --mem-shadow: 0 14px 40px rgba(0, 0, 0, 0.32);
+  --mem-ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html { scroll-behavior: auto; -webkit-tap-highlight-color: transparent; }
+* { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.28) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.24); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4); background-clip: padding-box; border: 2px solid transparent; }
+:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+
+/* ---- Memory tree: scrolling ------------------------------------------------ */
+html:not(.legacy-tv-browser) .memory-tree-page {
+  overflow: visible;          /* the page must never become a second scroller */
+  overflow-x: clip;
+}
+html:not(.legacy-tv-browser) .memory-tree-shell {
+  height: clamp(560px, calc(100dvh - 6.2rem), 1100px);
+  backdrop-filter: none;      /* a blurred ancestor re-rasterises on every scroll tick */
+  contain: layout paint;
+}
+html:not(.legacy-tv-browser) .memory-tree-viewport {
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: auto;  /* `contain` trapped the wheel at the edges */
+  touch-action: pan-x pan-y pinch-zoom;
+  -webkit-overflow-scrolling: touch;
+  cursor: grab;
+  contain: strict;
+  will-change: scroll-position;
+}
+html:not(.legacy-tv-browser) .memory-tree-viewport:active { cursor: grabbing; }
+.memory-tree-world { will-change: transform; backface-visibility: hidden; }
+.memory-node {
+  contain: layout paint style;
+  transition: box-shadow 0.2s var(--mem-ease), transform 0.2s var(--mem-ease), border-color 0.2s;
+  backdrop-filter: none;
+}
+.memory-node:hover { transform: translateY(-2px); }
+.memory-node.is-selected { transform: scale(1.035); }
+.memory-branch-svg { shape-rendering: geometricPrecision; }
+.memory-path-flow { filter: none; animation-duration: 2.4s; }
+@media (max-width: 820px) {
+  html:not(.legacy-tv-browser) .memory-tree-shell { height: calc(100dvh - 5.6rem); min-height: 480px; }
+  .memory-path-flow { animation: none; }
+}
+
+/* ---- Shared card / page polish -------------------------------------------- */
+.neon-card {
+  border-radius: var(--mem-radius);
+  border: 1px solid var(--mem-border);
+  background: var(--mem-surface), rgba(7, 10, 20, 0.72);
+  box-shadow: var(--mem-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: transform 0.25s var(--mem-ease), border-color 0.25s, box-shadow 0.25s;
+}
+@media (hover: hover) {
+  .neon-card:hover { transform: translateY(-2px); border-color: rgba(255, 255, 255, 0.2); }
+}
+
+/* ---- Settings -------------------------------------------------------------- */
+html:not(.legacy-tv-browser) .settings-page { max-width: 880px; }
+.settings-page .neon-card { padding: 1.35rem 1.4rem; }
+.settings-page .neon-card:hover { transform: none; }
+.settings-page h2 {
+  font-size: 0.78rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+  padding-bottom: 0.8rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.settings-page button[class*="rounded-lg"][class*="border"] {
+  transition: transform 0.2s var(--mem-ease), background 0.2s, border-color 0.2s;
+}
+.settings-page button[class*="rounded-lg"][class*="border"]:hover { transform: translateY(-2px); }
+.settings-page select, .settings-page input:not([type="checkbox"]) {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  min-height: 2.6rem;
+}
+.settings-page [aria-pressed] span.relative { transition: background 0.2s; }
+
+/* ---- Events / timeline / dashboard / memories ------------------------------- */
+.events-page .neon-card, .dashboard-page .neon-card {
+  overflow: hidden;
+}
+.events-page img, .dashboard-page img, .memoriya-page img {
+  content-visibility: auto;
+}
+.events-page .neon-card, .memory-tree-page .memory-node,
+.dashboard-page .neon-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}
+
+/* ---- Story mode: avoid layout thrash while photos arrive/leave --------------- */
+.memory-reel-shell, .memory-reel-stage { contain: layout style; }
+.memory-reel-stage img, .memory-reel-stage video {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* ---- Respect reduced motion -------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

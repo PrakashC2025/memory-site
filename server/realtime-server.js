@@ -28,8 +28,17 @@ const MIME_TYPES = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
+const SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'x-frame-options': 'SAMEORIGIN',
+  'cross-origin-opener-policy': 'same-origin-allow-popups',
+  'permissions-policy': "camera=(self), microphone=(self), geolocation=(self), payment=(), usb=(), fullscreen=(self)",
+  'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://apis.google.com https://accounts.google.com https://www.youtube.com https://www.gstatic.com https://s.ytimg.com https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: data: https:; connect-src 'self' blob: data: https: wss: ws://127.0.0.1:8787 ws://localhost:8787; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://accounts.google.com https://*.firebaseapp.com https://*.google.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'",
+};
+
 const sendHttpJson = (res, status, payload) => {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  res.writeHead(status, { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(payload));
 };
 
@@ -73,6 +82,7 @@ const server = http.createServer((req, res) => {
       }
       const extension = path.extname(target).toLowerCase();
       res.writeHead(200, {
+        ...SECURITY_HEADERS,
         'content-type': MIME_TYPES[extension] || 'application/octet-stream',
         'cache-control': extension === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
       });

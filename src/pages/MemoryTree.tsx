@@ -350,23 +350,19 @@ const MemoryNodeMediaPreview: React.FC<{ memory: Memory }> = ({ memory }) => (
   <DriveMediaPreview memory={memory} className="memory-node-image-preview" />
 );
 
-const NodeCard: React.FC<{
+const NodeCard = React.memo<{
   node: TreeNode;
   selected: boolean;
   inPath: boolean;
   collapsed: boolean;
   onClick: (node: TreeNode) => void;
   onToggle: (node: TreeNode) => void;
-}> = ({ node, selected, inPath, collapsed, onClick, onToggle }) => {
+}>(({ node, selected, inPath, collapsed, onClick, onToggle }) => {
   const isMedia = node.kind === 'media';
   const isBranch = node.kind === 'year' || node.kind === 'event';
 
   return (
-    <motion.div
-      layout={false}
-      initial={{ opacity: 0, y: 18, scale: 0.96 }}
-      animate={{ opacity: 1, y: 0, scale: selected ? 1.035 : 1 }}
-      transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
+    <div
       className={`memory-node memory-node-${node.kind} ${selected ? 'is-selected' : ''} ${inPath ? 'is-in-path' : ''}`}
       style={{
         left: node.x,
@@ -411,9 +407,10 @@ const NodeCard: React.FC<{
           {collapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
         </button>
       )}
-    </motion.div>
+    </div>
   );
-};
+});
+NodeCard.displayName = 'NodeCard';
 
 const StudioPanel: React.FC<{
   selectedNode: TreeNode | null;
@@ -602,6 +599,7 @@ const MemoryTree: React.FC = () => {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [journey, setJourney] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
+  const scrollFrameRef = useRef(0);
   const [actionToast, setActionToast] = useState('');
 
   useEffect(() => {
@@ -917,7 +915,14 @@ const MemoryTree: React.FC = () => {
           }}
           onScroll={event => {
             userInteractedRef.current = true;
-            setScrollTop(event.currentTarget.scrollTop);
+            const top = event.currentTarget.scrollTop;
+            if (scrollFrameRef.current) return;
+            scrollFrameRef.current = window.requestAnimationFrame(() => {
+              scrollFrameRef.current = 0;
+              // Bucket to 160px so React only re-renders when new rows can appear.
+              const bucket = Math.floor(top / 160) * 160;
+              setScrollTop(prev => (prev === bucket ? prev : bucket));
+            });
           }}
         >
           <div
@@ -944,7 +949,7 @@ const MemoryTree: React.FC = () => {
                       <feMergeNode in="SourceGraphic" />
                     </feMerge>
                   </filter>
-                  {visibleEdges.map(edge => (
+                  {visibleEdges.filter(edge => pathIds.has(edge.from) && pathIds.has(edge.to)).map(edge => (
                     <linearGradient key={`gradient-${edge.id}`} id={`gradient-${edge.id}`} x1="0%" y1="0%" x2="100%" y2="0%">
                       <stop offset="0%" stopColor={edge.color} stopOpacity="0.08" />
                       <stop offset="42%" stopColor={edge.color} stopOpacity="0.86" />
@@ -957,32 +962,30 @@ const MemoryTree: React.FC = () => {
                   const active = pathIds.has(edge.from) && pathIds.has(edge.to);
                   return (
                     <g key={edge.id}>
-                      <motion.path
+                      <path
                         d={edge.d}
                         stroke={active ? edge.color : 'rgba(255,255,255,0.13)'}
                         strokeWidth={active ? 4.5 : 2.2}
                         strokeLinecap="round"
                         fill="none"
-                        filter={active ? 'url(#memory-branch-bloom)' : undefined}
-                        initial={{ pathLength: 0, opacity: 0 }}
-                        animate={{ pathLength: 1, opacity: active ? 0.95 : 0.58 }}
-                        transition={{ duration: 0.72, ease: 'easeOut' }}
+                        opacity={active ? 0.95 : 0.58}
                       />
-                      <path
-                        d={edge.d}
-                        stroke={`url(#gradient-${edge.id})`}
-                        strokeWidth={active ? 3.2 : 2}
-                        strokeLinecap="round"
-                        fill="none"
-                        className="memory-path-flow"
-                        style={{ animationDuration: active ? '1.9s' : '4.6s' }}
-                      />
+                      {active && (
+                        <path
+                          d={edge.d}
+                          stroke={`url(#gradient-${edge.id})`}
+                          strokeWidth={3.2}
+                          strokeLinecap="round"
+                          fill="none"
+                          className="memory-path-flow"
+                        />
+                      )}
                     </g>
                   );
                 })}
               </svg>
 
-              <AnimatePresence>
+              <>
                 {visibleNodes.map(node => (
                   <NodeCard
                     key={node.id}
@@ -994,7 +997,7 @@ const MemoryTree: React.FC = () => {
                     onToggle={toggleBranch}
                   />
                 ))}
-              </AnimatePresence>
+              </>
               <div ref={sentinelRef} className="memory-tree-sentinel" style={{ top: model.height - 780 }} />
             </div>
           </div>
