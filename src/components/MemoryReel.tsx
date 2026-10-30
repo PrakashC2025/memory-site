@@ -4364,8 +4364,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           ...current.filter(source => source.type === 'video' && currentVideoIds.has(source.id)),
         ]);
       } else {
-        setResolvedSources(photoSources);
-        if (photoSources.length) setLoading(false);
+        setResolvedSources(photoSources); setStoryLoadedCount(v => Math.max(v, photoSources.length)); if (photoSources.length) setLoading(false);
       }
 
       if (videos.length) {
@@ -5661,7 +5660,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
             <div className="memory-reel-folder-summary">
               <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
-              <span className="memory-reel-folder-count" aria-live="polite">{storyLoadedCount}/{storyAvailableCount} loaded · {storyPhotoCount} photos · {storyVideoCount} videos</span>
+              <span className="memory-reel-folder-count" aria-live="polite">{Math.min(storyAvailableCount || visualMemories.length, Math.max(storyLoadedCount, resolvedSources.length))}/{storyAvailableCount || visualMemories.length} loaded · {visualMemories.filter(m => m.type !== "video").length} pics · {visualMemories.filter(m => m.type === "video").length} videos</span>
             </div>
           )}
           <button type="button" onClick={toggleLoop} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
