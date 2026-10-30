@@ -14232,3 +14232,61 @@ html:not(.legacy-tv-browser) .page-hero button {
   }
 }
 /* Stitch Cinema Smoothness */ html:not(.legacy-tv-browser) .neon-card, html:not(.legacy-tv-browser) .glass-card { transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.34s ease, box-shadow 0.34s ease; } html:not(.legacy-tv-browser) .memory-reel-stage .card { transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.42s ease, filter 0.42s ease; backface-visibility: hidden; }
+/* Stitch 11-Template Distinct Looks & PC/Mobile Smoothness */
+html:not(.legacy-tv-browser) .neon-card,
+html:not(.legacy-tv-browser) .glass-card {
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.32s ease, box-shadow 0.32s ease;
+}
+html:not(.legacy-tv-browser) .memory-reel-stage .card {
+  contain: layout style paint;
+  backface-visibility: hidden;
+  will-change: auto;
+}
+html:not(.legacy-tv-browser) .memory-reel-stage .card.active {
+  will-change: transform, opacity;
+}
+.template-polaroid-collage .card,
+.template-polaroid .card {
+  background: #fdfbf7 !important;
+  padding: 10px 10px 30px 10px !important;
+  border-radius: 14px !important;
+  box-shadow: 0 22px 48px rgba(0,0,0,0.65) !important;
+}
+.template-cinema .card {
+  border-radius: 6px !important;
+  border-top: 14px solid #05070d !important;
+  border-bottom: 14px solid #05070d !important;
+  box-shadow: 0 28px 70px rgba(0,0,0,0.85) !important;
+}
+.template-filmstrip .card {
+  border-left: 12px dashed rgba(255,255,255,0.28) !important;
+  border-right: 12px dashed rgba(255,255,255,0.28) !important;
+  background: #0b0f19 !important;
+}
+.template-spotlight .card.active {
+  box-shadow: 0 0 95px rgba(255,230,109,0.55), 0 30px 80px rgba(0,0,0,0.95) !important;
+}
+.template-super8 .card {
+  filter: sepia(0.24) contrast(1.08) saturate(1.12);
+  border-radius: 18px !important;
+  border: 3px solid rgba(255,209,102,0.45) !important;
+}
+.template-dreamscape .card {
+  border-radius: 28px !important;
+  box-shadow: 0 0 48px rgba(192,132,252,0.38) !important;
+}
+.template-scrapbook .card {
+  background: #f5f0e6 !important;
+  padding: 8px 8px 22px 8px !important;
+  border: 2px dashed rgba(124,74,38,0.45) !important;
+}
+.template-neon-grid .card {
+  border: 2px solid #00e5ff !important;
+  box-shadow: 0 0 36px rgba(0,229,255,0.42), inset 0 0 18px rgba(255,78,205,0.28) !important;
+}
+@media (max-width: 768px) {
+  .memoriya-navbar {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+}

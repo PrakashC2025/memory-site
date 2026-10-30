@@ -1454,8 +1454,21 @@ export class MemoryReelController {
       };
       card.x = (column - (columns - 1) / 2) * sx + (randomUnit(cardIndex + 1) - 0.5) * Math.min(110, sx * 0.22);
       card.y = (row - (rows - 1) / 2) * sy + (randomUnit(cardIndex + 31) - 0.5) * Math.min(80, sy * 0.22);
-      card.z = this.options.template === 'orbit' ? -Math.round(randomUnit(cardIndex + 91) * 160) : 0;
-      card.rot = (randomUnit(cardIndex + 61) - 0.5) * 16;
+      const tmpl = this.options.template;
+      const randZ = Math.round(randomUnit(cardIndex + 91) * 170);
+      const randRot = (randomUnit(cardIndex + 61) - 0.5) * 16;
+      if (tmpl === 'orbit') { card.z = -randZ; card.rot = randRot; }
+      else if (tmpl === 'polaroid-collage') { card.z = -Math.round((slot % 4) * 55); card.rot = (randomUnit(cardIndex + 19) - 0.5) * 28; }
+      else if (tmpl === 'cinema') { card.z = (slot % 2 === 0 ? -30 : -130); card.rot = 0; }
+      else if (tmpl === 'filmstrip') { card.z = -Math.round(Math.abs(Math.sin(slot * 0.7)) * 90); card.rot = Math.cos(slot * 0.7) * 7.5; }
+      else if (tmpl === 'polaroid') { card.z = (column % 3 - 1) * -85; card.rot = (column % 2 === 0 ? 1 : -1) * 8.5; }
+      else if (tmpl === 'mosaic') { card.z = ((row + column) % 2) * -95; card.rot = 0; }
+      else if (tmpl === 'spotlight') { card.z = -260; card.rot = 0; }
+      else if (tmpl === 'super8') { card.z = -65; card.rot = Math.sin(slot * 1.7) * 4.5; }
+      else if (tmpl === 'dreamscape') { card.z = -Math.round(Math.abs(Math.cos(slot * 0.9)) * 210); card.rot = Math.sin(slot * 0.8) * 12; }
+      else if (tmpl === 'scrapbook') { card.z = -(slot % 3) * 65; card.rot = (slot % 2 === 0 ? 1 : -1) * (9 + (slot % 3) * 3); }
+      else if (tmpl === 'neon-grid') { card.z = -((slot % 4) * 75); card.rot = (slot % 2 === 0 ? 1 : -1) * 3.5; }
+      else { card.z = -randZ; card.rot = randRot; }
       card.card.style.transform = `translate3d(${card.x - card.width / 2}px,${card.y - card.height / 2}px,${card.z}px) rotateZ(${card.rot}deg)`;
       card.card.style.transformOrigin = `${card.width / 2}px ${card.height / 2}px`;
     });
@@ -3371,10 +3384,10 @@ export class MemoryReelController {
          // bounds. The previous two-percent change was effectively invisible
          // on large screens and phones.
          const zoomScale = zoomProgress * 0.07;
-         const depthBias = this.options.template === 'orbit' ? (isActive ? 180 : -380) : 0;
-        const cinematicDepthBias = this.options.template === 'orbit'
-          ? (isActive ? 80 : card.z - 120)
-          : depthBias;
+         const depthBias = isActive ? (this.options.template === 'spotlight' ? 210 : 140) : -320;
+      const cinematicDepthBias = isActive
+        ? (this.options.template === 'spotlight' ? 150 : this.options.template === 'neon-grid' ? 120 : 85)
+        : card.z - (this.options.template === 'spotlight' ? 220 : 110);
         const fitScale = isActive && this.options.template === 'orbit'
           ? Math.min(
             ((this.stageWidth || 1280) * 0.82) / Math.max(1, card.width),
@@ -3466,9 +3479,7 @@ export class MemoryReelController {
               ? Math.max(0.25, Math.min(0.55, blur))
               : Math.max(0.35, Math.min(1.2, blur));
           const readableBlur = Math.round(rawBlur * 2) / 2;
-          const nextFilter = readableBlur > 0.15
-            ? `blur(${readableBlur.toFixed(1)}px) brightness(${this.options.template === 'orbit' ? '.96' : '.92'})`
-            : 'brightness(.96)';
+          const nextFilter = isActive ? 'brightness(1)' : (this.options.template === 'spotlight' ? 'brightness(.62)' : 'brightness(.90)');
           if (nextFilter !== card.lastFilter) {
             card.lastFilter = nextFilter;
             card.card.style.setProperty('filter', nextFilter, 'important');
