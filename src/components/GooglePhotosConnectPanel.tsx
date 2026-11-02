@@ -159,12 +159,35 @@ const GooglePhotosConnectPanel: React.FC = () => {
   };
 
   const handlePickFromGooglePhotos = async () => {
+    const existingToken = readGooglePhotosAccessToken();
+    if (!existingToken) {
+      setLoading(true);
+      setError('');
+      setMessage('Signing in to Google Photos...');
+      try {
+        const synced = await connectAndSyncGooglePhotos({ collectionId: activeCollectionId });
+        setConnected(true);
+        setMessage(
+          synced.memories.length > 0
+            ? synced.message
+            : 'Google Photos linked — click "Pick from Google Photos" again to choose your photos.',
+        );
+      } catch (err) {
+        setError(formatFriendlyGooglePhotosError(err));
+        setMessage('');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     const popup = window.open('about:blank', 'memoriya-gphotos-picker', 'width=980,height=740');
     setLoading(true);
     setError('');
     setMessage('Opening Google Photos...');
     try {
       const res = await pickFromGooglePhotosCloud({
+        accessToken: existingToken,
         collectionId: activeCollectionId || undefined,
         popupWindow: popup,
         onStatus: status => setMessage(status),

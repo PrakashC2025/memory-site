@@ -455,3 +455,68 @@ test('pickFromGooglePhotosCloud imports photos added directly in photos.google.c
     globalThis.fetch = originalFetch;
   }
 });
+
+test('403 on photoslibrary.googleapis.com never wipes OAuth token, never opens background popups, and never repeats 403 polls', async () => {
+  setupBrowserMocks();
+  const svc = await loadGooglePhotosService();
+  svc.saveGooglePhotosAccessToken('tok-403-safe', 3600);
+
+  // Mark Google Photos account connected
+  globalThis.window.localStorage.setItem(
+    'memoriya-google-photos-library-v1',
+    JSON.stringify({
+      version: 1,
+      account: { email: 'test@gmail.com', connectedAt: new Date().toISOString() },
+      collections: [],
+      items: [],
+      activeCollectionId: '',
+    }),
+  );
+
+  let photosLibraryHits = 0;
+  let popupAttempted = false;
+  globalThis.window.google = {
+    accounts: {
+      oauth2: {
+        initTokenClient: () => ({
+          requestAccessToken: () => {
+            popupAttempted = true;
+          },
+        }),
+      },
+    },
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const u = String(url);
+    if (u.includes('photoslibrary.googleapis.com')) {
+      photosLibraryHits += 1;
+      return new Response(
+        JSON.stringify({ error: { code: 403, status: 'PERMISSION_DENIED' } }),
+        { status: 403 },
+      );
+    }
+    return new Response('{}', { status: 200 });
+  };
+
+  try {
+    const res = await svc.syncGooglePhotosLibrary('tok-403-safe');
+    assert.equal(res.connected, true);
+    // Token MUST stay intact for Pick from Google Photos (never wiped on 403!)
+    assert.equal(svc.readGooglePhotosAccessToken(), 'tok-403-safe');
+    // Only 1 request (/v1/albums) should hit 403; /v1/mediaItems must be skipped immediately
+    assert.equal(photosLibraryHits, 1);
+    // Zero background OAuth popup attempts!
+    assert.equal(popupAttempted, false);
+
+    // Subsequent background live syncs must skip photoslibrary.googleapis.com completely (zero 403 spam)
+    await svc.liveSyncGooglePhotos();
+    await svc.liveSyncGooglePhotos();
+    assert.equal(photosLibraryHits, 1);
+    assert.equal(popupAttempted, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
