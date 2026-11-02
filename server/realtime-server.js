@@ -28,8 +28,19 @@ const MIME_TYPES = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
+const MAX_WS_CLIENTS = 256;
+const MAX_FRAME_BUFFER_BYTES = 1024 * 1024;
+
+const SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'cross-origin-opener-policy': 'same-origin-allow-popups',
+  'permissions-policy': 'camera=(self), microphone=(self), geolocation=(self), payment=(), usb=(), fullscreen=(self)',
+  'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://apis.google.com https://accounts.google.com https://www.youtube.com https://www.gstatic.com https://s.ytimg.com https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: data: https:; connect-src 'self' blob: data: https: wss: ws://127.0.0.1:8787 ws://localhost:8787; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://accounts.google.com https://photos.google.com https://*.firebaseapp.com https://*.google.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://*.e2b.app https://*.arena.ai",
+};
+
 const sendHttpJson = (res, status, payload) => {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  res.writeHead(status, { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(payload));
 };
 
@@ -40,7 +51,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    res.writeHead(405, { allow: 'GET, HEAD' });
+    res.writeHead(405, { ...SECURITY_HEADERS, allow: 'GET, HEAD' });
     res.end();
     return;
   }
@@ -53,26 +64,27 @@ const server = http.createServer((req, res) => {
   const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
   const filePath = path.resolve(distDir, relative);
   if (filePath !== path.join(distDir, 'index.html') && !filePath.startsWith(`${distDir}${path.sep}`)) {
-    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+    res.writeHead(403, { ...SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' });
     res.end('Forbidden');
     return;
   }
   fs.stat(filePath, (error, stats) => {
     const exists = !error && stats.isFile();
     if (!exists && path.extname(relative)) {
-      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.writeHead(404, { ...SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' });
       res.end('Not found');
       return;
     }
     const target = exists ? filePath : path.join(distDir, 'index.html');
     fs.readFile(target, (readError, data) => {
       if (readError) {
-        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+        res.writeHead(404, { ...SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' });
         res.end('Build output is missing. Run "npm run build" before starting the cast server.');
         return;
       }
       const extension = path.extname(target).toLowerCase();
       res.writeHead(200, {
+        ...SECURITY_HEADERS,
         'content-type': MIME_TYPES[extension] || 'application/octet-stream',
         'cache-control': extension === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
       });
@@ -165,7 +177,7 @@ const relayCast = (sender, message) => {
 
 server.on('upgrade', (req, socket) => {
   const key = req.headers['sec-websocket-key'];
-  if (!key) {
+  if (!key || clients.size >= MAX_WS_CLIENTS) {
     socket.destroy();
     return;
   }
@@ -189,8 +201,13 @@ server.on('upgrade', (req, socket) => {
   let frameBuffer = Buffer.alloc(0);
   let fragmentedOpcode = 0;
   let fragmentedPayload = [];
+  let fragmentedBytes = 0;
   socket.on('data', buffer => {
     try {
+      if (frameBuffer.length + buffer.length > MAX_FRAME_BUFFER_BYTES) {
+        socket.destroy();
+        return;
+      }
       frameBuffer = Buffer.concat([frameBuffer, buffer]);
       const decoded = decodeFrames(frameBuffer);
       frameBuffer = decoded.remaining;
@@ -205,60 +222,73 @@ server.on('upgrade', (req, socket) => {
         }
         if (frame.opcode === 0x0) {
           if (!fragmentedOpcode) continue;
+          fragmentedBytes += frame.payload.length;
+          if (fragmentedBytes > MAX_FRAME_BUFFER_BYTES) {
+            socket.destroy();
+            return;
+          }
           fragmentedPayload.push(frame.payload);
           if (!frame.fin) continue;
           frame.opcode = fragmentedOpcode;
           frame.payload = Buffer.concat(fragmentedPayload);
           fragmentedOpcode = 0;
           fragmentedPayload = [];
+          fragmentedBytes = 0;
         } else if (!frame.fin) {
           fragmentedOpcode = frame.opcode;
           fragmentedPayload = [frame.payload];
+          fragmentedBytes = frame.payload.length;
           continue;
         }
         if (frame.opcode !== 0x1) continue;
         const parsed = JSON.parse(frame.payload.toString('utf8'));
-      const info = clients.get(socket);
-      if (!info) continue;
-      if (parsed.type === 'cast:register') {
-        info.role = parsed.role === 'receiver' ? 'receiver' : 'controller';
-        info.room = info.role === 'receiver' ? String(parsed.room || '') : '';
-        info.label = String(parsed.label || '');
-        if (info.role === 'receiver' && !isCastRoom(info.room)) {
-          sendJson(socket, { type: 'cast:error', message: 'Invalid TV room code.' });
-          socket.destroy();
-          return;
-        }
-        if (info.role === 'receiver' && info.room) {
-          for (const [client, clientInfo] of clients) {
-            if (client !== socket && clientInfo.role === 'controller') sendJson(client, { type: 'cast:receiver-online', room: info.room, label: parsed.label || 'Memoriya TV' });
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+        const info = clients.get(socket);
+        if (!info) continue;
+        if (parsed.type === 'cast:register') {
+          info.role = parsed.role === 'receiver' ? 'receiver' : 'controller';
+          info.room = info.role === 'receiver' ? String(parsed.room || '') : '';
+          info.label = String(parsed.label || '').slice(0, 64);
+          if (info.role === 'receiver' && !isCastRoom(info.room)) {
+            sendJson(socket, { type: 'cast:error', message: 'Invalid TV room code.' });
+            socket.destroy();
+            return;
           }
-        }
-        if (info.role === 'controller') {
-          for (const [, receiverInfo] of clients) {
-            if (receiverInfo.role === 'receiver' && receiverInfo.room) sendJson(socket, { type: 'cast:receiver-online', room: receiverInfo.room, label: receiverInfo.label || 'Memoriya TV' });
+          if (info.role === 'receiver' && info.room) {
+            for (const [client, clientInfo] of clients) {
+              if (client !== socket && clientInfo.role === 'controller') {
+                sendJson(client, { type: 'cast:receiver-online', room: info.room, label: info.label || 'Memoriya TV' });
+              }
+            }
           }
-        }
-        continue;
-      }
-      if (parsed.type === 'cast:join') {
-        if (!isCastRoom(parsed.room)) {
-          sendJson(socket, { type: 'cast:error', message: 'Enter the six-digit TV code.' });
+          if (info.role === 'controller') {
+            for (const [, receiverInfo] of clients) {
+              if (receiverInfo.role === 'receiver' && receiverInfo.room) {
+                sendJson(socket, { type: 'cast:receiver-online', room: receiverInfo.room, label: receiverInfo.label || 'Memoriya TV' });
+              }
+            }
+          }
           continue;
         }
-        info.role = 'controller';
-        info.room = String(parsed.room || '');
-        relayCast(socket, { type: 'cast:receiver-ready', room: info.room });
-        continue;
-      }
-      if (parsed.type?.startsWith('cast:')) {
-        if (!isCastRoom(parsed.room) || info.room !== String(parsed.room)) continue;
-        relayCast(socket, parsed);
-        continue;
-      }
-      // Preserve the original broadcast behavior for any existing realtime
-      // messages used by older local builds.
-      for (const [client] of clients) if (client !== socket && !client.destroyed) sendJson(client, parsed);
+        if (parsed.type === 'cast:join') {
+          if (!isCastRoom(parsed.room)) {
+            sendJson(socket, { type: 'cast:error', message: 'Enter the six-digit TV code.' });
+            continue;
+          }
+          info.role = 'controller';
+          info.room = String(parsed.room || '');
+          relayCast(socket, { type: 'cast:receiver-ready', room: info.room });
+          continue;
+        }
+        if (typeof parsed.type === 'string' && parsed.type.startsWith('cast:')) {
+          if (!isCastRoom(parsed.room) || info.room !== String(parsed.room)) continue;
+          relayCast(socket, parsed);
+          continue;
+        }
+        // Only relay other messages to peers within the same verified room.
+        if (info.room && isCastRoom(info.room)) {
+          relayCast(socket, { ...parsed, room: info.room });
+        }
       }
     } catch {
       socket.destroy();

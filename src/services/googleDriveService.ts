@@ -193,11 +193,16 @@ const loadScript = (src: string) =>
     document.head.appendChild(script);
   });
 
-const fetchDriveJson = async <T,>(url: string, accessToken: string): Promise<T> => {
+const fetchDriveJson = async <T,>(url: string, accessToken: string, signal?: AbortSignal): Promise<T> => {
+  if (signal?.aborted) {
+    throw new Error('Google Drive sync was cancelled.');
+  }
   if (isDriveTokenInvalid(accessToken)) {
     throw new Error('Google Drive authorization expired or access was denied. Reconnect Google Drive and try again.');
   }
   const controller = new AbortController();
+  const onExternalAbort = () => controller.abort();
+  signal?.addEventListener('abort', onExternalAbort, { once: true });
   const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch(url, {
@@ -213,12 +218,16 @@ const fetchDriveJson = async <T,>(url: string, accessToken: string): Promise<T> 
     }
     return await response.json() as T;
   } catch (error) {
+    if (signal?.aborted) {
+      throw new Error('Google Drive sync was cancelled.');
+    }
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error('Drive is taking too long to respond. Please try Sync Drive again.');
     }
     throw error;
   } finally {
     window.clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', onExternalAbort);
   }
 };
 
@@ -230,7 +239,10 @@ export class GoogleDriveService {
     if (loginHint) this.loginHint = loginHint;
   }
 
-  async connect(loginHint?: string, prompt = ''): Promise<DriveConnectionState> {
+  async connect(loginHint?: string, prompt = '', signal?: AbortSignal): Promise<DriveConnectionState> {
+    if (signal?.aborted) {
+      throw new Error('Google Drive authorization was cancelled.');
+    }
     const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
 
     if (!clientId) {
@@ -242,6 +254,9 @@ export class GoogleDriveService {
     if (!window.google?.accounts?.oauth2) {
       await loadScript(GOOGLE_SCRIPT_URL);
     }
+    if (signal?.aborted) {
+      throw new Error('Google Drive authorization was cancelled.');
+    }
     if (loginHint) this.loginHint = loginHint;
 
     return new Promise<DriveConnectionState>((resolve, reject) => {
@@ -252,12 +267,67 @@ export class GoogleDriveService {
       }
 
       let settled = false;
+      let focusSettleTimer = 0;
+      const startedAt = Date.now();
+      let popupBlurred = false;
+
+      const cleanupListeners = () => {
+        if (focusSettleTimer) window.clearTimeout(focusSettleTimer);
+        if (typeof window.removeEventListener === 'function') {
+          window.removeEventListener('blur', onBlur);
+          window.removeEventListener('focus', onFocusReturn);
+        }
+        if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('visibilitychange', onVisibilityReturn);
+        }
+        signal?.removeEventListener('abort', onAbort);
+      };
+
       const finish = (handler: () => void) => {
         if (settled) return;
         settled = true;
         window.clearTimeout(timeoutId);
+        cleanupListeners();
         handler();
       };
+
+      const onBlur = () => {
+        popupBlurred = true;
+        if (focusSettleTimer) {
+          window.clearTimeout(focusSettleTimer);
+          focusSettleTimer = 0;
+        }
+      };
+
+      const scheduleCancelCheckOnReturn = () => {
+        if (settled) return;
+        if (!popupBlurred && Date.now() - startedAt < 750) return;
+        if (focusSettleTimer) window.clearTimeout(focusSettleTimer);
+        // Give GIS 900ms to deliver its postMessage token if the user clicked Allow;
+        // if nothing arrives after focus returned, the user closed/cancelled the popup.
+        focusSettleTimer = window.setTimeout(() => {
+          finish(() => reject(new Error('Google Drive authorization was cancelled.')));
+        }, 900);
+      };
+
+      const onFocusReturn = () => scheduleCancelCheckOnReturn();
+      const onVisibilityReturn = () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+          scheduleCancelCheckOnReturn();
+        }
+      };
+      const onAbort = () => {
+        finish(() => reject(new Error('Google Drive authorization was cancelled.')));
+      };
+
+      if (typeof window.addEventListener === 'function') {
+        window.addEventListener('blur', onBlur);
+        window.addEventListener('focus', onFocusReturn);
+      }
+      if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+        document.addEventListener('visibilitychange', onVisibilityReturn);
+      }
+      signal?.addEventListener('abort', onAbort, { once: true });
 
       const timeoutId = window.setTimeout(() => {
         finish(() => reject(new Error('Google Drive authorization was cancelled.')));
@@ -359,7 +429,14 @@ export class GoogleDriveService {
     return allFiles;
   }
 
-  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40, orderBy = 'modifiedTime desc'): Promise<DriveMediaPage> {
+  async listMediaPage(
+    accessToken: string,
+    pageToken = '',
+    folderId = '',
+    pageSize = 40,
+    orderBy = 'modifiedTime desc',
+    signal?: AbortSignal,
+  ): Promise<DriveMediaPage> {
     const cleanFolderId = folderId && folderId !== 'drive-root' ? folderId : '';
     const locationQuery = cleanFolderId ? `'${cleanFolderId}' in parents and ` : '';
     const params = new URLSearchParams({
@@ -375,7 +452,7 @@ export class GoogleDriveService {
     const payload = await fetchDriveJson<{
       nextPageToken?: string;
       files?: Array<DriveMediaFile & { thumbnailLink?: string; webViewLink?: string }>;
-    }>(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, accessToken);
+    }>(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, accessToken, signal);
 
     return {
       nextPageToken: payload.nextPageToken,
@@ -387,11 +464,12 @@ export class GoogleDriveService {
     };
   }
 
-  async listAllMedia(accessToken: string, folderId = ''): Promise<DriveMediaFile[]> {
+  async listAllMedia(accessToken: string, folderId = '', signal?: AbortSignal): Promise<DriveMediaFile[]> {
     const files: DriveMediaFile[] = [];
     let pageToken = '';
     do {
-      const page = await this.listMediaPage(accessToken, pageToken, folderId, 100);
+      if (signal?.aborted) throw new Error('Google Drive sync was cancelled.');
+      const page = await this.listMediaPage(accessToken, pageToken, folderId, 100, 'modifiedTime desc', signal);
       files.push(...page.files);
       pageToken = page.nextPageToken || '';
     } while (pageToken);
@@ -440,7 +518,7 @@ export class GoogleDriveService {
     };
   }
 
-  async listFolders(accessToken: string): Promise<Array<{ id: string; name: string }>> {
+  async listFolders(accessToken: string, signal?: AbortSignal): Promise<Array<{ id: string; name: string }>> {
     const params = new URLSearchParams({
       q: "mimeType='application/vnd.google-apps.folder' and trashed=false",
       pageSize: '100',
@@ -452,6 +530,7 @@ export class GoogleDriveService {
     const payload = await fetchDriveJson<{ files?: Array<{ id: string; name: string }> }>(
       `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
       accessToken,
+      signal,
     );
     return payload.files || [];
   }

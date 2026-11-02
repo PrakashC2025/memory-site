@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Check, Cloud, FolderOpen, LogOut, Upload } from 'lucide-react';
+import { Check, Cloud, FolderOpen, Loader2, LogOut, Upload, X } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile, type DriveConnectionState } from '../services/googleDriveService';
 import {
@@ -11,6 +11,7 @@ import {
   readDriveFolderId,
   readDriveFolders,
   readDriveMemories,
+  saveDriveAccessToken,
   saveDriveFolders,
   saveDriveMemories,
 } from '../services/driveLibrary';
@@ -25,6 +26,7 @@ const emptyState: DriveConnectionState = {
 const DriveConnectPanel: React.FC = () => {
   const { config } = useTheme();
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const driveAbortRef = useRef<AbortController | null>(null);
   const [uploading, setUploading] = useState(false);
   const [selectedFolderId, setSelectedFolderId] = useState(() => readDriveFolderId());
   const [availableFolders, setAvailableFolders] = useState<Array<{ id: string; name: string }>>(() => readDriveFolders());
@@ -87,19 +89,20 @@ const DriveConnectPanel: React.FC = () => {
     };
   }, []);
 
-  const syncDriveFolderMedia = async (accessToken: string, folderId: string) => {
+  const syncDriveFolderMedia = async (accessToken: string, folderId: string, signal?: AbortSignal) => {
     let foldersList = availableFolders;
     try {
-      foldersList = await googleDriveService.listFolders(accessToken);
+      foldersList = await googleDriveService.listFolders(accessToken, signal);
       setAvailableFolders(foldersList);
       saveDriveFolders(foldersList);
-    } catch {
+    } catch (folderErr) {
+      if (signal?.aborted) throw folderErr;
       // Folder list is optional; root/selected media listing still works.
     }
 
     const folderNameMap = new Map(foldersList.map(f => [f.id, f.name]));
     const cleanFolderId = folderId === 'drive-root' ? '' : folderId;
-    const files = await googleDriveService.listAllMedia(accessToken, cleanFolderId);
+    const files = await googleDriveService.listAllMedia(accessToken, cleanFolderId, signal);
     const imported = files
       .filter(file => isVisualDriveFile(file) && !file.trashed)
       .map(file => {
@@ -125,12 +128,39 @@ const DriveConnectPanel: React.FC = () => {
     };
   };
 
+  const handleCancelSync = () => {
+    driveAbortRef.current?.abort();
+    driveAbortRef.current = null;
+    setState(current => ({
+      ...current,
+      loading: false,
+      error: undefined,
+      message: 'Google Drive sync cancelled.',
+    }));
+  };
+
   const handleConnect = async () => {
-    setState(current => ({ ...current, loading: true, error: undefined, message: 'Connecting to Google Drive...' }));
+    driveAbortRef.current?.abort();
+    const abortController = new AbortController();
+    driveAbortRef.current = abortController;
+
+    const existingToken = readDriveAccessToken();
+    setState(current => ({
+      ...current,
+      loading: true,
+      error: undefined,
+      message: existingToken ? 'Syncing your Google Drive folders and photos...' : 'Connecting to Google Drive...',
+    }));
     try {
-      const next = await googleDriveService.connect();
-      const token = next.accessToken || '';
-      if (!token) throw new Error('Google Drive authorization was cancelled.');
+      let token = existingToken;
+      if (!token) {
+        const next = await googleDriveService.connect(undefined, '', abortController.signal);
+        token = next.accessToken || '';
+        if (!token) throw new Error('Google Drive authorization was cancelled.');
+        saveDriveAccessToken(token);
+      }
+
+      if (abortController.signal.aborted) throw new Error('Google Drive sync was cancelled.');
 
       setState(current => ({
         ...current,
@@ -141,7 +171,20 @@ const DriveConnectPanel: React.FC = () => {
         message: 'Reading your Google Drive folders and photos...',
       }));
 
-      const synced = await syncDriveFolderMedia(token, selectedFolderId);
+      let synced: Awaited<ReturnType<typeof syncDriveFolderMedia>>;
+      try {
+        synced = await syncDriveFolderMedia(token, selectedFolderId, abortController.signal);
+      } catch (syncErr) {
+        if (!existingToken || abortController.signal.aborted || !isDriveAuthorizationError(syncErr)) {
+          throw syncErr;
+        }
+        // Saved token expired: refresh silently once and retry
+        token = await googleDriveService.refreshAccessToken(undefined, true);
+        saveDriveAccessToken(token);
+        synced = await syncDriveFolderMedia(token, selectedFolderId, abortController.signal);
+      }
+
+      if (abortController.signal.aborted) return;
       setState({
         connected: true,
         loading: false,
@@ -151,14 +194,19 @@ const DriveConnectPanel: React.FC = () => {
         message: synced.message,
       });
     } catch (err) {
+      if (driveAbortRef.current !== abortController) return;
       const message = err instanceof Error ? err.message : 'Google Drive connection failed.';
-      const cancelled = /cancel|closed/i.test(message);
+      const cancelled = /cancel|closed/i.test(message) || abortController.signal.aborted;
       setState(current => ({
         ...current,
         loading: false,
         error: cancelled ? undefined : message,
-        message: cancelled ? 'Google Drive connection cancelled.' : undefined,
+        message: cancelled ? 'Google Drive sync cancelled.' : undefined,
       }));
+    } finally {
+      if (driveAbortRef.current === abortController) {
+        driveAbortRef.current = null;
+      }
     }
   };
 
@@ -168,9 +216,14 @@ const DriveConnectPanel: React.FC = () => {
     const token = state.accessToken || readDriveAccessToken();
     if (!token) return;
 
+    driveAbortRef.current?.abort();
+    const abortController = new AbortController();
+    driveAbortRef.current = abortController;
+
     setState(current => ({ ...current, loading: true, error: undefined, message: 'Loading Drive folder...' }));
     try {
-      const synced = await syncDriveFolderMedia(token, cleanId);
+      const synced = await syncDriveFolderMedia(token, cleanId, abortController.signal);
+      if (abortController.signal.aborted) return;
       setState(current => ({
         ...current,
         connected: true,
@@ -179,11 +232,18 @@ const DriveConnectPanel: React.FC = () => {
         message: synced.message,
       }));
     } catch (err) {
+      if (driveAbortRef.current !== abortController) return;
+      const cancelled = abortController.signal.aborted || (err instanceof Error && /cancel/i.test(err.message));
       setState(current => ({
         ...current,
         loading: false,
-        error: err instanceof Error ? err.message : 'Could not load that Google Drive folder.',
+        error: cancelled ? undefined : (err instanceof Error ? err.message : 'Could not load that Google Drive folder.'),
+        message: cancelled ? 'Drive folder load cancelled.' : current.message,
       }));
+    } finally {
+      if (driveAbortRef.current === abortController) {
+        driveAbortRef.current = null;
+      }
     }
   };
 
@@ -311,12 +371,24 @@ const DriveConnectPanel: React.FC = () => {
           disabled={state.loading}
           whileHover={{ scale: state.loading ? 1 : 1.02 }}
           whileTap={{ scale: state.loading ? 1 : 0.98 }}
-          className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-black"
+          className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-black disabled:opacity-70"
           style={{ color: state.connected ? '#36f1cd' : '#8ab4ff', borderColor: state.connected ? '#36f1cd55' : '#4285f455' }}
         >
-          <Cloud size={15} />
-          {state.loading ? 'Connecting...' : state.connected ? 'Sync Google Drive' : 'Connect Google Drive'}
+          {state.loading ? <Loader2 size={15} className="animate-spin" /> : <Cloud size={15} />}
+          {state.loading ? 'Syncing Drive...' : state.connected ? 'Sync Google Drive' : 'Connect Google Drive'}
         </motion.button>
+        {state.loading && (
+          <button
+            type="button"
+            onClick={handleCancelSync}
+            className="neon-button flex items-center justify-center gap-1.5 px-4 py-3 text-sm font-black text-amber-200 hover:text-white"
+            style={{ borderColor: 'rgba(251, 191, 36, 0.55)', background: 'rgba(245, 158, 11, 0.16)' }}
+            title="Cancel Google Drive sync"
+          >
+            <X size={15} />
+            Cancel
+          </button>
+        )}
         {state.connected && (
           <>
             <button
@@ -332,8 +404,9 @@ const DriveConnectPanel: React.FC = () => {
             <button
               type="button"
               className="memoriya-disconnect-btn flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-black transition-all disabled:opacity-55"
-              disabled={state.loading}
               onClick={() => {
+                driveAbortRef.current?.abort();
+                driveAbortRef.current = null;
                 clearDriveSession();
                 setState({
                   ...emptyState,

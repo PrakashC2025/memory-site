@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Sparkles,
   Upload,
+  X,
 } from 'lucide-react';
 import DriveMediaPreview from '../components/DriveMediaPreview';
 import DriveCameraCapture from '../components/DriveCameraCapture';
@@ -40,11 +41,13 @@ import {
   readActiveGooglePhotosCollectionId,
   readGooglePhotosAccessToken,
   readGooglePhotosCollectionsSummary,
+  readGooglePhotosSmartCategories,
   readSelectedGooglePhotosMemories,
   setActiveGooglePhotosCollectionId,
   syncGooglePhotosLibrary,
   uploadFilesToGooglePhotosCollection,
   type GooglePhotosCollectionSummary,
+  type GooglePhotosSmartCategory,
 } from '../services/googlePhotosService';
 import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile, type DriveConnectionState, type DriveFolder, type DriveMediaFile } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, deleteCachedDriveMedia, warmDriveFolderCache } from '../services/driveCache';
@@ -153,8 +156,14 @@ const Memoriya: React.FC = () => {
   const [gphotosCollections, setGphotosCollections] = useState<GooglePhotosCollectionSummary[]>(() =>
     readGooglePhotosCollectionsSummary(),
   );
+  const [gphotosSmartCategories, setGphotosSmartCategories] = useState<GooglePhotosSmartCategory[]>(() =>
+    readGooglePhotosSmartCategories(),
+  );
   const [gphotosLoading, setGphotosLoading] = useState(false);
   const gphotosUploadInputRef = useRef<HTMLInputElement>(null);
+  const driveAbortRef = useRef<AbortController | null>(null);
+  const gphotosAbortRef = useRef<AbortController | null>(null);
+  const gphotosPickerPopupRef = useRef<Window | null>(null);
   const [memories, setMemories] = useState<Memory[]>(() => {
     const driveInitial = restored?.memories?.length ? restored.memories : readDriveMemories();
     const gphotosInitial = readSelectedGooglePhotosMemories();
@@ -296,6 +305,7 @@ const Memoriya: React.FC = () => {
       setGphotosToken(readGooglePhotosAccessToken());
       setGphotosActiveCollectionId(readActiveGooglePhotosCollectionId());
       setGphotosCollections(readGooglePhotosCollectionsSummary());
+      setGphotosSmartCategories(readGooglePhotosSmartCategories());
       const activeGooglePhotos = readSelectedGooglePhotosMemories();
       setMemories(current => {
         const nonGooglePhotos = current.filter(
@@ -772,59 +782,92 @@ const Memoriya: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [accessToken, loading, nextPageToken, reelConfig?.live]);
 
+  const cancelDriveSync = () => {
+    driveAbortRef.current?.abort();
+    driveAbortRef.current = null;
+    drivePageLoadingRef.current = false;
+    setLoading(false);
+    setError('');
+    setMessage('Google Drive sync cancelled.');
+  };
+
   const connectDrive = async (): Promise<string | undefined> => {
+    driveAbortRef.current?.abort();
+    const abortController = new AbortController();
+    driveAbortRef.current = abortController;
+
+    const existingToken = accessToken || readDriveAccessToken();
     setLoading(true);
     setError('');
-    setMessage('Opening secure Google Drive connection...');
+    setMessage(existingToken ? 'Syncing your Google Drive folders and photos...' : 'Opening secure Google Drive connection...');
     let connectedToken = '';
     try {
-      const state: DriveConnectionState = await googleDriveService.connect();
-      const token = state.accessToken || '';
-      if (!token) throw new Error('Google Drive authorization was cancelled.');
+      let token = existingToken;
+      if (!token) {
+        const state: DriveConnectionState = await googleDriveService.connect(undefined, '', abortController.signal);
+        token = state.accessToken || '';
+        if (!token) throw new Error('Google Drive authorization was cancelled.');
+        saveDriveAccessToken(token);
+      }
+
+      if (abortController.signal.aborted) throw new Error('Google Drive sync was cancelled.');
       connectedToken = token;
       driveAuthRequiredRef.current = false;
-      // Reconnect with a clean change cursor. A cursor from an expired token
-      // can otherwise make the first post-reconnect poll fail with 401 again.
       driveChangePageTokenRef.current = '';
       setDriveChangePageToken('');
       clearDriveChangePageToken();
       setAccessToken(token);
-      // Refresh the token stored on existing Drive memories so they keep working,
-      // instead of clearing and re-downloading everything on every reconnect.
       setMemories(current => current.map(memory =>
         memory.driveFileId ? { ...memory, authToken: token } : memory
       ));
+
       let availableFolders: DriveFolder[] = [{ id: 'drive-root', name: 'All My Drive photos', mediaCount: 0, selected: !driveFolderId }];
       try {
-        const folders = await googleDriveService.listFolders(token);
+        const folders = await googleDriveService.listFolders(token, abortController.signal);
         availableFolders = [
           availableFolders[0],
           ...folders.map(folder => ({ ...folder, mediaCount: 0, selected: folder.id === driveFolderId })),
         ];
-      } catch {
+      } catch (folderErr) {
+        if (abortController.signal.aborted) throw folderErr;
         // Folder browsing is optional; the full Drive view still works.
       }
       setDriveFolders(availableFolders);
-      const page = await googleDriveService.listMediaPage(token, '', driveFolderId);
+
+      let page: Awaited<ReturnType<typeof googleDriveService.listMediaPage>>;
+      try {
+        page = await googleDriveService.listMediaPage(token, '', driveFolderId, 40, 'modifiedTime desc', abortController.signal);
+      } catch (pageErr) {
+        if (!existingToken || abortController.signal.aborted || !isDriveAuthorizationError(pageErr)) throw pageErr;
+        token = await googleDriveService.refreshAccessToken(undefined, true);
+        connectedToken = token;
+        saveDriveAccessToken(token);
+        setAccessToken(token);
+        page = await googleDriveService.listMediaPage(token, '', driveFolderId, 40, 'modifiedTime desc', abortController.signal);
+      }
+
+      if (abortController.signal.aborted) return undefined;
       const added = appendDriveFiles(page.files, token);
-      // Keep downloading the complete selected folder in the background so
-      // Story Mode can open from local media immediately later.
       void warmDriveFolderCache(token, driveFolderId).catch(() => undefined);
       setNextPageToken(page.nextPageToken || '');
       setImportCount(count => count + added);
-      setMessage(added
-        ? `Drive ready — ${memories.length + added} memories in view. Scroll to load more.`
+      setMessage(added || memories.length
+        ? `Drive ready — ${memories.length + added} memories in view.${page.nextPageToken ? ' Scroll to load more.' : ''}`
         : 'Drive connected, but no photos or videos were found.');
       return token;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Google Drive connection failed.';
-      const wasCancelled = /cancel|closed/i.test(message);
-      setError(wasCancelled ? '' : message);
+      if (driveAbortRef.current !== abortController) return undefined;
+      const msg = err instanceof Error ? err.message : 'Google Drive connection failed.';
+      const wasCancelled = /cancel|closed/i.test(msg) || abortController.signal.aborted;
+      setError(wasCancelled ? '' : msg);
       setMessage(wasCancelled
-        ? 'Google Drive connection cancelled.'
-        : `${message} If Google blocked the popup with an “unauthorized domain” or “access blocked” error, add this exact origin to Google Cloud Console → Credentials → OAuth Client ID → Authorized JavaScript origins: ${window.location.origin}`);
+        ? 'Google Drive sync cancelled.'
+        : `${msg} If Google blocked the popup with an “unauthorized domain” or “access blocked” error, add this exact origin to Google Cloud Console → Credentials → OAuth Client ID → Authorized JavaScript origins: ${window.location.origin}`);
     } finally {
-      setLoading(false);
+      if (driveAbortRef.current === abortController) {
+        driveAbortRef.current = null;
+        setLoading(false);
+      }
     }
     return connectedToken || undefined;
   };
@@ -1026,6 +1069,9 @@ const Memoriya: React.FC = () => {
   );
 
   const disconnectDrive = () => {
+    driveAbortRef.current?.abort();
+    driveAbortRef.current = null;
+    setLoading(false);
     setAccessToken('');
     setDriveFolders([]);
     setDriveFolderId('');
@@ -1046,11 +1092,39 @@ const Memoriya: React.FC = () => {
     clearDriveSession();
   };
 
+  const cancelGooglePhotosSync = () => {
+    gphotosAbortRef.current?.abort();
+    gphotosAbortRef.current = null;
+    if (gphotosPickerPopupRef.current) {
+      try {
+        gphotosPickerPopupRef.current.close();
+      } catch {
+        // Best-effort close.
+      }
+      gphotosPickerPopupRef.current = null;
+    }
+    setGphotosLoading(false);
+    setError('');
+    setMessage('Google Photos sync cancelled.');
+  };
+
   const handleDisconnectGooglePhotos = async () => {
+    gphotosAbortRef.current?.abort();
+    gphotosAbortRef.current = null;
+    if (gphotosPickerPopupRef.current) {
+      try {
+        gphotosPickerPopupRef.current.close();
+      } catch {
+        // Best-effort close.
+      }
+      gphotosPickerPopupRef.current = null;
+    }
+    setGphotosLoading(false);
     await disconnectGooglePhotos(true);
     setGphotosConnected(false);
     setGphotosToken('');
     setGphotosCollections([]);
+    setGphotosSmartCategories([]);
     setGphotosActiveCollectionId('');
     setMemories(current => {
       const remaining = current.filter(
@@ -1075,25 +1149,86 @@ const Memoriya: React.FC = () => {
   };
 
   const connectGooglePhotos = async () => {
+    gphotosAbortRef.current?.abort();
+    const abortController = new AbortController();
+    gphotosAbortRef.current = abortController;
+
+    const existingToken = readGooglePhotosAccessToken();
+    const shouldReauthorize = !gphotosConnected || !existingToken;
+    const currentPhotoCount = gphotosCollections.reduce((sum, col) => sum + col.count, 0);
+
+    let preOpenedPopup: Window | null = null;
+    if (!shouldReauthorize && currentPhotoCount === 0 && typeof window !== 'undefined') {
+      preOpenedPopup = window.open('about:blank', 'memoriya-gphotos-picker', 'width=980,height=740');
+      gphotosPickerPopupRef.current = preOpenedPopup;
+    }
+
     setGphotosLoading(true);
     setError('');
-    setMessage('Opening Google Photos connection...');
+    setMessage(shouldReauthorize ? 'Opening Google Photos connection...' : 'Syncing Google Photos & Albums...');
     try {
-      const existingToken = readGooglePhotosAccessToken();
-      const shouldReauthorize =
-        !gphotosConnected || !existingToken || isPhotosLibraryForbidden(existingToken);
       const result = shouldReauthorize
-        ? await connectAndSyncGooglePhotos({ collectionId: gphotosActiveCollectionId })
-        : await syncGooglePhotosLibrary(existingToken, gphotosActiveCollectionId);
+        ? await connectAndSyncGooglePhotos({
+            collectionId: gphotosActiveCollectionId,
+            signal: abortController.signal,
+          })
+        : await syncGooglePhotosLibrary(existingToken, gphotosActiveCollectionId, {
+            signal: abortController.signal,
+          });
+      if (abortController.signal.aborted) return;
+
       setGphotosConnected(true);
       setGphotosToken(result.accessToken);
       setGphotosCollections(result.collections);
-      setMessage(result.message);
+      setGphotosSmartCategories(readGooglePhotosSmartCategories());
+
+      if (preOpenedPopup && result.memories.length === 0) {
+        const picked = await pickFromGooglePhotosCloud({
+          accessToken: existingToken,
+          collectionId: gphotosActiveCollectionId || undefined,
+          popupWindow: preOpenedPopup,
+          signal: abortController.signal,
+          onStatus: status => setMessage(status),
+        });
+        if (abortController.signal.aborted) return;
+        if (picked.importedCount > 0) {
+          setMessage(
+            `Synced ${picked.importedCount} ${picked.importedCount === 1 ? 'memory' : 'memories'} from Google Photos into ${picked.collectionName}.`,
+          );
+        } else {
+          setMessage('Google Photos connected — click "Sync Google Photos" or "Pick from Google Photos" anytime to select albums & photos.');
+        }
+        return;
+      }
+
+      if (preOpenedPopup) {
+        try {
+          preOpenedPopup.close();
+        } catch {
+          // Ignore close error.
+        }
+        gphotosPickerPopupRef.current = null;
+      }
+
+      setMessage(
+        result.memories.length > 0
+          ? result.message
+          : 'Google Photos linked! Click "Sync Google Photos" or "Pick from Google Photos" to open your Google Photos albums, collections & library.',
+      );
     } catch (err) {
+      if (preOpenedPopup) {
+        try {
+          preOpenedPopup.close();
+        } catch {
+          // Ignore close error.
+        }
+        gphotosPickerPopupRef.current = null;
+      }
+      if (gphotosAbortRef.current !== abortController) return;
       const friendly = formatFriendlyGooglePhotosError(err);
-      if (/closed|cancel/i.test(friendly)) {
+      if (/closed|cancel/i.test(friendly) || abortController.signal.aborted) {
         setError('');
-        setMessage(friendly);
+        setMessage('Google Photos sync cancelled.');
       } else if (/no photos were found/i.test(friendly)) {
         setGphotosConnected(true);
         setError('');
@@ -1103,7 +1238,11 @@ const Memoriya: React.FC = () => {
         setMessage('');
       }
     } finally {
-      setGphotosLoading(false);
+      if (gphotosAbortRef.current === abortController) {
+        gphotosAbortRef.current = null;
+        gphotosPickerPopupRef.current = null;
+        setGphotosLoading(false);
+      }
     }
   };
 
@@ -1112,16 +1251,30 @@ const Memoriya: React.FC = () => {
     setGphotosActiveCollectionId(nextCollectionId);
     setActiveGooglePhotosCollectionId(nextCollectionId);
 
+    if (nextCollectionId.startsWith('smart:')) {
+      const smart = gphotosSmartCategories.find(c => c.id === nextCollectionId);
+      setMessage(smart ? `Showing "${smart.name}" (${smart.count}).` : 'Showing Google Photos category.');
+      return;
+    }
+
     const activeToken = gphotosToken || readGooglePhotosAccessToken();
-    if (activeToken) {
+    if (activeToken && !isPhotosLibraryForbidden(activeToken)) {
+      gphotosAbortRef.current?.abort();
+      const abortController = new AbortController();
+      gphotosAbortRef.current = abortController;
       setGphotosLoading(true);
       try {
-        const res = await syncGooglePhotosLibrary(activeToken, nextCollectionId);
-        setMessage(res.message);
+        const res = await syncGooglePhotosLibrary(activeToken, nextCollectionId, {
+          signal: abortController.signal,
+        });
+        if (!abortController.signal.aborted) setMessage(res.message);
       } catch {
         // Keep local collection selection smooth.
       } finally {
-        setGphotosLoading(false);
+        if (gphotosAbortRef.current === abortController) {
+          gphotosAbortRef.current = null;
+          setGphotosLoading(false);
+        }
       }
     } else {
       const target = gphotosCollections.find(col => col.id === nextCollectionId);
@@ -1131,61 +1284,96 @@ const Memoriya: React.FC = () => {
         setMessage(
           target
             ? `Showing collection "${target.name}" (${target.count} ${target.count === 1 ? 'memory' : 'memories'}).`
-            : 'Showing all Google Photos collections.',
+            : 'Showing all Google Photos albums & collections.',
         );
       }
     }
   };
 
   const handlePickFromGooglePhotos = async () => {
+    gphotosAbortRef.current?.abort();
+    const abortController = new AbortController();
+    gphotosAbortRef.current = abortController;
+
     const existingToken = gphotosToken || readGooglePhotosAccessToken();
     if (!existingToken) {
       setGphotosLoading(true);
       setError('');
       setMessage('Signing in to Google Photos...');
       try {
-        const synced = await connectAndSyncGooglePhotos({ collectionId: gphotosActiveCollectionId });
+        const synced = await connectAndSyncGooglePhotos({
+          collectionId: gphotosActiveCollectionId,
+          signal: abortController.signal,
+        });
+        if (abortController.signal.aborted) return;
         setGphotosConnected(true);
         setGphotosToken(synced.accessToken);
         setGphotosCollections(synced.collections);
+        setGphotosSmartCategories(readGooglePhotosSmartCategories());
         setMessage(
           synced.memories.length > 0
             ? synced.message
-            : 'Google Photos linked — click "Pick from Google Photos" again to choose your photos.',
+            : 'Google Photos linked — click "Pick from Google Photos" again to choose your albums & photos.',
         );
       } catch (err) {
-        setError(formatFriendlyGooglePhotosError(err));
-        setMessage('');
+        if (gphotosAbortRef.current !== abortController) return;
+        const friendly = formatFriendlyGooglePhotosError(err);
+        if (/closed|cancel/i.test(friendly) || abortController.signal.aborted) {
+          setError('');
+          setMessage('Google Photos sign-in cancelled.');
+        } else {
+          setError(friendly);
+          setMessage('');
+        }
       } finally {
-        setGphotosLoading(false);
+        if (gphotosAbortRef.current === abortController) {
+          gphotosAbortRef.current = null;
+          setGphotosLoading(false);
+        }
       }
       return;
     }
 
     const popup = window.open('about:blank', 'memoriya-gphotos-picker', 'width=980,height=740');
+    gphotosPickerPopupRef.current = popup;
     setGphotosLoading(true);
     setError('');
-    setMessage('Opening Google Photos...');
+    setMessage('Opening Google Photos albums & library...');
     try {
+      const activeCol = gphotosCollections.find(c => c.id === gphotosActiveCollectionId);
       const res = await pickFromGooglePhotosCloud({
         accessToken: existingToken,
-        collectionId: gphotosActiveCollectionId || undefined,
+        collectionId: activeCol ? activeCol.id : undefined,
+        collectionName: activeCol ? activeCol.name : undefined,
         popupWindow: popup,
+        signal: abortController.signal,
         onStatus: status => setMessage(status),
       });
+      if (abortController.signal.aborted) return;
       setGphotosConnected(true);
       if (res.importedCount > 0) {
         setMessage(
-          `Added ${res.importedCount} ${res.importedCount === 1 ? 'memory' : 'memories'} from Google Photos into "${res.collectionName}".`,
+          `Synced ${res.importedCount} ${res.importedCount === 1 ? 'memory' : 'memories'} from Google Photos into ${res.collectionName}.`,
         );
       } else {
-        setMessage('No new photos were selected from Google Photos.');
+        setMessage('Google Photos selection closed — no new photos were added.');
       }
     } catch (err) {
-      setError(formatFriendlyGooglePhotosError(err));
-      setMessage('');
+      if (gphotosAbortRef.current !== abortController) return;
+      const friendly = formatFriendlyGooglePhotosError(err);
+      if (/closed|cancel/i.test(friendly) || abortController.signal.aborted) {
+        setError('');
+        setMessage('Google Photos selection cancelled.');
+      } else {
+        setError(friendly);
+        setMessage('');
+      }
     } finally {
-      setGphotosLoading(false);
+      if (gphotosAbortRef.current === abortController) {
+        gphotosAbortRef.current = null;
+        gphotosPickerPopupRef.current = null;
+        setGphotosLoading(false);
+      }
     }
   };
 
@@ -1293,8 +1481,18 @@ const Memoriya: React.FC = () => {
           <div className="memoriya-hero-actions">
             <button type="button" className="memoriya-primary" onClick={() => void connectDrive()} disabled={loading}>
               {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
-              {isDriveLinked ? 'Sync Google Drive' : 'Connect Google Drive'}
+              {loading ? 'Syncing Drive...' : isDriveLinked ? 'Sync Google Drive' : 'Connect Google Drive'}
             </button>
+            {loading && (
+              <button
+                type="button"
+                className="memoriya-glass-button"
+                onClick={cancelDriveSync}
+                title="Cancel Google Drive sync"
+              >
+                <X size={16} /> Cancel Drive Sync
+              </button>
+            )}
             {isDriveLinked && driveFolders.length > 0 && (
               <label className="memoriya-glass-button memoriya-drive-folder-select">
                 <FolderOpen size={17} />
@@ -1322,23 +1520,46 @@ const Memoriya: React.FC = () => {
               disabled={gphotosLoading}
             >
               {gphotosLoading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <GooglePhotosIcon size={17} />}
-              {gphotosConnected ? 'Sync Google Photos' : 'Connect Google Photos'}
+              {gphotosLoading ? 'Syncing Photos...' : gphotosConnected ? 'Sync Google Photos' : 'Connect Google Photos'}
             </button>
-            {gphotosConnected && gphotosCollections.length > 0 && (
+            {gphotosLoading && (
+              <button
+                type="button"
+                className="memoriya-glass-button"
+                onClick={cancelGooglePhotosSync}
+                title="Cancel Google Photos sync"
+              >
+                <X size={16} /> Cancel Photos Sync
+              </button>
+            )}
+            {gphotosConnected && (
               <label className="memoriya-glass-button memoriya-drive-folder-select">
                 <GooglePhotosIcon size={16} />
-                <span>Collection</span>
+                <span>Albums & Collections</span>
                 <select
                   value={gphotosActiveCollectionId}
                   onChange={event => void changeGooglePhotosCollection(event.target.value)}
                   aria-label="Choose Google Photos collection"
                 >
                   <option value="">All Google Photos ({totalGphotosCount})</option>
-                  {gphotosCollections.map(col => (
-                    <option key={col.id} value={col.id}>
-                      {col.name} ({col.count})
-                    </option>
-                  ))}
+                  {gphotosCollections.length > 0 && (
+                    <optgroup label="Albums & Collections">
+                      {gphotosCollections.map(col => (
+                        <option key={col.id} value={col.id}>
+                          {col.name} ({col.count})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {gphotosSmartCategories.length > 0 && (
+                    <optgroup label="Google Photos Categories">
+                      {gphotosSmartCategories.map(cat => (
+                        <option key={cat.id} value={cat.id}>
+                          {cat.name} ({cat.count})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </label>
             )}
