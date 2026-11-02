@@ -135,10 +135,48 @@ declare global {
 
 const loadScript = (src: string) =>
   new Promise<void>((resolve, reject) => {
+    if (window.google?.accounts?.oauth2) {
+      resolve();
+      return;
+    }
+
+    let settled = false;
+    let pollTimer = 0;
+    let timeoutTimer = 0;
+    const finish = (cb: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (pollTimer) window.clearInterval(pollTimer);
+      if (timeoutTimer) window.clearTimeout(timeoutTimer);
+      cb();
+    };
+
+    timeoutTimer = window.setTimeout(() => {
+      if (window.google?.accounts?.oauth2) finish(resolve);
+      else finish(() => reject(new Error('Google Sign-In took too long to load. Check your connection and try again.')));
+    }, 12000);
+
     const existing = document.querySelector<HTMLScriptElement>(`script[src="${src}"]`);
     if (existing) {
-      if (existing.dataset.loaded === 'true') resolve();
-      else existing.addEventListener('load', () => resolve(), { once: true });
+      if (existing.dataset.loaded === 'true' || window.google?.accounts?.oauth2) {
+        finish(resolve);
+        return;
+      }
+      existing.addEventListener('load', () => {
+        existing.dataset.loaded = 'true';
+        finish(resolve);
+      }, { once: true });
+      existing.addEventListener('error', () => {
+        finish(() => reject(new Error('Google OAuth script failed to load.')));
+      }, { once: true });
+      // Also poll `window.google.accounts.oauth2` in case the script in index.html
+      // or GooglePhotosBoot finished loading before `dataset.loaded` was set.
+      pollTimer = window.setInterval(() => {
+        if (window.google?.accounts?.oauth2) {
+          existing.dataset.loaded = 'true';
+          finish(resolve);
+        }
+      }, 40);
       return;
     }
 
@@ -149,9 +187,9 @@ const loadScript = (src: string) =>
     script.dataset.loaded = 'false';
     script.onload = () => {
       script.dataset.loaded = 'true';
-      resolve();
+      finish(resolve);
     };
-    script.onerror = () => reject(new Error('Google OAuth script failed to load.'));
+    script.onerror = () => finish(() => reject(new Error('Google OAuth script failed to load.')));
     document.head.appendChild(script);
   });
 
@@ -193,13 +231,17 @@ export class GoogleDriveService {
   }
 
   async connect(loginHint?: string, prompt = ''): Promise<DriveConnectionState> {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
 
     if (!clientId) {
-      throw new Error('Google Drive is not configured. Add VITE_GOOGLE_CLIENT_ID in .env and restart the dev server.');
+      throw new Error('Google Drive is not configured. Add VITE_GOOGLE_CLIENT_ID in .env (or Vercel Environment Variables) and restart/redeploy.');
     }
 
-    await loadScript(GOOGLE_SCRIPT_URL);
+    // Keep synchronous user-gesture execution when GIS is already loaded so
+    // browsers never block the OAuth popup.
+    if (!window.google?.accounts?.oauth2) {
+      await loadScript(GOOGLE_SCRIPT_URL);
+    }
     if (loginHint) this.loginHint = loginHint;
 
     return new Promise<DriveConnectionState>((resolve, reject) => {
@@ -231,6 +273,18 @@ export class GoogleDriveService {
           }
 
           invalidDriveTokens.delete(response.access_token);
+          try {
+            const expiresInSec = Number(response.expires_in) || 3500;
+            window.localStorage.setItem(
+              'memoriya-drive-token-v1',
+              JSON.stringify({
+                accessToken: response.access_token,
+                expiresAt: Date.now() + Math.max(60, expiresInSec - 60) * 1000,
+              }),
+            );
+          } catch {
+            // Optional local storage.
+          }
           finish(() => resolve({
             connected: true,
             loading: false,
@@ -245,9 +299,12 @@ export class GoogleDriveService {
         },
         error_callback: error => {
           const wasClosed = error.type === 'popup_closed' || error.type === 'popup_closed_by_user';
+          const wasBlocked = error.type === 'popup_failed_to_open';
           finish(() => reject(new Error(wasClosed
             ? 'Google Drive authorization was cancelled.'
-            : error.message || 'Google Drive authorization failed.')));
+            : wasBlocked
+              ? 'Google Drive sign-in popup was blocked by your browser. Allow popups for this site and click Connect Drive again.'
+              : error.message || 'Google Drive authorization failed.')));
         },
       });
 
@@ -302,8 +359,9 @@ export class GoogleDriveService {
     return allFiles;
   }
 
-  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40, orderBy = 'createdTime desc'): Promise<DriveMediaPage> {
-    const locationQuery = folderId ? `'${folderId}' in parents and ` : '';
+  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40, orderBy = 'modifiedTime desc'): Promise<DriveMediaPage> {
+    const cleanFolderId = folderId && folderId !== 'drive-root' ? folderId : '';
+    const locationQuery = cleanFolderId ? `'${cleanFolderId}' in parents and ` : '';
     const params = new URLSearchParams({
       q: `${locationQuery}(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false`,
       pageSize: String(pageSize),
@@ -426,8 +484,31 @@ export class GoogleDriveService {
   }
 
   async refreshAccessToken(loginHint?: string, silent = false): Promise<string> {
+    if (silent) {
+      // GIS initTokenClient always opens a popup window (`display=popup`), which
+      // browsers block outside user clicks. In background polls, check if a valid
+      // unexpired token was saved in localStorage (e.g. from another tab) instead
+      // of triggering a blocked popup.
+      try {
+        const raw = window.localStorage.getItem('memoriya-drive-token-v1');
+        if (raw) {
+          const parsed = JSON.parse(raw) as { accessToken?: string; expiresAt?: number };
+          if (
+            parsed.accessToken &&
+            (!parsed.expiresAt || Date.now() < parsed.expiresAt) &&
+            !isDriveTokenInvalid(parsed.accessToken)
+          ) {
+            return parsed.accessToken;
+          }
+        }
+      } catch {
+        // Ignore storage read error.
+      }
+      throw new Error('Google Drive authorization expired. Reconnect Google Drive and try again.');
+    }
+
     if (!this.refreshPromise) {
-      this.refreshPromise = this.connect(loginHint || this.loginHint, silent ? 'none' : '')
+      this.refreshPromise = this.connect(loginHint || this.loginHint, '')
         .then(state => {
           if (!state.accessToken) throw new Error('Google Drive authorization returned no access token.');
           return state.accessToken;

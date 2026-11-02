@@ -229,7 +229,7 @@ const yieldToBrowser = () => new Promise<void>(resolve => {
 const waitForCacheResume = async () => {
   while (navigator.onLine === false) {
     await new Promise<void>(resolve => {
-      window.addEventListener('online', resolve, { once: true });
+      window.addEventListener('online', () => resolve(), { once: true });
     });
   }
 };

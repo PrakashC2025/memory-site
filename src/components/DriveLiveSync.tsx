@@ -24,11 +24,11 @@ const DriveLiveSync: React.FC = () => {
   useEffect(() => {
     let active = true;
     const driveAuthRequiredRef = { current: readDriveAuthRequired() };
-    let syncNow: (() => void) | null = null;
+    let syncNow: ((force?: boolean) => void) | null = null;
     const onTokenUpdated = (event: Event) => {
       if ((event as CustomEvent<string>).detail) {
         driveAuthRequiredRef.current = false;
-        syncNow?.();
+        syncNow?.(true);
       }
     };
     window.addEventListener(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, onTokenUpdated);
@@ -71,15 +71,12 @@ const DriveLiveSync: React.FC = () => {
       return { imported, removed, filesToCache };
     };
 
-    const sync = async () => {
-      if (!active || !dueForSync()) return;
-      if (driveAuthRequiredRef.current || readDriveAuthRequired() || !acquireDriveSyncLock()) return;
-      lastSyncAt = Date.now();
+    const sync = async (force = false) => {
+      if (!active || (!force && !dueForSync())) return;
+      if (driveAuthRequiredRef.current || readDriveAuthRequired()) return;
       let accessToken = readDriveAccessToken();
-      if (!accessToken) {
-        releaseDriveSyncLock();
-        return;
-      }
+      if (!accessToken || !acquireDriveSyncLock()) return;
+      lastSyncAt = Date.now();
       const folderId = readDriveFolderId();
       try {
         let result: Awaited<ReturnType<typeof reconcileFolderSnapshot>>;
@@ -141,7 +138,7 @@ const DriveLiveSync: React.FC = () => {
     let lastSyncAt = 0;
     const dueForSync = () => Date.now() - lastSyncAt >= SYNC_COOLDOWN_MS;
 
-    syncNow = () => void sync();
+    syncNow = (force = false) => void sync(force);
     const onFocus = () => syncNow?.();
     const onOnline = () => syncNow?.();
     const onVisibilityChange = () => {
@@ -150,7 +147,7 @@ const DriveLiveSync: React.FC = () => {
     window.addEventListener('focus', onFocus);
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisibilityChange);
-    void sync();
+    void sync(true);
     const interval = window.setInterval(() => void sync(), SYNC_INTERVAL_MS);
     return () => {
       active = false;

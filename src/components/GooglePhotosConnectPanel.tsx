@@ -12,6 +12,7 @@ import {
   GOOGLE_PHOTOS_UPDATED_EVENT,
   hydrateGooglePhotosLibrary,
   isGooglePhotosConnected,
+  isPhotosLibraryForbidden,
   liveSyncGooglePhotos,
   notifyGooglePhotosUpdated,
   pickFromGooglePhotosCloud,
@@ -105,9 +106,11 @@ const GooglePhotosConnectPanel: React.FC = () => {
     setMessage('Connecting to Google Photos...');
     try {
       const existingToken = readGooglePhotosAccessToken();
-      const result = existingToken
-        ? await syncGooglePhotosLibrary(existingToken, activeCollectionId)
-        : await connectAndSyncGooglePhotos({ collectionId: activeCollectionId });
+      const shouldReauthorize =
+        !connected || !existingToken || isPhotosLibraryForbidden(existingToken);
+      const result = shouldReauthorize
+        ? await connectAndSyncGooglePhotos({ collectionId: activeCollectionId })
+        : await syncGooglePhotosLibrary(existingToken, activeCollectionId);
       setConnected(true);
       setMessage(result.message);
     } catch (err) {

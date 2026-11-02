@@ -1,4 +1,4 @@
-const CACHE_NAME = "memoriya-runtime-v8";
+const CACHE_NAME = "memoriya-runtime-v9";
 const LEGACY_TV_BROWSER = (() => {
   const userAgent = self.navigator.userAgent || "";
   const android = userAgent.match(/Android\s+(\d+)/i);

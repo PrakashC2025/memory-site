@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 type CastSignal = {
   type: string;
+  role?: string;
   room?: string;
   label?: string;
   message?: string;
