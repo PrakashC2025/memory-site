@@ -1,7 +1,7 @@
 import type { Memory } from '../data/memories';
 
 export const GOOGLE_PHOTOS_STORAGE_KEY = 'memoriya-google-photos-library-v1';
-export const GOOGLE_PHOTOS_SESSION_KEY = 'memoriya-google-photos-session-v1';
+export const GOOGLE_PHOTOS_SESSION_KEY = 'memoriya-google-photos-session-v2';
 export const GOOGLE_PHOTOS_CLIENT_ID_KEY = 'memoriya-google-client-id-override-v1';
 export const GOOGLE_PHOTOS_UPDATED_EVENT = 'memoriya-google-photos-updated';
 export const GOOGLE_PHOTOS_WEB_URL = 'https://photos.google.com';
@@ -11,9 +11,11 @@ const GOOGLE_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 // Official active Google Photos scopes (post-2025):
 // - photoslibrary.appendonly: create albums/collections & upload photos/videos to Google Photos
 // - photoslibrary.readonly.appcreateddata: list albums & photos created/uploaded by Memoriya automatically
+// - photospicker.mediaitems.readonly: pick existing photos added directly in photos.google.com
 const GOOGLE_PHOTOS_LIBRARY_SCOPE = [
   'https://www.googleapis.com/auth/photoslibrary.appendonly',
   'https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata',
+  'https://www.googleapis.com/auth/photospicker.mediaitems.readonly',
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
 ].join(' ');
@@ -1076,6 +1078,26 @@ export const connectGooglePhotosGmail = async (options?: {
   return { accessToken: tokenResult.accessToken, account: state.account };
 };
 
+export const refreshGooglePhotosAccessToken = async (silent = true): Promise<string> => {
+  const clientId = getConfiguredGoogleClientId();
+  if (!clientId || !hasWindow()) return '';
+  const state = readGooglePhotosState();
+  const hint = state.account?.email || undefined;
+  try {
+    await loadGoogleIdentityScript();
+    const tokenResult = await requestOAuthTokenWithScope(
+      clientId,
+      GOOGLE_PHOTOS_LIBRARY_SCOPE,
+      silent ? '' : 'select_account',
+      hint,
+    );
+    saveGooglePhotosAccessToken(tokenResult.accessToken, tokenResult.expiresIn);
+    return tokenResult.accessToken;
+  } catch {
+    return '';
+  }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Google Photos Cloud Album + Media Sync & Upload (1-Button Flow Like Drive)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1128,10 +1150,11 @@ const downloadAuthedBlob = async (url: string, accessToken?: string): Promise<Bl
 
 const fetchAllRemoteGoogleAlbums = async (
   accessToken: string,
-): Promise<{ ok: boolean; albums: RemoteGoogleAlbum[] }> => {
+): Promise<{ ok: boolean; unauthorized: boolean; albums: RemoteGoogleAlbum[] }> => {
   const albums: RemoteGoogleAlbum[] = [];
   let pageToken = '';
   let anyOk = false;
+  let unauthorized = false;
 
   for (let page = 0; page < 20; page += 1) {
     const params = new URLSearchParams({ pageSize: '50' });
@@ -1141,7 +1164,10 @@ const fetchAllRemoteGoogleAlbums = async (
         `https://photoslibrary.googleapis.com/v1/albums?${params.toString()}`,
         { headers: { Authorization: `Bearer ${accessToken}` } },
       );
-      if (!res.ok) break;
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) unauthorized = true;
+        break;
+      }
       anyOk = true;
       const json = (await res.json()) as {
         albums?: RemoteGoogleAlbum[];
@@ -1157,16 +1183,17 @@ const fetchAllRemoteGoogleAlbums = async (
     }
   }
 
-  return { ok: anyOk, albums };
+  return { ok: anyOk, unauthorized, albums };
 };
 
 const fetchRemoteAlbumMediaItems = async (
   accessToken: string,
   remoteAlbumId: string,
-): Promise<{ ok: boolean; items: RemoteGoogleMediaItem[] }> => {
+): Promise<{ ok: boolean; unauthorized: boolean; items: RemoteGoogleMediaItem[] }> => {
   const items: RemoteGoogleMediaItem[] = [];
   let pageToken = '';
   let anyOk = false;
+  let unauthorized = false;
 
   for (let page = 0; page < 15; page += 1) {
     const body: Record<string, unknown> = {
@@ -1183,7 +1210,10 @@ const fetchRemoteAlbumMediaItems = async (
         },
         body: JSON.stringify(body),
       });
-      if (!res.ok) break;
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) unauthorized = true;
+        break;
+      }
       anyOk = true;
       const json = (await res.json()) as {
         mediaItems?: RemoteGoogleMediaItem[];
@@ -1199,15 +1229,16 @@ const fetchRemoteAlbumMediaItems = async (
     }
   }
 
-  return { ok: anyOk, items };
+  return { ok: anyOk, unauthorized, items };
 };
 
 const fetchAllRemoteLibraryMediaItems = async (
   accessToken: string,
-): Promise<{ ok: boolean; items: RemoteGoogleMediaItem[] }> => {
+): Promise<{ ok: boolean; unauthorized: boolean; items: RemoteGoogleMediaItem[] }> => {
   const items: RemoteGoogleMediaItem[] = [];
   let pageToken = '';
   let anyOk = false;
+  let unauthorized = false;
 
   for (let page = 0; page < 15; page += 1) {
     const params = new URLSearchParams({ pageSize: '100' });
@@ -1217,7 +1248,10 @@ const fetchAllRemoteLibraryMediaItems = async (
         `https://photoslibrary.googleapis.com/v1/mediaItems?${params.toString()}`,
         { headers: { Authorization: `Bearer ${accessToken}` } },
       );
-      if (!res.ok) break;
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) unauthorized = true;
+        break;
+      }
       anyOk = true;
       const json = (await res.json()) as {
         mediaItems?: RemoteGoogleMediaItem[];
@@ -1233,8 +1267,20 @@ const fetchAllRemoteLibraryMediaItems = async (
     }
   }
 
-  return { ok: anyOk, items };
+  return { ok: anyOk, unauthorized, items };
 };
+
+const buildLibrarySignature = (state: GooglePhotosPersistedState): string => {
+  const cols = state.collections
+    .map(c => `${c.id}:${c.name}:${c.selected ? 1 : 0}:${c.remoteAlbumId || ''}`)
+    .join('|');
+  const items = state.items
+    .map(i => `${i.googlePhotoId}:${i.remoteMediaItemId || ''}:${i.collectionId}:${i.title}:${i.date}`)
+    .join('|');
+  return `${state.activeCollectionId || ''}#${cols}#${items}`;
+};
+
+let liveSyncBusy = false;
 
 /**
  * Syncs Google Photos albums (collections) and media items directly from the user's Google account —
@@ -1243,9 +1289,11 @@ const fetchAllRemoteLibraryMediaItems = async (
 export const syncGooglePhotosLibrary = async (
   accessToken: string,
   targetCollectionId?: string,
+  options?: { background?: boolean },
 ): Promise<GooglePhotosSyncResult> => {
   void requestPersistentBrowserStorage();
   const state = readGooglePhotosState();
+  const previousSignature = buildLibrarySignature(state);
 
   if (typeof targetCollectionId === 'string') {
     state.activeCollectionId = targetCollectionId;
@@ -1257,12 +1305,22 @@ export const syncGooglePhotosLibrary = async (
     col => Boolean(col.remoteAlbumId) || initialItemCollectionIds.has(col.id),
   );
 
+  let workingToken = accessToken;
   let cloudSyncActive = false;
   let importedCount = 0;
 
-  if (accessToken) {
+  if (workingToken) {
     // 1. Read all albums / collections directly from the user's Google account
-    const albumListing = await fetchAllRemoteGoogleAlbums(accessToken);
+    let albumListing = await fetchAllRemoteGoogleAlbums(workingToken);
+    if (!albumListing.ok && albumListing.unauthorized) {
+      saveGooglePhotosAccessToken('');
+      const refreshed = await refreshGooglePhotosAccessToken(true);
+      if (refreshed) {
+        workingToken = refreshed;
+        albumListing = await fetchAllRemoteGoogleAlbums(workingToken);
+      }
+    }
+
     if (albumListing.ok) {
       cloudSyncActive = true;
       const liveRemoteAlbumIds = new Set<string>();
@@ -1271,18 +1329,32 @@ export const syncGooglePhotosLibrary = async (
         liveRemoteAlbumIds.add(remoteAlbum.id);
         upsertCollectionInState(state, remoteAlbum.title, 'cloud-album', remoteAlbum.id);
       }
-      // Remove stale cloud-album entries deleted from the Google account
+      // Remove stale cloud-album entries deleted from the Google account (unless holding local picker items)
+      const localItemColIds = new Set(
+        state.items.filter(i => !i.remoteMediaItemId).map(i => i.collectionId),
+      );
       state.collections = state.collections.filter(
-        col => !col.remoteAlbumId || liveRemoteAlbumIds.has(col.remoteAlbumId),
+        col =>
+          !col.remoteAlbumId ||
+          liveRemoteAlbumIds.has(col.remoteAlbumId) ||
+          localItemColIds.has(col.id),
       );
     }
 
-    const existingByPhotoId = new Map(state.items.map(i => [i.googlePhotoId, i]));
+    // Index existing items by BOTH googlePhotoId and remoteMediaItemId so local uploads merge seamlessly
+    const existingByRemoteOrPhotoId = new Map<string, StoredGooglePhotoItem>();
+    state.items.forEach(item => {
+      existingByRemoteOrPhotoId.set(item.googlePhotoId, item);
+      if (item.remoteMediaItemId) {
+        existingByRemoteOrPhotoId.set(item.remoteMediaItemId, item);
+      }
+    });
+
     const queuedEntries: Array<{
       remote: RemoteGoogleMediaItem;
       collection: GooglePhotosCollection;
     }> = [];
-    const seenPhotoIds = new Set<string>();
+    const seenRemoteIds = new Set<string>();
 
     // 2. Read all photos inside each collection from the Google account
     const remoteCollections = state.collections.filter(col => Boolean(col.remoteAlbumId));
@@ -1295,12 +1367,12 @@ export const syncGooglePhotosLibrary = async (
 
     for (const col of orderedRemoteCollections) {
       if (!col.remoteAlbumId) continue;
-      const albumMedia = await fetchRemoteAlbumMediaItems(accessToken, col.remoteAlbumId);
+      const albumMedia = await fetchRemoteAlbumMediaItems(workingToken, col.remoteAlbumId);
       if (albumMedia.ok) {
         cloudSyncActive = true;
         for (const remote of albumMedia.items) {
-          if (!remote.id || !remote.baseUrl || seenPhotoIds.has(remote.id)) continue;
-          seenPhotoIds.add(remote.id);
+          if (!remote.id || !remote.baseUrl || seenRemoteIds.has(remote.id)) continue;
+          seenRemoteIds.add(remote.id);
           queuedEntries.push({ remote, collection: col });
         }
       }
@@ -1311,24 +1383,45 @@ export const syncGooglePhotosLibrary = async (
       ? state.collections.find(c => c.id === state.activeCollectionId)
       : undefined;
 
+    let scannedFullLibrary = false;
     if (!chosenCol || !chosenCol.remoteAlbumId) {
-      const libraryMedia = await fetchAllRemoteLibraryMediaItems(accessToken);
+      const libraryMedia = await fetchAllRemoteLibraryMediaItems(workingToken);
       if (libraryMedia.ok) {
         cloudSyncActive = true;
+        scannedFullLibrary = true;
         const unalbumed = libraryMedia.items.filter(
-          remote => Boolean(remote.id && remote.baseUrl && !seenPhotoIds.has(remote.id)),
+          remote => Boolean(remote.id && remote.baseUrl && !seenRemoteIds.has(remote.id)),
         );
         if (unalbumed.length > 0) {
           // Only create a library collection when real un-albumed photos exist in the Google account.
           const generalCol = upsertCollectionInState(state, 'Google Photos', 'cloud-album');
           for (const remote of unalbumed) {
             if (!remote.id) continue;
-            seenPhotoIds.add(remote.id);
+            seenRemoteIds.add(remote.id);
             queuedEntries.push({ remote, collection: generalCol });
           }
         }
       }
     }
+
+    // Reconcile kept local items vs remote cloud items (pruning remote items deleted in Google Photos)
+    const nextByPrimaryId = new Map<string, StoredGooglePhotoItem>();
+    state.items.forEach(item => {
+      if (item.remoteMediaItemId) {
+        // If we completed a full library scan and this remote item no longer exists, drop it cleanly
+        if (scannedFullLibrary && !seenRemoteIds.has(item.remoteMediaItemId)) {
+          const hydrated = hydratedBlobUrls.get(item.googlePhotoId);
+          if (hydrated) {
+            URL.revokeObjectURL(hydrated.url);
+            if (hydrated.thumbnailUrl !== hydrated.url) URL.revokeObjectURL(hydrated.thumbnailUrl);
+            hydratedBlobUrls.delete(item.googlePhotoId);
+          }
+          void deleteCachedGooglePhotoRecord(item.googlePhotoId);
+          return;
+        }
+      }
+      nextByPrimaryId.set(item.googlePhotoId, item);
+    });
 
     // 4. Download & hydrate media blobs in fast concurrent batches of 6
     const CONCURRENCY = 6;
@@ -1337,8 +1430,8 @@ export const syncGooglePhotosLibrary = async (
       await Promise.all(
         batch.map(async ({ remote, collection }) => {
           if (!remote.id || !remote.baseUrl) return;
-          const googlePhotoId = remote.id;
-          const existing = existingByPhotoId.get(googlePhotoId);
+          const existing = existingByRemoteOrPhotoId.get(remote.id);
+          const googlePhotoId = existing?.googlePhotoId || remote.id;
 
           // Reuse cached blob from memory or IndexedDB when already downloaded
           const alreadyHydrated =
@@ -1351,10 +1444,10 @@ export const syncGooglePhotosLibrary = async (
           let finalMimeType = existing?.mimeType || mimeType;
           if (!alreadyHydrated) {
             const cleanBase = remote.baseUrl.replace(/=[^/]*$/, '');
-            const thumbBlob = await downloadAuthedBlob(`${cleanBase}=w720-h720`, accessToken);
+            const thumbBlob = await downloadAuthedBlob(`${cleanBase}=w720-h720`, workingToken);
             const fullBlob = isVideo
-              ? (await downloadAuthedBlob(`${cleanBase}=dv`, accessToken)) || thumbBlob
-              : (await downloadAuthedBlob(`${cleanBase}=w2048-h2048`, accessToken)) || thumbBlob;
+              ? (await downloadAuthedBlob(`${cleanBase}=dv`, workingToken)) || thumbBlob
+              : (await downloadAuthedBlob(`${cleanBase}=w2048-h2048`, workingToken)) || thumbBlob;
 
             if (!fullBlob) return;
 
@@ -1379,7 +1472,7 @@ export const syncGooglePhotosLibrary = async (
           const height = Number(remote.mediaMetadata?.height) || existing?.height || undefined;
 
           const storedItem: StoredGooglePhotoItem = {
-            id: `gphoto-${googlePhotoId}`,
+            id: existing?.id || `gphoto-${googlePhotoId}`,
             googlePhotoId,
             remoteMediaItemId: remote.id,
             collectionId: collection.id,
@@ -1397,12 +1490,12 @@ export const syncGooglePhotosLibrary = async (
             event: collection.name,
             remoteProductUrl: remote.productUrl,
           };
-          existingByPhotoId.set(googlePhotoId, storedItem);
+          nextByPrimaryId.set(googlePhotoId, storedItem);
         }),
       );
     }
 
-    state.items = Array.from(existingByPhotoId.values()).sort(
+    state.items = Array.from(nextByPrimaryId.values()).sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
   }
@@ -1418,8 +1511,10 @@ export const syncGooglePhotosLibrary = async (
     col.selected = state.activeCollectionId ? col.id === state.activeCollectionId : true;
   });
 
+  const nextSignature = buildLibrarySignature(state);
+  const changed = nextSignature !== previousSignature || importedCount > 0;
   state.lastSyncedAt = new Date().toISOString();
-  writeGooglePhotosState(state);
+  writeGooglePhotosState(state, options?.background ? changed : true);
 
   await hydrateGooglePhotosLibrary();
 
@@ -1433,11 +1528,11 @@ export const syncGooglePhotosLibrary = async (
       ? `Google Photos ready — ${visibleMemories.length} ${visibleMemories.length === 1 ? 'memory' : 'memories'} in ${activeColName ? `"${activeColName}"` : `${summaries.length || 1} ${summaries.length === 1 ? 'collection' : 'collections'}`}.`
       : activeColName
         ? `Google Photos connected — no photos found in "${activeColName}".`
-        : 'Google Photos connected — no photos found.';
+        : 'Google Photos connected — no photos found yet. Click "Pick from Google Photos" to select existing Google Photos or "Add to Google Photos" to upload new ones.';
 
   return {
     connected: true,
-    accessToken,
+    accessToken: workingToken,
     account: state.account,
     collections: summaries,
     memories: visibleMemories,
@@ -1447,6 +1542,29 @@ export const syncGooglePhotosLibrary = async (
     cloudSyncActive,
     message,
   };
+};
+
+/**
+ * Background live poller for Google Photos — mirrors `DriveLiveSync` so new/deleted photos
+ * update automatically across Home, Memoriya, Story Mode, Timeline, Event Explorer, and Memory Tree.
+ */
+export const liveSyncGooglePhotos = async (): Promise<GooglePhotosSyncResult | null> => {
+  if (liveSyncBusy || !hasWindow() || !isGooglePhotosConnected()) return null;
+  liveSyncBusy = true;
+  try {
+    let token = readGooglePhotosAccessToken();
+    if (!token) {
+      const state = readGooglePhotosState();
+      if (!state.account?.email) return null;
+      token = await refreshGooglePhotosAccessToken(true);
+    }
+    if (!token) return null;
+    return await syncGooglePhotosLibrary(token, undefined, { background: true });
+  } catch {
+    return null;
+  } finally {
+    liveSyncBusy = false;
+  }
 };
 
 /**
@@ -2125,3 +2243,163 @@ export const importGooglePhotosPickerSession = async (
   }
   return importFilesIntoGooglePhotosCollection(files, target, onProgress);
 };
+
+/**
+ * 1-click Google Photos cloud selector (no custom modal) for pulling existing photos
+ * that were uploaded directly inside photos.google.com, immediately showing them across
+ * the site and syncing them into the user's cloud collection.
+ */
+export const pickFromGooglePhotosCloud = async (options?: {
+  collectionId?: string;
+  popupWindow?: Window | null;
+  onStatus?: (message: string) => void;
+}): Promise<{
+  importedCount: number;
+  collectionName: string;
+  syncedToCloud: boolean;
+}> => {
+  const popup = options?.popupWindow || null;
+  try {
+    let token = readGooglePhotosAccessToken();
+    if (!token) {
+      options?.onStatus?.('Refreshing Google Photos access...');
+      token = await refreshGooglePhotosAccessToken(true);
+    }
+    if (!token) {
+      const connected = await connectGooglePhotosGmail({ usePickerScope: false });
+      token = connected.accessToken;
+    }
+
+    let session: GooglePhotosPickerSession;
+    try {
+      session = await createGooglePhotosPickerSession(token);
+    } catch (firstErr) {
+      const msg = firstErr instanceof Error ? firstErr.message : String(firstErr || '');
+      if (/expired|401|not enabled|403/i.test(msg)) {
+        const reconnected = await connectGooglePhotosGmail({ usePickerScope: true });
+        token = reconnected.accessToken;
+        session = await createGooglePhotosPickerSession(token);
+      } else {
+        throw firstErr;
+      }
+    }
+
+    if (popup && !popup.closed) {
+      popup.location.href = session.autoCloseUri;
+      popup.focus();
+    } else if (hasWindow()) {
+      window.open(session.autoCloseUri, 'memoriya-gphotos-picker', 'width=980,height=740');
+    }
+
+    options?.onStatus?.(
+      'Select your photos in Google Photos and click "Done" — Memoriya will update automatically...',
+    );
+
+    const ready = await waitForGooglePhotosPickerSelection(session, token, {
+      popupWindow: popup,
+    });
+    if (popup && !popup.closed) {
+      try {
+        popup.close();
+      } catch {
+        // Cross-origin window may already be closing via /autoclose.
+      }
+    }
+
+    if (!ready) {
+      return { importedCount: 0, collectionName: 'Google Photos', syncedToCloud: false };
+    }
+
+    options?.onStatus?.('Importing selected photos from Google Photos...');
+
+    const allItems: Array<{
+      id?: string;
+      createTime?: string;
+      type?: string;
+      mediaFile?: { baseUrl?: string; mimeType?: string; filename?: string };
+    }> = [];
+    let pageToken = '';
+    for (let page = 0; page < 15; page += 1) {
+      const params = new URLSearchParams({
+        sessionId: session.sessionId,
+        pageSize: '100',
+      });
+      if (pageToken) params.set('pageToken', pageToken);
+      const res = await fetch(
+        `https://photospicker.googleapis.com/v1/mediaItems?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) break;
+      const json = (await res.json()) as {
+        mediaItems?: typeof allItems;
+        nextPageToken?: string;
+      };
+      if (Array.isArray(json.mediaItems)) {
+        allItems.push(...json.mediaItems);
+      }
+      if (!json.nextPageToken) break;
+      pageToken = json.nextPageToken;
+    }
+
+    if (!allItems.length) {
+      return { importedCount: 0, collectionName: 'Google Photos', syncedToCloud: false };
+    }
+
+    const files: File[] = [];
+    const CONCURRENCY = 6;
+    for (let start = 0; start < allItems.length; start += CONCURRENCY) {
+      const batch = allItems.slice(start, start + CONCURRENCY);
+      const downloaded = await Promise.all(
+        batch.map(async (it, offset) => {
+          const base = it.mediaFile?.baseUrl;
+          if (!base) return null;
+          const isVideo =
+            it.type === 'VIDEO' ||
+            (it.mediaFile?.mimeType || '').toLowerCase().startsWith('video/');
+          const cleanBase = base.replace(/=[^/]*$/, '');
+          const blob = await downloadAuthedBlob(
+            isVideo ? `${cleanBase}=dv` : `${cleanBase}=w2048-h2048`,
+            token,
+          );
+          if (!blob) return null;
+          const fname =
+            it.mediaFile?.filename ||
+            `google-photo-${start + offset + 1}.${isVideo ? 'mp4' : 'jpg'}`;
+          return new File([blob], fname, {
+            type: blob.type || it.mediaFile?.mimeType || (isVideo ? 'video/mp4' : 'image/jpeg'),
+            lastModified: it.createTime ? new Date(it.createTime).getTime() : Date.now(),
+          });
+        }),
+      );
+      downloaded.forEach(file => {
+        if (file) files.push(file);
+      });
+    }
+
+    if (!files.length) {
+      return { importedCount: 0, collectionName: 'Google Photos', syncedToCloud: false };
+    }
+
+    const uploaded = await uploadFilesToGooglePhotosCollection(files, {
+      collectionId: options?.collectionId || readActiveGooglePhotosCollectionId() || undefined,
+      accessToken: token,
+      source: 'picker',
+    });
+
+    return {
+      importedCount: uploaded.importedCount,
+      collectionName: uploaded.collection?.name || 'Google Photos',
+      syncedToCloud: uploaded.syncedToCloud,
+    };
+  } catch (err) {
+    if (popup && !popup.closed) {
+      try {
+        popup.close();
+      } catch {
+        // Ignore popup close failure.
+      }
+    }
+    throw err;
+  }
+};
+

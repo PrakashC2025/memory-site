@@ -34,6 +34,7 @@ import {
   formatFriendlyGooglePhotosError,
   GOOGLE_PHOTOS_UPDATED_EVENT,
   isGooglePhotosConnected,
+  pickFromGooglePhotosCloud,
   readActiveGooglePhotosCollectionId,
   readGooglePhotosAccessToken,
   readGooglePhotosCollectionsSummary,
@@ -1086,6 +1087,33 @@ const Memoriya: React.FC = () => {
     }
   };
 
+  const handlePickFromGooglePhotos = async () => {
+    const popup = window.open('about:blank', 'memoriya-gphotos-picker', 'width=980,height=740');
+    setGphotosLoading(true);
+    setError('');
+    setMessage('Opening Google Photos...');
+    try {
+      const res = await pickFromGooglePhotosCloud({
+        collectionId: gphotosActiveCollectionId || undefined,
+        popupWindow: popup,
+        onStatus: status => setMessage(status),
+      });
+      setGphotosConnected(true);
+      if (res.importedCount > 0) {
+        setMessage(
+          `Added ${res.importedCount} ${res.importedCount === 1 ? 'memory' : 'memories'} from Google Photos into "${res.collectionName}".`,
+        );
+      } else {
+        setMessage('No new photos were selected from Google Photos.');
+      }
+    } catch (err) {
+      setError(formatFriendlyGooglePhotosError(err));
+      setMessage('');
+    } finally {
+      setGphotosLoading(false);
+    }
+  };
+
   const handleUploadToGooglePhotos = async (files: FileList | null) => {
     const valid = Array.from(files || []).filter(isSupportedLocalMedia);
     if (!valid.length) return;
@@ -1225,14 +1253,24 @@ const Memoriya: React.FC = () => {
               </label>
             )}
             {gphotosConnected && (
-              <button
-                type="button"
-                className="memoriya-glass-button"
-                onClick={() => gphotosUploadInputRef.current?.click()}
-                disabled={gphotosLoading}
-              >
-                <Upload size={16} /> Add to Google Photos
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="memoriya-glass-button"
+                  onClick={() => void handlePickFromGooglePhotos()}
+                  disabled={gphotosLoading}
+                >
+                  <GooglePhotosIcon size={16} /> Pick from Google Photos
+                </button>
+                <button
+                  type="button"
+                  className="memoriya-glass-button"
+                  onClick={() => gphotosUploadInputRef.current?.click()}
+                  disabled={gphotosLoading}
+                >
+                  <Upload size={16} /> Add to Google Photos
+                </button>
+              </>
             )}
             <button className="memoriya-glass-button" onClick={() => localInputRef.current?.click()}>
               <Images size={17} /> Use Local Media
@@ -1290,6 +1328,7 @@ const Memoriya: React.FC = () => {
             activeLabel={activeGphotosCollectionName || activeDriveFolderName}
             onConnect={connectDrive}
             onConnectGooglePhotos={() => void connectGooglePhotos()}
+            onPickFromGooglePhotos={gphotosConnected ? () => void handlePickFromGooglePhotos() : undefined}
             onUploadGooglePhotos={() => gphotosUploadInputRef.current?.click()}
             onOpenCamera={mobileCameraAvailable ? () => setCameraOpen(true) : undefined}
             onImportLocal={() => localInputRef.current?.click()}
@@ -1340,6 +1379,7 @@ const Memoriya: React.FC = () => {
             activeLabel={activeGphotosCollectionName || activeDriveFolderName}
             onConnect={connectDrive}
             onConnectGooglePhotos={() => void connectGooglePhotos()}
+            onPickFromGooglePhotos={gphotosConnected ? () => void handlePickFromGooglePhotos() : undefined}
             onUploadGooglePhotos={() => gphotosUploadInputRef.current?.click()}
             onOpenCamera={mobileCameraAvailable ? () => setCameraOpen(true) : undefined}
             onImportLocal={() => localInputRef.current?.click()}
@@ -1528,6 +1568,7 @@ const OnboardingCard: React.FC<{
   activeLabel?: string;
   onConnect: () => void;
   onConnectGooglePhotos: () => void;
+  onPickFromGooglePhotos?: () => void;
   onUploadGooglePhotos: () => void;
   onOpenCamera?: () => void;
   onImportLocal: () => void;
@@ -1537,6 +1578,7 @@ const OnboardingCard: React.FC<{
   activeLabel,
   onConnect,
   onConnectGooglePhotos,
+  onPickFromGooglePhotos,
   onUploadGooglePhotos,
   onOpenCamera,
   onImportLocal,
@@ -1546,13 +1588,18 @@ const OnboardingCard: React.FC<{
     <h2>{isConnected ? (activeLabel ? `No photos in "${activeLabel}" yet` : 'No photos found yet') : 'Start with something real'}</h2>
     <p>
       {isConnected
-        ? 'Your account is connected. Add photos to your Google Photos collection, capture a new memory with Camera, or switch folders/collections above.'
+        ? 'Pick existing photos directly from your Google Photos library, upload new photos, or capture with Camera.'
         : 'Connect Google Drive or Google Photos in one click, or add media straight from this device.'}
     </p>
     <div className="flex flex-col gap-2">
       {isConnected ? (
         <>
-          <button className="memoriya-primary" onClick={onUploadGooglePhotos} disabled={loading}>
+          {onPickFromGooglePhotos && (
+            <button className="memoriya-primary" onClick={onPickFromGooglePhotos} disabled={loading}>
+              <GooglePhotosIcon size={17} /> Pick from Google Photos
+            </button>
+          )}
+          <button className={onPickFromGooglePhotos ? 'memoriya-glass-button' : 'memoriya-primary'} onClick={onUploadGooglePhotos} disabled={loading}>
             <Upload size={17} /> Add to Google Photos
           </button>
           {onOpenCamera && (
@@ -1589,6 +1636,7 @@ const EmptyDriveState: React.FC<{
   activeLabel?: string;
   onConnect: () => void;
   onConnectGooglePhotos: () => void;
+  onPickFromGooglePhotos?: () => void;
   onUploadGooglePhotos: () => void;
   onOpenCamera?: () => void;
   onImportLocal: () => void;
@@ -1598,6 +1646,7 @@ const EmptyDriveState: React.FC<{
   activeLabel,
   onConnect,
   onConnectGooglePhotos,
+  onPickFromGooglePhotos,
   onUploadGooglePhotos,
   onOpenCamera,
   onImportLocal,
@@ -1613,12 +1662,17 @@ const EmptyDriveState: React.FC<{
     </h2>
     <p>
       {isConnected
-        ? 'Your Google account is connected, and no photos were found in this collection or folder yet.'
+        ? 'Click "Pick from Google Photos" to bring in existing photos from Google Photos, or "Add to Google Photos" to upload new ones.'
         : 'Connect Google Photos or Google Drive with one click to read your folders and collections.'}
     </p>
     {isConnected ? (
       <>
-        <button className="memoriya-primary" onClick={onUploadGooglePhotos} disabled={loading}>
+        {onPickFromGooglePhotos && (
+          <button className="memoriya-primary" onClick={onPickFromGooglePhotos} disabled={loading}>
+            <GooglePhotosIcon size={17} /> Pick from Google Photos
+          </button>
+        )}
+        <button className={onPickFromGooglePhotos ? 'memoriya-glass-button' : 'memoriya-primary'} onClick={onUploadGooglePhotos} disabled={loading}>
           <Upload size={17} /> Add to Google Photos
         </button>
         {onOpenCamera && (
