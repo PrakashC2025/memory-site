@@ -7213,9 +7213,9 @@ body,
   bottom: max(0.8rem, env(safe-area-inset-bottom));
   z-index: 48;
   display: none;
-  width: min(94vw, 390px);
-  grid-template-columns: repeat(5, 1fr);
-  gap: 0.35rem;
+  width: min(96vw, 430px);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.28rem;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 16px;
   background: rgba(4, 6, 13, 0.82);

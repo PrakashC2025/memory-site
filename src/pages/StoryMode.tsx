@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import MemoryReel from '../components/MemoryReel';
 import { isVisualMemory, type Memory } from '../data/memories';
 import { acquireDriveSyncLock, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, clearDriveChangePageToken, readDriveAccessToken, readDriveAuthRequired, readDriveChangePageToken, readDriveFolderId, readDriveFolders, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveAuthRequired, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
+import { GOOGLE_PHOTOS_UPDATED_EVENT, readSelectedGooglePhotosMemories } from '../services/googlePhotosService';
 import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, cacheDriveMemories, deleteCachedDriveMedia, hydrateCachedDriveMemories, releaseCachedObjectUrls } from '../services/driveCache';
 import { deleteCachedStoryMedia } from '../services/storyMediaCache';
@@ -20,6 +21,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
   const localInputRef = useRef<HTMLInputElement>(null);
   const [localMemories, setLocalMemories] = useState<Memory[]>([]);
   const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
+  const [googlePhotosMemories, setGooglePhotosMemories] = useState<Memory[]>(() => readSelectedGooglePhotosMemories());
   const [driveAccessToken, setDriveAccessToken] = useState(() => readDriveAccessToken());
   const [driveFolders, setDriveFolders] = useState<Array<{ id: string; name: string }>>(() => {
     const savedFolders = readDriveFolders();
@@ -44,14 +46,20 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     // refresh the short-lived OAuth token may be gone even though the phone
     // still has an offline Drive snapshot. Keep that snapshot playable rather
     // than switching the story to an empty local-picker list.
-    const sourceMemories = driveAccessToken || driveMemories.length
-      ? [...driveMemories, ...localMemories]
+    const sourceMemories = driveAccessToken || driveMemories.length || googlePhotosMemories.length
+      ? [...driveMemories, ...googlePhotosMemories, ...localMemories]
       : localMemories;
     sourceMemories.forEach(memory => {
       byKey.set(memory.driveFileId || memory.id, memory);
     });
     return Array.from(byKey.values()).sort(compareDriveMemories);
-  }, [driveAccessToken, driveMemories, localMemories]);
+  }, [driveAccessToken, driveMemories, googlePhotosMemories, localMemories]);
+
+  useEffect(() => {
+    const syncGooglePhotos = () => setGooglePhotosMemories(readSelectedGooglePhotosMemories());
+    window.addEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, syncGooglePhotos);
+    return () => window.removeEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, syncGooglePhotos);
+  }, []);
 
   useEffect(() => {
     return () => {

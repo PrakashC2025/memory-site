@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Bell, BookOpen, Check, Film, Lock, Music, Palette, Shield, Sparkles, User, Users, Wand2 } from 'lucide-react';
 import DriveConnectPanel from '../components/DriveConnectPanel';
+import GooglePhotosConnectPanel from '../components/GooglePhotosConnectPanel';
 import PageHero from '../components/PageHero';
 import { THEMES, type Theme, useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
@@ -118,8 +119,9 @@ const Settings: React.FC = () => {
           </div>
         </motion.section>
 
-        <motion.section {...fadeUp} transition={{ duration: 0.56, delay: 0.2 }}>
+        <motion.section {...fadeUp} transition={{ duration: 0.56, delay: 0.2 }} className="space-y-4">
           <DriveConnectPanel />
+          <GooglePhotosConnectPanel />
         </motion.section>
 
         <motion.section {...fadeUp} transition={{ duration: 0.56, delay: 0.22 }} className="neon-card p-5 md:p-6">

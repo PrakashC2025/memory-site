@@ -42,7 +42,8 @@ import { useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
 import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
-import { DRIVE_MEMORIES_UPDATED_EVENT, readDriveMemories } from '../services/driveLibrary';
+import { DRIVE_MEMORIES_UPDATED_EVENT, readArchiveMemories } from '../services/driveLibrary';
+import { GOOGLE_PHOTOS_UPDATED_EVENT } from '../services/googlePhotosService';
 
 type TreeNodeKind = 'root' | 'year' | 'event' | 'media';
 
@@ -590,7 +591,7 @@ const MemoryTree: React.FC = () => {
   const userInteractedRef = useRef(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string>('root');
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
-  const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
+  const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readArchiveMemories());
   const [viewerSequence, setViewerSequence] = useState<Memory[]>(driveMemories);
   const [viewerAutoplay, setViewerAutoplay] = useState(false);
   const [viewerTemplate, setViewerTemplate] = useState<SlideshowTemplate>('auto');
@@ -606,13 +607,17 @@ const MemoryTree: React.FC = () => {
 
   useEffect(() => {
     const refresh = () => {
-      const next = readDriveMemories();
+      const next = readArchiveMemories();
       setDriveMemories(next);
       setViewerSequence(next);
       setSelectedMemory(current => current && next.some(memory => memory.id === current.id) ? current : null);
     };
     window.addEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refresh);
-    return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refresh);
+    window.addEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, refresh);
+    return () => {
+      window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refresh);
+      window.removeEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, refresh);
+    };
   }, []);
 
   const emitAction = (message: string) => {

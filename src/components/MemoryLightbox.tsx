@@ -36,6 +36,7 @@ import type { Memory } from '../data/memories';
 import { readCachedDriveMedia } from '../services/driveCache';
 import { ensureCachedDriveMedia } from '../services/driveCache';
 import { saveDriveAccessToken } from '../services/driveLibrary';
+import { ensureHydratedGooglePhotoUrls } from '../services/googlePhotosService';
 import { searchOpenSourceMusic } from '../services/openSourceMusic';
 import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 
@@ -606,6 +607,21 @@ const MemoryLightbox: React.FC<Props> = ({
     setPreviewSrc(quickPreview);
     setMediaSrc(driveBacked ? '' : current.url);
   }, [current?.id, current?.url]);
+
+  useEffect(() => {
+    if (!current?.googlePhotoId || current.url) return undefined;
+    let cancelled = false;
+    void ensureHydratedGooglePhotoUrls(current.googlePhotoId).then(hydrated => {
+      if (cancelled || !hydrated?.url) return;
+      if (!isVideoMemory(current)) setPreviewSrc(hydrated.thumbnail || hydrated.url);
+      setMediaSrc(hydrated.url);
+      setMediaFailed(false);
+      setHighResReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [current?.googlePhotoId, current?.id, current?.url]);
 
   useEffect(() => {
     if (!current || !canFetchDriveMedia(current)) return undefined;
