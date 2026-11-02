@@ -23,7 +23,6 @@ import type { DriveMediaFile } from '../services/googleDriveService';
 import { googleDriveService, isDriveAuthorizationError } from '../services/googleDriveService';
 import { saveDriveAccessToken } from '../services/driveLibrary';
 import {
-  createGooglePhotosCollection,
   deleteGooglePhotoItem,
   GOOGLE_PHOTOS_UPDATED_EVENT,
   readActiveGooglePhotosCollectionId,
@@ -189,8 +188,6 @@ const DriveCameraCapture: React.FC<Props> = ({
     if (active) return active;
     return readGooglePhotosCollectionsSummary()[0]?.id || '';
   });
-  const [creatingCollection, setCreatingCollection] = useState(false);
-  const [newCollectionName, setNewCollectionName] = useState('');
   const [pendingUploads, setPendingUploads] = useState(0);
   const [uploadStatuses, setUploadStatuses] = useState<Record<string, CameraUploadStatus>>({});
   const [uploadingQueueId, setUploadingQueueId] = useState('');
@@ -287,16 +284,6 @@ const DriveCameraCapture: React.FC<Props> = ({
     window.addEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, syncCollections);
     return () => window.removeEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, syncCollections);
   }, []);
-
-  const handleCreateCameraCollection = () => {
-    const trimmed = newCollectionName.trim();
-    if (!trimmed) return;
-    const created = createGooglePhotosCollection(trimmed, true);
-    setCollectionId(created.id);
-    setNewCollectionName('');
-    setCreatingCollection(false);
-    setStatus(`Collection "${created.name}" selected for camera captures.`);
-  };
 
   useEffect(() => {
     let cancelled = false;
@@ -1303,7 +1290,7 @@ const DriveCameraCapture: React.FC<Props> = ({
         <header>
           <div className="memoriya-camera-header-copy">
             <button type="button" className="memoriya-camera-back" onClick={closeCamera} aria-label="Back from camera"><ArrowLeft size={18} /> <span>Back</span></button>
-            <div><span className="memoriya-kicker"><Camera size={15} /> Mobile camera</span><h2>Capture a new memory</h2></div>
+            <div><span className="memoriya-kicker"><Camera size={15} /> Camera</span><h2>Capture a new memory</h2></div>
           </div>
           <div className="memoriya-camera-header-actions">
             <button type="button" onClick={() => void toggleCameraFullscreen()} aria-label={cameraFullscreen ? 'Exit camera fullscreen' : 'Open camera fullscreen'} title={cameraFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>{cameraFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</button>
@@ -1385,7 +1372,7 @@ const DriveCameraCapture: React.FC<Props> = ({
             </label>
           </div>
           <label className="memoriya-camera-gallery-picker">
-            <Images size={16} /> Add from mobile gallery
+            <Images size={16} /> Add photo
             <input
               type="file"
               accept="image/*"
@@ -1441,51 +1428,19 @@ const DriveCameraCapture: React.FC<Props> = ({
               </label>
             )}
             {(saveTarget === 'google-photos' || saveTarget === 'both') && (
-              <>
-                <label className="memoriya-camera-destination">Save to Google Photos collection
-                  <select
-                    value={collectionId}
-                    onChange={event => {
-                      if (event.target.value === '__new__') {
-                        setCreatingCollection(true);
-                        return;
-                      }
-                      setCollectionId(event.target.value);
-                    }}
-                  >
-                    {gphotosCollections.length === 0 && (
-                      <option value="">Memoriya Camera (Auto-create)</option>
-                    )}
-                    {gphotosCollections.map(col => (
-                      <option key={col.id} value={col.id}>
-                        {col.name} ({col.count})
-                      </option>
-                    ))}
-                    <option value="__new__">+ New collection…</option>
-                  </select>
-                </label>
-                {creatingCollection && (
-                  <div className="memoriya-camera-store-switch">
-                    <input
-                      type="text"
-                      value={newCollectionName}
-                      onChange={e => setNewCollectionName(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') handleCreateCameraCollection();
-                        if (e.key === 'Escape') setCreatingCollection(false);
-                      }}
-                      placeholder="New collection name..."
-                      className="min-w-0 flex-1 rounded-lg border border-white/20 bg-black/60 px-3 py-1.5 text-xs text-white outline-none"
-                    />
-                    <button type="button" onClick={handleCreateCameraCollection} className="is-active">
-                      Create
-                    </button>
-                    <button type="button" onClick={() => setCreatingCollection(false)}>
-                      Cancel
-                    </button>
-                  </div>
-                )}
-              </>
+              <label className="memoriya-camera-destination">Save to Google Photos collection
+                <select
+                  value={collectionId}
+                  onChange={event => setCollectionId(event.target.value)}
+                >
+                  <option value="">Google Photos</option>
+                  {gphotosCollections.map(col => (
+                    <option key={col.id} value={col.id}>
+                      {col.name} ({col.count})
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
           </div>
           <p className={`memoriya-camera-message ${error ? 'is-error' : ''}`}>{error || status}</p>

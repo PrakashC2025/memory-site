@@ -1,11 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Check, FolderOpen, Plus, Upload } from 'lucide-react';
+import { Check, FolderOpen, Upload } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { GooglePhotosIcon } from './GooglePhotosModal';
 import {
   connectAndSyncGooglePhotos,
-  createGooglePhotosCollection,
   ensureGooglePhotosBootHydration,
   formatFriendlyGooglePhotosError,
   GOOGLE_PHOTOS_UPDATED_EVENT,
@@ -41,8 +40,6 @@ const GooglePhotosConnectPanel: React.FC = () => {
   );
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [creatingCollection, setCreatingCollection] = useState(false);
-  const [newCollectionName, setNewCollectionName] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -88,10 +85,6 @@ const GooglePhotosConnectPanel: React.FC = () => {
   };
 
   const handleCollectionChange = async (value: string) => {
-    if (value === '__new__') {
-      setCreatingCollection(true);
-      return;
-    }
     setActiveCollectionId(value);
     setActiveGooglePhotosCollectionId(value);
     setError('');
@@ -110,7 +103,7 @@ const GooglePhotosConnectPanel: React.FC = () => {
     } else {
       const target = collections.find(c => c.id === value);
       if (target && target.count === 0) {
-        setMessage(`No photos found in "${target.name}" yet. Click Upload to add photos.`);
+        setMessage(`No photos found in "${target.name}".`);
       } else {
         setMessage(
           target
@@ -119,17 +112,6 @@ const GooglePhotosConnectPanel: React.FC = () => {
         );
       }
     }
-  };
-
-  const handleCreateCollection = () => {
-    const trimmed = newCollectionName.trim();
-    if (!trimmed) return;
-    const created = createGooglePhotosCollection(trimmed, true);
-    setActiveGooglePhotosCollectionId(created.id);
-    setActiveCollectionId(created.id);
-    setNewCollectionName('');
-    setCreatingCollection(false);
-    setMessage(`Collection "${created.name}" created — no photos yet. Click Upload to add memories.`);
   };
 
   const handleUpload = async (files: FileList | null) => {
@@ -196,7 +178,7 @@ const GooglePhotosConnectPanel: React.FC = () => {
             </p>
           )}
 
-          {connected && (
+          {connected && collections.length > 0 && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <label
                 className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs text-white/80"
@@ -211,57 +193,15 @@ const GooglePhotosConnectPanel: React.FC = () => {
                   aria-label="Choose Google Photos collection"
                 >
                   <option value="" className="bg-slate-950 text-white">
-                    All collections ({totalCount})
+                    All Google Photos ({totalCount})
                   </option>
                   {collections.map(col => (
                     <option key={col.id} value={col.id} className="bg-slate-950 text-white">
                       {col.name} ({col.count})
                     </option>
                   ))}
-                  <option value="__new__" className="bg-slate-950 text-emerald-300">
-                    + New collection…
-                  </option>
                 </select>
               </label>
-
-              {creatingCollection ? (
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={newCollectionName}
-                    onChange={e => setNewCollectionName(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') handleCreateCollection();
-                      if (e.key === 'Escape') setCreatingCollection(false);
-                    }}
-                    placeholder="Collection name..."
-                    className="rounded-lg border border-white/20 bg-black/40 px-2.5 py-1 text-xs text-white outline-none"
-                    autoFocus
-                  />
-                  <button
-                    type="button"
-                    onClick={handleCreateCollection}
-                    className="rounded-lg border border-emerald-400/40 bg-emerald-400/15 px-2.5 py-1 text-xs font-bold text-emerald-200"
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCreatingCollection(false)}
-                    className="rounded-lg border border-white/15 px-2 py-1 text-xs text-white/60"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setCreatingCollection(true)}
-                  className="flex items-center gap-1 rounded-lg border border-white/15 px-2.5 py-1.5 text-xs text-white/70 hover:text-white"
-                >
-                  <Plus size={12} /> New collection
-                </button>
-              )}
 
               {activeCol && (
                 <span
@@ -269,7 +209,7 @@ const GooglePhotosConnectPanel: React.FC = () => {
                   style={{ borderColor: `${config.primary}24` }}
                 >
                   <Check size={12} style={{ color: '#36f1cd' }} />
-                  {activeCol.count === 0 ? 'Empty collection' : `${activeCol.count} items`}
+                  {activeCol.count === 0 ? 'No photos found' : `${activeCol.count} items`}
                 </span>
               )}
             </div>

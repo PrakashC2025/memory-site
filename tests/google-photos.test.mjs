@@ -87,8 +87,8 @@ test('Google Photos handles 400 and empty libraries gracefully with friendly no-
     assert.equal(syncRes.empty, true);
     assert.match(syncRes.message, /no photos found/i);
     assert.doesNotMatch(syncRes.message, /\b400\b/);
-    // Ensures default collection is automatically ready for uploads & camera
-    assert.ok(syncRes.collections.length >= 1);
+    // Zero predefined collections when the Google account has none
+    assert.equal(syncRes.collections.length, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -96,6 +96,93 @@ test('Google Photos handles 400 and empty libraries gracefully with friendly no-
   // Friendly error translator never leaks raw 400 error codes
   assert.match(svc.formatFriendlyGooglePhotosError(new Error('Request failed with 400')), /no photos were found/i);
   assert.match(svc.formatFriendlyGooglePhotosError(new Error('origin_mismatch')), /Authorized JavaScript origins/i);
+});
+
+test('Google Photos reads all collections and their photos directly from the connected Google account', async () => {
+  setupBrowserMocks();
+  const svc = await loadGooglePhotosService();
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('/v1/albums?')) {
+      return new Response(
+        JSON.stringify({
+          albums: [
+            { id: 'alb-trip', title: 'Family Trip', mediaItemsCount: '2' },
+            { id: 'alb-wedding', title: 'Wedding', mediaItemsCount: '1' },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    if (u.includes('/v1/mediaItems:search')) {
+      const body = JSON.parse(String(init?.body || '{}'));
+      if (body.albumId === 'alb-trip') {
+        return new Response(
+          JSON.stringify({
+            mediaItems: [
+              {
+                id: 'gp-1',
+                filename: 'beach.jpg',
+                mimeType: 'image/jpeg',
+                baseUrl: 'https://lh3.googleusercontent.com/mock-gp-1',
+                mediaMetadata: { creationTime: '2026-05-01T10:00:00Z', width: '1600', height: '1200' },
+              },
+              {
+                id: 'gp-2',
+                filename: 'hills.jpg',
+                mimeType: 'image/jpeg',
+                baseUrl: 'https://lh3.googleusercontent.com/mock-gp-2',
+                mediaMetadata: { creationTime: '2026-05-02T10:00:00Z', width: '1600', height: '1200' },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (body.albumId === 'alb-wedding') {
+        return new Response(
+          JSON.stringify({
+            mediaItems: [
+              {
+                id: 'gp-3',
+                filename: 'ceremony.jpg',
+                mimeType: 'image/jpeg',
+                baseUrl: 'https://lh3.googleusercontent.com/mock-gp-3',
+                mediaMetadata: { creationTime: '2026-06-10T15:00:00Z', width: '1200', height: '1600' },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+    }
+    if (u.includes('/v1/mediaItems?')) {
+      return new Response(JSON.stringify({ mediaItems: [] }), { status: 200 });
+    }
+    if (u.includes('lh3.googleusercontent.com')) {
+      return new Response(new Blob(['img-bytes'], { type: 'image/jpeg' }), { status: 200 });
+    }
+    return new Response('{}', { status: 200 });
+  };
+
+  try {
+    const res = await svc.syncGooglePhotosLibrary('account-token');
+    assert.equal(res.collections.length, 2);
+    const names = res.collections.map(c => `${c.name}:${c.count}`).sort();
+    assert.deepEqual(names, ['Family Trip:2', 'Wedding:1']);
+    assert.equal(res.memories.length, 3);
+
+    // Selecting "Wedding" from the Google account collection dropdown filters to Wedding's photo
+    const weddingCol = res.collections.find(c => c.name === 'Wedding');
+    svc.setActiveGooglePhotosCollectionId(weddingCol.id);
+    const weddingOnly = svc.readSelectedGooglePhotosMemories();
+    assert.equal(weddingOnly.length, 1);
+    assert.equal(weddingOnly[0].collectionName, 'Wedding');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('Google Photos collection dropdown, upload, and camera capture sync to collections', async () => {
