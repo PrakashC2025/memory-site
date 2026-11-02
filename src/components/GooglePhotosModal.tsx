@@ -39,6 +39,7 @@ import {
   readGooglePhotosCollectionsSummary,
   readGooglePhotosState,
   renameGooglePhotosCollection,
+  resolveGoogleClientId,
   saveGoogleClientIdOverride,
   setAllGooglePhotosCollectionsSelected,
   setGooglePhotosCollectionSelected,
@@ -126,7 +127,17 @@ const GooglePhotosModal: React.FC<GooglePhotosModalProps> = ({
       setActiveTab(initialTab);
       setStateSnapshot(readGooglePhotosState());
       setCollections(readGooglePhotosCollectionsSummary());
-      setClientIdInput(getConfiguredGoogleClientId());
+      const existing = getConfiguredGoogleClientId();
+      setClientIdInput(existing);
+      if (!existing) {
+        void resolveGoogleClientId().then(resolved => {
+          if (resolved) {
+            setClientIdInput(resolved);
+            setShowClientIdSetup(false);
+            setErrorMessage('');
+          }
+        });
+      }
     }
   }, [initialTab, open]);
 

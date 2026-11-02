@@ -157,6 +157,30 @@ export const saveGoogleClientIdOverride = (clientId: string): void => {
   }
 };
 
+let runtimeClientIdPromise: Promise<string> | null = null;
+
+export const resolveGoogleClientId = async (explicitClientId?: string): Promise<string> => {
+  const immediate = getConfiguredGoogleClientId(explicitClientId);
+  if (immediate) return immediate;
+  if (!hasWindow() || typeof fetch !== 'function') return '';
+  if (!runtimeClientIdPromise) {
+    runtimeClientIdPromise = fetch('/api/public-config', { cache: 'no-store' })
+      .then(async response => {
+        const contentType = response.headers.get('content-type') || '';
+        if (!response.ok || !contentType.includes('application/json')) return '';
+        const payload = (await response.json()) as { googleClientId?: string };
+        const fetched = (payload?.googleClientId || '').trim();
+        if (fetched) saveGoogleClientIdOverride(fetched);
+        return fetched;
+      })
+      .catch(() => '')
+      .finally(() => {
+        runtimeClientIdPromise = null;
+      });
+  }
+  return runtimeClientIdPromise;
+};
+
 export const isMobileGooglePhotosDevice = (userAgent?: string): boolean => {
   const ua = (userAgent ?? (typeof navigator !== 'undefined' ? navigator.userAgent : '')).toLowerCase();
   if (!ua) return false;
@@ -742,10 +766,12 @@ export const connectGooglePhotosGmail = async (options?: {
   selectAccount?: boolean;
   clientId?: string;
 }): Promise<{ accessToken: string; account: GooglePhotosAccount | null }> => {
-  const clientId = getConfiguredGoogleClientId(options?.clientId);
+  const clientId =
+    getConfiguredGoogleClientId(options?.clientId) ||
+    (await resolveGoogleClientId(options?.clientId));
   if (!clientId) {
     throw new Error(
-      'Google OAuth Client ID is not configured yet. Add VITE_GOOGLE_CLIENT_ID in .env (or paste your Client ID below), or pick photos directly from your Phone / PC Google Photos.',
+      'Google OAuth Client ID is not configured yet. Paste your Client ID in the OAuth Client ID Setup box below (or set VITE_GOOGLE_CLIENT_ID in Vercel for Production + Preview and Redeploy).',
     );
   }
 
