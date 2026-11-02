@@ -281,7 +281,7 @@ const Memoriya: React.FC = () => {
       driveSyncBusyRef.current = true;
       try {
         const isMedia = (file: DriveMediaFile) => isVisualDriveFile(file);
-        const isInFolder = (file: DriveMediaFile) => !driveFolderId || !file.parents || file.parents.includes(driveFolderId);
+        const activeFolderId = driveFolderId === 'drive-root' ? '' : driveFolderId; const isInFolder = (file: DriveMediaFile) => !activeFolderId || !file.parents || file.parents.includes(activeFolderId);
         const applyChanges = (files: DriveMediaFile[], removedIds: string[], initial = false) => {
           if (!active) return;
           const imported = files
@@ -364,7 +364,7 @@ const Memoriya: React.FC = () => {
             // page while Story Mode is open so the new photo/video is not
             // forced to wait for another cursor cycle. No media is downloaded
             // here; the reel still streams the original in the background.
-            const latestPage = await googleDriveService.listMediaPage(accessToken, '', driveFolderId, 100);
+            const latestPage = await googleDriveService.listMediaPage(accessToken, '', driveFolderId === 'drive-root' ? '' : driveFolderId, 100, 'modifiedTime desc');
             const changedIds = new Set(changedFiles.map(file => file.id));
             changedFiles.push(...latestPage.files.filter(file => !changedIds.has(file.id)));
           }

@@ -120,14 +120,14 @@ const EXPORT_FORMATS = ['JPG', 'PNG', 'WEBP', 'PDF', 'ZIP', 'MP4', 'Print PDF'];
 
 const INVITATION_TEMPLATES = ['Wedding', 'Birthday', 'Anniversary', 'Baby Shower', 'Family Reunion', 'Graduation'];
 
-const TREE_WIDTH = 2200;
-const ROOT_WIDTH = 286;
+const TREE_WIDTH = typeof window !== "undefined" ? Math.max(960, Math.min(1680, window.innerWidth * 1.15)) : 1280;
+const ROOT_WIDTH = 220;
 const ROOT_HEIGHT = 168;
-const YEAR_WIDTH = 218;
+const YEAR_WIDTH = 176;
 const YEAR_HEIGHT = 112;
-const EVENT_WIDTH = 204;
+const EVENT_WIDTH = 168;
 const EVENT_HEIGHT = 104;
-const MEDIA_WIDTH = 178;
+const MEDIA_WIDTH = 148;
 const MEDIA_HEIGHT = 134;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));

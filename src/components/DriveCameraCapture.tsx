@@ -328,8 +328,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           audio: false,
           video: {
             facingMode: { ideal: facingMode },
-            width: { ideal: landscape ? 2560 : 1920, min: 720 },
-            height: { ideal: landscape ? 1440 : 2560, min: 720 },
+            width: { ideal: 3840, min: 1280 }, height: { ideal: 2160, min: 720 },
             frameRate: { ideal: 30, max: 60 },
           },
         });
@@ -509,27 +508,39 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     // Keep the saved pixels aligned with the horizontal camera frame. The
     // browser can report a portrait viewport while the phone is physically
     // held sideways, and vice versa, so use both signals here.
-    const captureAspect = isHorizontalCaptureActive()
-      ? Math.max(viewfinderAspect, 16 / 9)
-      : viewfinderAspect;
-    const zoomFactor = hardwareZoomRef.current ? 1 : Math.max(1, zoomRef.current);
-    let sourceWidth = video.videoWidth / zoomFactor;
-    let sourceHeight = video.videoHeight / zoomFactor;
-    const sourceAspect = sourceWidth / sourceHeight;
-    if (sourceAspect > captureAspect) sourceWidth = sourceHeight * captureAspect;
-    else sourceHeight = sourceWidth / captureAspect;
-    const sourceX = (video.videoWidth - sourceWidth) / 2;
-    const sourceY = (video.videoHeight - sourceHeight) / 2;
-    canvas.width = Math.max(1, Math.round(sourceWidth));
-    canvas.height = Math.max(1, Math.round(sourceHeight));
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('Could not prepare the photo canvas.');
-    // Mirror only the live selfie preview. Saved files stay in normal
-    // orientation so faces and text are not reversed.
-    context.filter = [CAMERA_FILTERS[filter].css, CAMERA_QUALITY[quality].css, autoEnhance ? 'brightness(1.08) contrast(1.06) saturate(1.08)' : 'none']
-      .filter(value => value !== 'none')
-      .join(' ') || 'none';
+    const horizontalActive = isHorizontalCaptureActive();
+  const desiredAspect = horizontalActive
+    ? Math.max(viewfinderAspect > 1 ? viewfinderAspect : 1 / Math.max(0.1, viewfinderAspect), 16 / 9)
+    : viewfinderAspect;
+  const rotatePortraitStream = horizontalActive && video.videoWidth < video.videoHeight;
+  const rawCropAspect = rotatePortraitStream ? 1 / desiredAspect : desiredAspect;
+  const zoomFactor = hardwareZoomRef.current ? 1 : Math.max(1, zoomRef.current);
+  let sourceWidth = video.videoWidth / zoomFactor;
+  let sourceHeight = video.videoHeight / zoomFactor;
+  const sourceAspect = sourceWidth / sourceHeight;
+  if (sourceAspect > rawCropAspect) sourceWidth = sourceHeight * rawCropAspect;
+  else sourceHeight = sourceWidth / rawCropAspect;
+  const sourceX = (video.videoWidth - sourceWidth) / 2;
+  const sourceY = (video.videoHeight - sourceHeight) / 2;
+  canvas.width = Math.max(1, Math.round(rotatePortraitStream ? sourceHeight : sourceWidth));
+  canvas.height = Math.max(1, Math.round(rotatePortraitStream ? sourceWidth : sourceHeight));
+  const context = canvas.getContext('2d', { alpha: false });
+  if (!context) throw new Error('Could not prepare the photo canvas.');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.filter = [CAMERA_FILTERS[filter].css, CAMERA_QUALITY[quality].css, autoEnhance ? 'brightness(1.05) contrast(1.05) saturate(1.06)' : 'none']
+    .filter(value => value !== 'none')
+    .join(' ') || 'none';
+  context.save();
+  if (rotatePortraitStream) {
+    const tiltAngle = (physicalGammaRef.current || 0) > 0 ? -Math.PI / 2 : Math.PI / 2;
+    context.translate(canvas.width / 2, canvas.height / 2);
+    context.rotate(tiltAngle);
+    context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, -sourceWidth / 2, -sourceHeight / 2, sourceWidth, sourceHeight);
+  } else {
     context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  }
+  context.restore();
     return canvasToJpegBlob(canvas);
   };
 
