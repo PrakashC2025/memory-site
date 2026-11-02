@@ -636,6 +636,7 @@ const toMemory = (item: StoredGooglePhotoItem, collectionNameOverride?: string):
  * - Otherwise returns all items belonging to collections with `selected: true`.
  */
 export const readSelectedGooglePhotosMemories = (): Memory[] => {
+  if (!isGooglePhotosConnected()) return [];
   const state = readGooglePhotosState();
   if (!state.items.length || !state.collections.length) return [];
 
@@ -872,7 +873,7 @@ export const deleteGooglePhotoItem = async (googlePhotoIdOrMemoryId: string): Pr
   writeGooglePhotosState(state);
 };
 
-export const disconnectGooglePhotos = async (clearImportedCollections = false): Promise<void> => {
+export const disconnectGooglePhotos = async (clearImportedCollections = true): Promise<void> => {
   saveGooglePhotosAccessToken('');
   const state = readGooglePhotosState();
   state.account = null;

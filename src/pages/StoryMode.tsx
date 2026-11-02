@@ -74,6 +74,11 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
       const token = (event as CustomEvent<string>).detail;
       if (!token) {
         driveAuthRequiredRef.current = true;
+        if (!readDriveMemories().length) {
+          setDriveAccessToken('');
+          setDriveMemories([]);
+          setDriveFolders([]);
+        }
         return;
       }
       driveAuthRequiredRef.current = false;

@@ -140,6 +140,20 @@ export const deleteCachedDriveMedia = async (id: string) => {
   });
 };
 
+export const clearAllCachedDriveMedia = async () => {
+  const db = await getCache();
+  if (!db) return;
+  await new Promise<void>(resolve => {
+    try {
+      const request = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).clear();
+      request.onsuccess = () => resolve();
+      request.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+};
+
 export const ensureCachedDriveMedia = (file: DriveMediaFile, accessToken: string, priority = 0) => {
   const taskKey = `${file.id}:${file.modifiedTime || ''}`;
   const existingTask = inFlightDownloads.get(taskKey);

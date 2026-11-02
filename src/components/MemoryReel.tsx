@@ -3,7 +3,7 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import ffmpegCoreScript from '@ffmpeg/core?url';
 import ffmpegCoreWasm from '@ffmpeg/core/wasm?url';
-import { Cast, HardDrive, Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, VolumeX, WandSparkles, X } from 'lucide-react';
+import { Cast, Film, HardDrive, Images, Maximize2, Minimize2, Music2, Pause, Play, RotateCcw, Search, Upload, Volume2, VolumeX, WandSparkles, X } from 'lucide-react';
 import { isVisualMemory, type Memory } from '../data/memories';
 import { beginHeavyVisualPause } from '../utils/visualActivity';
 import { googleDriveService, isAudioDriveFile, isDriveAuthorizationError, type DriveAudioFile } from '../services/googleDriveService';
@@ -149,7 +149,7 @@ interface MemoryReelOptions {
   legacyTv?: boolean;
   performanceSurface?: boolean;
   onProgress?: (progress: number, total: number) => void;
-  onLoadProgress?: (loaded: number, available: number) => void;
+  onLoadProgress?: (loaded: number, available: number, loadedPhotos: number, loadedVideos: number) => void;
   onStateChange?: (playing: boolean) => void;
   onAudioStateChange?: (playing: boolean) => void;
 }
@@ -655,8 +655,15 @@ export class MemoryReelController {
 
   private notifyLoadProgress(force = false) {
     const loaded = this.loadedMedia.size;
+    let loadedVideos = 0;
+    for (const media of this.loadedMedia.values()) {
+      if (media.video || media.node instanceof HTMLVideoElement) {
+        loadedVideos += 1;
+      }
+    }
+    const loadedPhotos = Math.max(0, loaded - loadedVideos);
     if (force || loaded > 0) {
-      this.options.onLoadProgress?.(loaded, this.availableMediaCount);
+      this.options.onLoadProgress?.(loaded, this.availableMediaCount, loadedPhotos, loadedVideos);
     }
   }
 
@@ -3836,6 +3843,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   const [musicTotalDuration, setMusicTotalDuration] = useState<number | null>(null);
   const [progress, setProgress] = useState({ progress: 0, total: 0 });
   const [storyLoadedCount, setStoryLoadedCount] = useState(0);
+  const [storyLoadedPhotos, setStoryLoadedPhotos] = useState(0);
+  const [storyLoadedVideos, setStoryLoadedVideos] = useState(0);
   const [storyAvailableCount, setStoryAvailableCount] = useState(visualMemories.length);
   const [fullscreen, setFullscreen] = useState(shouldStartCinemaView);
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
@@ -3906,15 +3915,36 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
   // count as a floor so the folder counter reflects offline-ready files even
   // when their cards are not on the visible wall yet.
   const storyCachedPhotoCountRef = useRef(0);
+  const storyCachedVideoCountRef = useRef(0);
+  const storyReelLoadedPhotosRef = useRef(0);
+  const storyReelLoadedVideosRef = useRef(0);
   const storyProgressValueRef = useRef(0);
+  const storyProgressPhotosRef = useRef(0);
+  const storyProgressVideosRef = useRef(0);
   const storyProgressPublishTimerRef = useRef<number | null>(null);
-  const publishStoryLoadedCount = (value: number) => {
-    // Keep the visible counter bounded by the current Drive snapshot. This
-    // prevents an old count from surviving a deletion while still allowing
-    // photo-cache and reel-card progress to contribute to the same total.
+  const publishStoryLoadedCount = (value: number, photosLoaded?: number, videosLoaded?: number) => {
+    // Keep the visible counter bounded by the current snapshot. This prevents
+    // an old count from surviving a deletion or disconnect while allowing
+    // Drive cache, Google Photos, and reel-card progress to contribute.
+    if (typeof photosLoaded === 'number') {
+      storyProgressPhotosRef.current = Math.min(
+        storyPhotoCount,
+        Math.max(storyProgressPhotosRef.current, Math.max(0, photosLoaded)),
+      );
+    }
+    if (typeof videosLoaded === 'number') {
+      storyProgressVideosRef.current = Math.min(
+        storyVideoCount,
+        Math.max(storyProgressVideosRef.current, Math.max(0, videosLoaded)),
+      );
+    }
     storyProgressValueRef.current = Math.min(
       visualMemories.length,
-      Math.max(storyProgressValueRef.current, Math.max(0, value)),
+      Math.max(
+        storyProgressValueRef.current,
+        Math.max(0, value),
+        storyProgressPhotosRef.current + storyProgressVideosRef.current,
+      ),
     );
     if (storyProgressPublishTimerRef.current !== null) return;
     storyProgressPublishTimerRef.current = window.setTimeout(() => {
@@ -3922,8 +3952,12 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       // Loading progress is informative, not an interaction. Keep it out of
       // the urgent render lane so a large Drive cache cannot make controls
       // blink or miss taps while the story is animating.
-      startTransition(() => setStoryLoadedCount(() => storyProgressValueRef.current));
-    }, 300);
+      startTransition(() => {
+        setStoryLoadedCount(() => storyProgressValueRef.current);
+        setStoryLoadedPhotos(() => storyProgressPhotosRef.current);
+        setStoryLoadedVideos(() => storyProgressVideosRef.current);
+      });
+    }, 180);
   };
   // All Drive audio downloads/conversions share one chain. This keeps a
   // refresh, a newly selected song, and the initial folder load from starting
@@ -4267,19 +4301,30 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
     const videos = visualMemories.filter(memory => isVideoMemory(memory));
     const liveUpdate = hasLoadedSourcesRef.current;
     storyCachedPhotoCountRef.current = 0;
+    storyCachedVideoCountRef.current = 0;
     if (storyProgressPublishTimerRef.current !== null) {
       window.clearTimeout(storyProgressPublishTimerRef.current);
       storyProgressPublishTimerRef.current = null;
     }
     setStoryAvailableCount(visualMemories.length);
-    if (!liveUpdate) {
+    if (!liveUpdate || visualMemories.length === 0) {
       storyProgressValueRef.current = 0;
+      storyProgressPhotosRef.current = 0;
+      storyProgressVideosRef.current = 0;
+      storyReelLoadedPhotosRef.current = 0;
+      storyReelLoadedVideosRef.current = 0;
       setStoryLoadedCount(0);
+      setStoryLoadedPhotos(0);
+      setStoryLoadedVideos(0);
       // Metadata is already available. The first thumbnail should be visible
       // while the committed Drive loader warms originals in the background.
       setLoading(false);
     } else {
+      storyProgressPhotosRef.current = Math.min(storyProgressPhotosRef.current, photos.length);
+      storyProgressVideosRef.current = Math.min(storyProgressVideosRef.current, videos.length);
       storyProgressValueRef.current = Math.min(storyProgressValueRef.current, visualMemories.length);
+      setStoryLoadedPhotos(current => Math.min(current, photos.length));
+      setStoryLoadedVideos(current => Math.min(current, videos.length));
       setStoryLoadedCount(current => Math.min(current, visualMemories.length));
     }
     const drivePhotoFiles = photos
@@ -4322,7 +4367,11 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             storyCachedPhotoCountRef.current,
             cachedPhotoCount,
           );
-          publishStoryLoadedCount(storyCachedPhotoCountRef.current);
+          publishStoryLoadedCount(
+            storyCachedPhotoCountRef.current + storyCachedVideoCountRef.current,
+            storyCachedPhotoCountRef.current,
+            storyCachedVideoCountRef.current,
+          );
         },
       }).catch(() => undefined)
       : Promise.resolve();
@@ -4333,6 +4382,23 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
       void cacheDriveMediaFiles(driveVideoFiles, driveAccessToken, {
         includeVideos: true,
         limit: driveVideoFiles.length,
+        onProgress: cacheProgress => {
+          if (controller.signal.aborted) return;
+          const localVideoCount = videos.length - driveVideoFiles.length;
+          const cachedVideoCount = Math.min(
+            videos.length,
+            localVideoCount + cacheProgress.completed,
+          );
+          storyCachedVideoCountRef.current = Math.max(
+            storyCachedVideoCountRef.current,
+            cachedVideoCount,
+          );
+          publishStoryLoadedCount(
+            storyCachedPhotoCountRef.current + storyCachedVideoCountRef.current,
+            storyCachedPhotoCountRef.current,
+            storyCachedVideoCountRef.current,
+          );
+        },
       }).catch(() => undefined);
     }
     // Keep the current wall visible during a live Drive change. The reel
@@ -4423,8 +4489,16 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           more.onNeedMore?.();
         }
       },
-      onLoadProgress: loaded => {
-        publishStoryLoadedCount(Math.max(loaded, storyCachedPhotoCountRef.current));
+      onLoadProgress: (loaded, _available, loadedPhotos, loadedVideos) => {
+        storyReelLoadedPhotosRef.current = loadedPhotos;
+        storyReelLoadedVideosRef.current = loadedVideos;
+        const bestPhotos = Math.max(loadedPhotos, storyCachedPhotoCountRef.current);
+        const bestVideos = Math.max(loadedVideos, storyCachedVideoCountRef.current);
+        publishStoryLoadedCount(
+          Math.max(loaded, bestPhotos + bestVideos),
+          bestPhotos,
+          bestVideos,
+        );
       },
       onStateChange: setPlaying,
       onAudioStateChange: setAudioPlaying,
@@ -5649,8 +5723,8 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
           <button type="button" className={clarityOpen ? 'is-active' : ''} aria-expanded={clarityOpen} onClick={openClarity}><WandSparkles size={16} /> Clarity</button>
           {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
             <div className="memory-reel-folder-summary">
-              <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
-              <span className="memory-reel-folder-count" aria-live="polite">{storyLoadedCount}/{storyAvailableCount} loaded · {storyPhotoCount} photos · {storyVideoCount} videos</span>
+              <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id && folder.id !== 'drive-root').map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+              <span className="memory-reel-folder-count" aria-live="polite">{storyLoadedCount}/{storyAvailableCount} loaded · {storyPhotoCount} pics · {storyVideoCount} videos</span>
             </div>
           )}
           <button type="button" onClick={toggleLoop} aria-pressed={loopEnabled}>{loopEnabled ? 'Loop On' : 'Loop Off'}</button>
@@ -5730,6 +5804,30 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
            }}
         />
         <LocalCastController open={castOpen} onClose={() => setCastOpen(false)} />
+        {storyAvailableCount > 0 && (
+          <div
+            className={`memory-reel-stats-hud${fullscreen && !fullscreenControlsVisible && storyLoadedCount >= storyAvailableCount ? ' is-hidden' : ''}`}
+            role="status"
+            aria-live="polite"
+            aria-label={`Story media counts: ${storyLoadedCount} of ${storyAvailableCount} loaded, ${storyPhotoCount} pics, ${storyVideoCount} videos`}
+          >
+            <span className={`memory-reel-stat-chip is-total${storyLoadedCount >= storyAvailableCount ? ' is-complete' : ' is-loading'}`}>
+              <span className="memory-reel-stat-dot" aria-hidden="true" />
+              <strong>{storyLoadedCount}/{storyAvailableCount}</strong>
+              <span>{storyLoadedCount >= storyAvailableCount ? 'Loaded' : 'Loading'}</span>
+            </span>
+            <span className="memory-reel-stat-chip is-photos">
+              <Images size={13} aria-hidden="true" />
+              <strong>{storyLoadedPhotos < storyPhotoCount ? `${storyLoadedPhotos}/${storyPhotoCount}` : storyPhotoCount}</strong>
+              <span>{storyPhotoCount === 1 ? 'Pic' : 'Pics'}</span>
+            </span>
+            <span className="memory-reel-stat-chip is-videos">
+              <Film size={13} aria-hidden="true" />
+              <strong>{storyLoadedVideos < storyVideoCount ? `${storyLoadedVideos}/${storyVideoCount}` : storyVideoCount}</strong>
+              <span>{storyVideoCount === 1 ? 'Video' : 'Videos'}</span>
+            </span>
+          </div>
+        )}
         <div
           className={`memory-reel-fullscreen-controls${fullscreenControlsVisible ? '' : ' is-hidden'}`}
           aria-label="Fullscreen story controls"
