@@ -8,7 +8,7 @@
     "realtime": "node server/realtime-server.js",
     "start": "node server/realtime-server.js",
     "build": "vite build",
-    "test": "node --test tests/compatibility.test.mjs tests/colors.test.mjs tests/media-frames.test.mjs",
+    "test": "node --test tests/compatibility.test.mjs tests/colors.test.mjs tests/media-frames.test.mjs tests/google-photos.test.mjs",
     "preview": "vite preview",
     "test:story": "node tests/story-live-drive.test.mjs",
     "test:perf": "node tests/story-performance.test.mjs"

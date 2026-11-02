@@ -7,7 +7,8 @@ import { useTheme } from '../context/ThemeContext';
 import PageHero from '../components/PageHero';
 import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
-import { DRIVE_MEMORIES_UPDATED_EVENT, readDriveMemories } from '../services/driveLibrary';
+import { DRIVE_MEMORIES_UPDATED_EVENT, readArchiveMemories } from '../services/driveLibrary';
+import { GOOGLE_PHOTOS_UPDATED_EVENT } from '../services/googlePhotosService';
 
 const TIMELINE_MONTH_PAGE = 8;
 
@@ -34,16 +35,20 @@ const Timeline: React.FC = () => {
   const { config } = useTheme();
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [filterYear, setFilterYear] = useState<number | null>(null);
-  const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
+  const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readArchiveMemories());
 
   useEffect(() => {
     const refresh = () => {
-      const next = readDriveMemories();
+      const next = readArchiveMemories();
       setDriveMemories(next);
       setSelectedMemory(current => current && next.some(memory => memory.id === current.id) ? current : null);
     };
     window.addEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refresh);
-    return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refresh);
+    window.addEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, refresh);
+    return () => {
+      window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refresh);
+      window.removeEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, refresh);
+    };
   }, []);
   const years = groupMemoriesByYear(driveMemories);
   const filteredYears = filterYear ? years.filter(year => year.year === filterYear) : years;
@@ -97,8 +102,8 @@ const Timeline: React.FC = () => {
       {driveMemories.length === 0 && (
         <div className="neon-card mx-auto max-w-xl p-8 text-center">
           <Sparkles className="mx-auto mb-3" size={28} style={{ color: config.primary }} />
-          <p className="font-black text-white">No Drive timeline yet.</p>
-          <p className="mt-2 text-sm leading-6 text-white/56">Connect Google Drive in Memoriya to show your own photos and videos here.</p>
+          <p className="font-black text-white">No memories in timeline yet.</p>
+          <p className="mt-2 text-sm leading-6 text-white/56">Connect Google Drive or link Google Photos collections in Memoriya to show your photos and videos here.</p>
         </div>
       )}
 

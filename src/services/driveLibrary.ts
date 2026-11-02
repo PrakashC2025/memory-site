@@ -1,4 +1,5 @@
 import { visualMemoriesOnly, type Memory } from '../data/memories';
+import { readSelectedGooglePhotosMemories } from './googlePhotosService';
 
 export const DRIVE_SESSION_KEY = 'memoriya-drive-session-v1';
 export const DRIVE_OFFLINE_LIBRARY_KEY = 'memoriya-drive-offline-library-v1';
@@ -69,6 +70,19 @@ export const readDriveMemories = () => {
 };
 
 export const useDriveMemories = () => readDriveMemories();
+
+export const readArchiveMemories = () => {
+  const drive = readDriveMemories();
+  const googlePhotos = readSelectedGooglePhotosMemories();
+  if (!googlePhotos.length) return drive;
+  if (!drive.length) return visualMemoriesOnly(googlePhotos);
+  const byId = new Map<string, Memory>();
+  [...drive, ...googlePhotos].forEach(memory => {
+    byId.set(memory.driveFileId || memory.id, memory);
+  });
+  return visualMemoriesOnly(Array.from(byId.values()))
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+};
 
 export const readDriveAccessToken = () => {
   try {
@@ -155,7 +169,9 @@ export const readDriveFolders = () => {
 };
 
 export const saveDriveMemories = (memories: Memory[], accessToken: string, driveFolderId = '', notify = true) => {
-  const visualMemories = visualMemoriesOnly(memories);
+  const visualMemories = visualMemoriesOnly(memories).filter(
+    memory => !memory.googlePhotoId && memory.source !== 'google-photos',
+  );
   try {
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
     const current = stored ? JSON.parse(stored) as Partial<DriveSessionSnapshot> : {};

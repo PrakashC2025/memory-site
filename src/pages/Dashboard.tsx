@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CalendarDays, Camera, Clock3, Film, FolderHeart, Heart, MapPin, Search, Sparkles, Star, TreePine } from 'lucide-react';
 import DriveConnectPanel from '../components/DriveConnectPanel';
+import GooglePhotosConnectPanel from '../components/GooglePhotosConnectPanel';
 import DriveMediaPreview from '../components/DriveMediaPreview';
 import DomeGallery from '../components/DomeGallery';
 import MemoryLightbox from '../components/MemoryLightbox';
@@ -9,7 +10,8 @@ import { useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
 import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
-import { DRIVE_MEMORIES_UPDATED_EVENT, readDriveMemories } from '../services/driveLibrary';
+import { DRIVE_MEMORIES_UPDATED_EVENT, readArchiveMemories } from '../services/driveLibrary';
+import { GOOGLE_PHOTOS_UPDATED_EVENT } from '../services/googlePhotosService';
 import { buildRecapSections } from '../services/memoryOrganizer';
 
 interface Props {
@@ -22,27 +24,33 @@ const fadeUp = {
 };
 
 const optimizeDomeImageUrl = (url: string) =>
-  url
-    .replace(/=s\d+(-[cp])?$/i, '=s720')
-    .replace(/sz=w\d+/i, 'sz=w720')
-    .replace(/w=\d+/i, 'w=900')
-    .replace(/q=\d+/i, 'q=82');
+  url.startsWith('blob:')
+    ? url
+    : url
+        .replace(/=s\d+(-[cp])?$/i, '=s720')
+        .replace(/sz=w\d+/i, 'sz=w720')
+        .replace(/w=\d+/i, 'w=900')
+        .replace(/q=\d+/i, 'q=82');
 
 const Dashboard: React.FC<Props> = ({ onNavigate }) => {
   const { user } = useUser();
   const { config } = useTheme();
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [query, setQuery] = useState('');
-  const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readDriveMemories());
+  const [driveMemories, setDriveMemories] = useState<Memory[]>(() => readArchiveMemories());
 
   useEffect(() => {
     const refreshDriveMemories = () => {
-      const next = readDriveMemories();
+      const next = readArchiveMemories();
       setDriveMemories(next);
       setSelectedMemory(current => current && next.some(memory => memory.id === current.id) ? current : null);
     };
     window.addEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refreshDriveMemories);
-    return () => window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refreshDriveMemories);
+    window.addEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, refreshDriveMemories);
+    return () => {
+      window.removeEventListener(DRIVE_MEMORIES_UPDATED_EVENT, refreshDriveMemories);
+      window.removeEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, refreshDriveMemories);
+    };
   }, []);
 
   const years = groupMemoriesByYear(driveMemories);
@@ -93,7 +101,7 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
               Welcome back, {user?.name?.split(' ')[0] || 'friend'}.
             </h1>
           <p className="relative mt-4 max-w-2xl text-sm leading-7 text-white/64 md:text-base">
-            {driveMemories.length} Drive moments are ready. Search, open favorites, jump into the tree, or let story mode run.
+            {driveMemories.length} moments are ready from your linked Drive &amp; Google Photos collections. Search, open favorites, jump into the tree, or let story mode run.
           </p>
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">
@@ -159,8 +167,9 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
         ))}
       </motion.section>
 
-      <motion.section {...fadeUp} transition={{ duration: 0.6, delay: 0.18 }} className="mt-5">
+      <motion.section {...fadeUp} transition={{ duration: 0.6, delay: 0.18 }} className="mt-5 space-y-4">
         <DriveConnectPanel />
+        <GooglePhotosConnectPanel />
       </motion.section>
 
       {domeImages.length > 0 && (

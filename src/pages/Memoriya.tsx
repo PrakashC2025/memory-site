@@ -22,10 +22,12 @@ import {
 } from 'lucide-react';
 import DriveMediaPreview from '../components/DriveMediaPreview';
 import DriveCameraCapture from '../components/DriveCameraCapture';
+import GooglePhotosModal, { GooglePhotosIcon } from '../components/GooglePhotosModal';
 import MemoryLightbox from '../components/MemoryLightbox';
 import MemoryReel from '../components/MemoryReel';
 import { getMemoryAspect, isVisualMemory, type Memory } from '../data/memories';
 import { acquireDriveSyncLock, clearDriveChangePageToken, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, DRIVE_SESSION_KEY, readDriveAccessToken, readDriveAuthRequired, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveAuthRequired, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
+import { GOOGLE_PHOTOS_UPDATED_EVENT, readGooglePhotosCollectionsSummary, readSelectedGooglePhotosMemories, type GooglePhotosCollectionSummary } from '../services/googlePhotosService';
 import { googleDriveService, isDriveAuthorizationError, isVisualDriveFile, type DriveConnectionState, type DriveFolder, type DriveMediaFile } from '../services/googleDriveService';
 import { cacheDriveMediaFiles, deleteCachedDriveMedia, warmDriveFolderCache } from '../services/driveCache';
 import { deleteCachedStoryMedia } from '../services/storyMediaCache';
@@ -125,8 +127,24 @@ const Memoriya: React.FC = () => {
   const [stage, setStage] = useState<Stage>('reels');
   const [query, setQuery] = useState('');
   const [galleryStyle, setGalleryStyle] = useState<GalleryStyle>('polaroid');
-  const [memories, setMemories] = useState<Memory[]>(() => restored?.memories || []);
-  const [selected, setSelected] = useState<Memory | null>(() => restored?.memories?.[0] || null);
+  const [gphotosModalOpen, setGphotosModalOpen] = useState(false);
+  const [gphotosModalTab, setGphotosModalTab] = useState<'link' | 'collections'>('link');
+  const [gphotosCollections, setGphotosCollections] = useState<GooglePhotosCollectionSummary[]>(() =>
+    readGooglePhotosCollectionsSummary(),
+  );
+  const [memories, setMemories] = useState<Memory[]>(() => {
+    const driveInitial = restored?.memories || [];
+    const gphotosInitial = readSelectedGooglePhotosMemories();
+    if (!gphotosInitial.length) return driveInitial;
+    const byId = new Map<string, Memory>();
+    [...driveInitial, ...gphotosInitial].forEach(memory => byId.set(memory.driveFileId || memory.id, memory));
+    return Array.from(byId.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  });
+  const [selected, setSelected] = useState<Memory | null>(() => {
+    const driveInitial = restored?.memories || [];
+    const gphotosInitial = readSelectedGooglePhotosMemories();
+    return driveInitial[0] || gphotosInitial[0] || null;
+  });
   const [viewerMemory, setViewerMemory] = useState<Memory | null>(null);
   const [reelConfig, setReelConfig] = useState<{ memories: Memory[]; title: { line: string; big: string }; live: boolean } | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -209,7 +227,17 @@ const Memoriya: React.FC = () => {
     );
   }, [memories, query]);
 
-  const withLivePreviews = (items: Memory[]) => items.map(memory => {  let preview = '';  if (memory.driveFileId) {    preview = livePreviewUrlsRef.current.get(memory.driveFileId) || '';  } else {    // For local memories, use the memory's own url as the preview    preview = memory.url || '';  }  return preview ? { ...memory, url: preview, thumbnail: preview } : memory;});
+  const withLivePreviews = (items: Memory[]) => items.map(memory => {
+    let preview = '';
+    if (memory.driveFileId) {
+      preview = livePreviewUrlsRef.current.get(memory.driveFileId) || '';
+    } else {
+      preview = memory.url || '';
+    }
+    if (!preview) return memory;
+    const nextThumbnail = memory.type === 'video' && memory.thumbnail ? memory.thumbnail : preview;
+    return { ...memory, url: preview, thumbnail: nextThumbnail };
+  });
 
   const bestMemories = filteredMemories.slice(0, 8);
   const locations = useMemo(() => Object.entries(groupBy(filteredMemories, memory => memory.location || 'No location metadata')), [filteredMemories]);
@@ -225,13 +253,46 @@ const Memoriya: React.FC = () => {
   const directorPlan = useMemo<DirectorPlan>(() => buildDirectorPlan(filteredMemories), [filteredMemories]);
 
   useEffect(() => {
+    const syncGooglePhotos = () => {
+      setGphotosCollections(readGooglePhotosCollectionsSummary());
+      const activeGooglePhotos = readSelectedGooglePhotosMemories();
+      setMemories(current => {
+        const nonGooglePhotos = current.filter(
+          memory => !memory.googlePhotoId && memory.source !== 'google-photos',
+        );
+        const byId = new Map<string, Memory>();
+        [...nonGooglePhotos, ...activeGooglePhotos].forEach(memory => {
+          byId.set(memory.driveFileId || memory.id, memory);
+        });
+        const merged = Array.from(byId.values()).sort(
+          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+        );
+        const activeIds = new Set(merged.map(m => m.id));
+        setSelected(prev => (prev && activeIds.has(prev.id) ? prev : merged[0] || null));
+        setViewerMemory(prev => (prev && activeIds.has(prev.id) ? prev : null));
+        setReelConfig(currentConfig =>
+          currentConfig?.live
+            ? { ...currentConfig, memories: withLivePreviews(merged.filter(isVisualMemory)) }
+            : currentConfig,
+        );
+        return merged;
+      });
+    };
+    window.addEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, syncGooglePhotos);
+    return () => window.removeEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, syncGooglePhotos);
+  }, []);
+
+  useEffect(() => {
     if (!accessToken) return;
+    const driveOnlyMemories = memories.filter(
+      memory => !memory.googlePhotoId && memory.source !== 'google-photos',
+    );
     const snapshot: DriveSessionSnapshot = {
       accessToken,
       nextPageToken,
       changePageToken: driveChangePageToken,
       importCount,
-      memories,
+      memories: driveOnlyMemories,
       savedAt: Date.now(),
       driveFolderId,
       driveFolders,
@@ -883,11 +944,12 @@ const Memoriya: React.FC = () => {
   );
 
   const disconnectDrive = () => {
+    const remainingGooglePhotos = readSelectedGooglePhotosMemories();
     setAccessToken('');
     setNextPageToken('');
     setImportCount(0);
-    setMemories([]);
-    setSelected(null);
+    setMemories(remainingGooglePhotos);
+    setSelected(remainingGooglePhotos[0] || null);
     setMessage('Drive disconnected. Connect again when you are ready.');
     setError('');
     folderHandleRef.current = null;
@@ -897,6 +959,12 @@ const Memoriya: React.FC = () => {
     setCameraOpen(false);
     window.sessionStorage.removeItem(DRIVE_SESSION_KEY);
   };
+
+  const openGooglePhotosModal = (tab: 'link' | 'collections' = 'link') => {
+    setGphotosModalTab(tab);
+    setGphotosModalOpen(true);
+  };
+  const activeGphotosCollectionsCount = gphotosCollections.filter(col => col.selected).length;
 
   useEffect(() => {
     const node = loaderRef.current;
@@ -956,6 +1024,24 @@ const Memoriya: React.FC = () => {
               {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
               {accessToken ? 'Sync Drive' : 'Connect Google Drive'}
             </button>
+            <button
+              type="button"
+              className="memoriya-glass-button"
+              onClick={() => openGooglePhotosModal('link')}
+            >
+              <GooglePhotosIcon size={17} />
+              {gphotosCollections.length > 0 ? 'Google Photos Linked' : 'Link Google Photos'}
+            </button>
+            {gphotosCollections.length > 0 && (
+              <button
+                type="button"
+                className="memoriya-glass-button"
+                onClick={() => openGooglePhotosModal('collections')}
+              >
+                <Sparkles size={16} />
+                Collections ({activeGphotosCollectionsCount}/{gphotosCollections.length})
+              </button>
+            )}
             <button className="memoriya-glass-button" onClick={() => localInputRef.current?.click()}>
               <Images size={17} /> Use Local Media
             </button>
@@ -996,7 +1082,12 @@ const Memoriya: React.FC = () => {
             <p>{onThisDay.caption}</p>
           </motion.aside>
         ) : (
-          <OnboardingCard loading={loading} onConnect={connectDrive} onImportLocal={() => localInputRef.current?.click()} />
+          <OnboardingCard
+            loading={loading}
+            onConnect={connectDrive}
+            onLinkGooglePhotos={() => openGooglePhotosModal('link')}
+            onImportLocal={() => localInputRef.current?.click()}
+          />
         )}
       </section>
 
@@ -1036,7 +1127,14 @@ const Memoriya: React.FC = () => {
       )}
 
       <main className="memoriya-stage">
-        {!hasMemories && <EmptyDriveState loading={loading} onConnect={connectDrive} onImportLocal={() => localInputRef.current?.click()} />}
+        {!hasMemories && (
+          <EmptyDriveState
+            loading={loading}
+            onConnect={connectDrive}
+            onLinkGooglePhotos={() => openGooglePhotosModal('link')}
+            onImportLocal={() => localInputRef.current?.click()}
+          />
+        )}
 
         {hasMemories && stage === 'reels' && selected && (
           <ReelsStage
@@ -1081,12 +1179,20 @@ const Memoriya: React.FC = () => {
               <item.Icon size={18} />
             </button>
           ))}
+          <button onClick={() => openGooglePhotosModal(gphotosCollections.length ? 'collections' : 'link')} aria-label="Google Photos & Collections">
+            <GooglePhotosIcon size={18} />
+          </button>
           <button onClick={connectDrive} aria-label="Sync Drive">
             <Cloud size={18} />
           </button>
         </nav>
       )}
 
+      <GooglePhotosModal
+        open={gphotosModalOpen}
+        onClose={() => setGphotosModalOpen(false)}
+        initialTab={gphotosModalTab}
+      />
       <MemoryLightbox memory={viewerMemory} memories={filteredMemories} onClose={() => setViewerMemory(null)} />
       {cameraOpen && accessToken && mobileCameraAvailable && (
         <DriveCameraCapture
@@ -1192,13 +1298,22 @@ const HeroImage = memo<{ memory: Memory; index: number; lightweight: boolean }>(
 
 HeroImage.displayName = 'HeroImage';
 
-const OnboardingCard: React.FC<{ loading: boolean; onConnect: () => void; onImportLocal: () => void }> = ({ loading, onConnect, onImportLocal }) => (
+const OnboardingCard: React.FC<{
+  loading: boolean;
+  onConnect: () => void;
+  onLinkGooglePhotos: () => void;
+  onImportLocal: () => void;
+}> = ({ loading, onConnect, onLinkGooglePhotos, onImportLocal }) => (
   <aside className="memoriya-now-card memoriya-onboarding-card">
     <span><ShieldCheck size={16} /> Your private archive</span>
     <h2>Start with something real</h2>
-    <p>Connect Google Drive, or add photos and videos straight from this device. Memoriya shows only your own media across every screen.</p>
+    <p>Link Google Photos (phone or PC), connect Google Drive, or add media straight from this device — then choose which collections appear on your site.</p>
     <div className="flex flex-col gap-2">
-      <button className="memoriya-primary" onClick={onConnect} disabled={loading}>
+      <button className="memoriya-primary" onClick={onLinkGooglePhotos} disabled={loading}>
+        <GooglePhotosIcon size={17} />
+        Link Google Photos
+      </button>
+      <button className="memoriya-glass-button" onClick={onConnect} disabled={loading}>
         {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
         Connect Drive
       </button>
@@ -1209,15 +1324,23 @@ const OnboardingCard: React.FC<{ loading: boolean; onConnect: () => void; onImpo
   </aside>
 );
 
-const EmptyDriveState: React.FC<{ loading: boolean; onConnect: () => void; onImportLocal: () => void }> = ({ loading, onConnect, onImportLocal }) => (
+const EmptyDriveState: React.FC<{
+  loading: boolean;
+  onConnect: () => void;
+  onLinkGooglePhotos: () => void;
+  onImportLocal: () => void;
+}> = ({ loading, onConnect, onLinkGooglePhotos, onImportLocal }) => (
   <section className="memoriya-empty-drive">
     <Cloud size={34} />
     <h2>Give your memories a beautiful home</h2>
     <p>
-      There are no demo images in your workspace. Connect Google Drive, or pick photos and videos from this
-      device. Memoriya sorts them automatically by date, time, type, albums, and available location metadata.
+      Link Google Photos with your Gmail on phone or PC and select which collections appear on your site, connect Google Drive, or pick photos from this device.
     </p>
-    <button className="memoriya-primary" onClick={onConnect} disabled={loading}>
+    <button className="memoriya-primary" onClick={onLinkGooglePhotos} disabled={loading}>
+      <GooglePhotosIcon size={17} />
+      Link Google Photos
+    </button>
+    <button className="memoriya-glass-button" onClick={onConnect} disabled={loading}>
       {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
       {loading ? 'Connecting...' : 'Connect Google Drive'}
     </button>

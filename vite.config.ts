@@ -2,38 +2,55 @@ import path from "path";
 import { fileURLToPath } from "url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  // Android 8/9 TVs can ship with Chromium 50–66 WebViews. Keep the emitted
-  // syntax within the ES2015 range so the page can parse before Story Mode
-  // or the Drive client starts.
-  build: {
-    target: 'es2015',
-  },
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "src"),
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, __dirname, "");
+  const resolvedGoogleClientId =
+    env.VITE_GOOGLE_CLIENT_ID ||
+    env.GOOGLE_CLIENT_ID ||
+    env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+    process.env.VITE_GOOGLE_CLIENT_ID ||
+    process.env.GOOGLE_CLIENT_ID ||
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+    "";
+
+  return {
+    plugins: [react(), tailwindcss()],
+    define: {
+      ...(resolvedGoogleClientId
+        ? { "import.meta.env.VITE_GOOGLE_CLIENT_ID": JSON.stringify(resolvedGoogleClientId) }
+        : {}),
     },
-  },
-  server: {
-    // Listen on the local Wi-Fi interface so another device on the same
-    // network can open the development site.
-    host: true,
-    port: 5173,
-    // Allow the app to be opened through VS Code / remote dev tunnels and the
-    // Arena live-preview proxy (port-5173-*.e2b.app).
-    allowedHosts: ["ljs91hvv-5173.inc1.devtunnels.ms", ".devtunnels.ms", ".e2b.app"],
-    proxy: {
-      '/__memoriya-cast': {
-        target: 'ws://127.0.0.1:8787',
-        ws: true,
+    // Android 8/9 TVs can ship with Chromium 50–66 WebViews. Keep the emitted
+    // syntax within the ES2015 range so the page can parse before Story Mode
+    // or the Drive client starts.
+    build: {
+      target: 'es2015',
+    },
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "src"),
       },
     },
-  },
+    server: {
+      // Listen on the local Wi-Fi interface so another device on the same
+      // network can open the development site.
+      host: true,
+      port: 5173,
+      // Allow the app to be opened through VS Code / remote dev tunnels and the
+      // Arena live-preview proxy (port-5173-*.e2b.app).
+      allowedHosts: ["ljs91hvv-5173.inc1.devtunnels.ms", ".devtunnels.ms", ".e2b.app"],
+      proxy: {
+        '/__memoriya-cast': {
+          target: 'ws://127.0.0.1:8787',
+          ws: true,
+        },
+      },
+    },
+  };
 });

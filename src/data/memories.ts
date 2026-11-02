@@ -10,6 +10,10 @@ export interface Memory {
   thumbnail: string;
   authToken?: string;
   driveFileId?: string;
+  googlePhotoId?: string;
+  collectionId?: string;
+  collectionName?: string;
+  source?: 'drive' | 'google-photos' | 'local';
   modifiedTime?: string;
   orientation?: number;
   width?: number;

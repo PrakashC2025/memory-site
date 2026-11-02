@@ -3,6 +3,7 @@ import { Image, Play } from 'lucide-react';
 import type { Memory } from '../data/memories';
 import { ensureCachedDriveMedia, readCachedDriveMedia } from '../services/driveCache';
 import { saveDriveAccessToken } from '../services/driveLibrary';
+import { ensureHydratedGooglePhotoUrls } from '../services/googlePhotosService';
 import { getStoryMediaCacheKey, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 import { observeNearViewport } from '../utils/visibilityGate';
 
@@ -19,6 +20,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
   const objectUrlRef = useRef('');
   const [imageIndex, setImageIndex] = useState(0);
   const [blobSrc, setBlobSrc] = useState('');
+  const [googlePosterSrc, setGooglePosterSrc] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [fallbackLoading, setFallbackLoading] = useState(false);
@@ -43,6 +45,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     objectUrlRef.current = '';
     setBlobSrc('');
+    setGooglePosterSrc('');
     setImageIndex(0);
     setLoaded(false);
     setFailed(false);
@@ -56,6 +59,21 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
       objectUrlRef.current = '';
     };
   }, [memory.id, memory.thumbnail, memory.url]);
+
+  useEffect(() => {
+    if (!nearViewport) return undefined;
+    if (!memory.googlePhotoId || blobSrc || memory.url) return undefined;
+    let cancelled = false;
+    void ensureHydratedGooglePhotoUrls(memory.googlePhotoId).then(hydrated => {
+      if (cancelled || !hydrated?.url) return;
+      setBlobSrc(hydrated.url);
+      if (hydrated.thumbnail) setGooglePosterSrc(hydrated.thumbnail);
+      setFailed(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [blobSrc, memory.googlePhotoId, memory.id, memory.url, nearViewport]);
 
   useEffect(() => {
     if (!nearViewport) return undefined;
@@ -137,6 +155,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     };
   }, [blobSrc, eager, failed, fallbackLoading, imageCandidates.length, memory.authToken, memory.driveFileId, memory.id, memory.mimeType, memory.type, nearViewport, videoActive]);
 
+  const posterThumbnail = memory.thumbnail || googlePosterSrc;
   const src = memory.type === 'video'
     ? blobSrc || (!memory.driveFileId ? memory.url : '')
     : blobSrc || imageCandidates[imageIndex] || '';
@@ -168,11 +187,11 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
 
   return (
     <span className="drive-media-preview-wrap" ref={hostRef}>
-      {memory.type === 'video' && !failed && src && (videoActive || !memory.thumbnail) ? (
+      {memory.type === 'video' && !failed && src && (videoActive || !posterThumbnail) ? (
         <>
-          {!loaded && memory.thumbnail && (
+          {!loaded && posterThumbnail && (
             <img
-              src={memory.thumbnail}
+              src={posterThumbnail}
               alt={alt ?? memory.title}
               className="drive-preview-video-underlay"
               aria-hidden="true"
@@ -187,7 +206,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
             autoPlay={videoActive}
             loop
             preload="metadata"
-            poster={memory.thumbnail || undefined}
+            poster={posterThumbnail || undefined}
             onLoadedData={handleVideoLoaded}
             onError={handleVideoError}
             style={loaded ? undefined : { opacity: 0 }}
@@ -214,9 +233,9 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setVideoActive(true); }}
           aria-label={`Play preview for ${memory.title}`}
         >
-          {memory.thumbnail ? (
+          {posterThumbnail ? (
             <img
-              src={memory.thumbnail}
+              src={posterThumbnail}
               alt={alt ?? memory.title}
               className={`${className} drive-media-preview`}
               loading={eager ? 'eager' : 'lazy'}
@@ -237,7 +256,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
           )}
           <span aria-hidden="true"><Play size={24} /></span>
         </span>
-      ) : fallbackLoading && memory.type === 'video' && memory.thumbnail ? (
+      ) : fallbackLoading && memory.type === 'video' && posterThumbnail ? (
         <span className={`drive-preview-fallback ${className} drive-media-preview`}>
           <Play size={24} />
           <strong>{memory.title}</strong>
@@ -275,7 +294,7 @@ const buildImageCandidates = (memory: Memory) => {
 };
 
 const sharpenThumbnail = (url: string) => {
-  if (!url) return '';
+  if (!url || url.startsWith('blob:')) return url || '';
   // Upgrade thumbnail size to 960px for sharper preview.
   // Handles patterns: =s1280, =s800, =s960, sz=w100, sz=w200, etc.
   // Also strips query strings that might interfere

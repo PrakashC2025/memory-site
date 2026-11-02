@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import AppErrorBoundary from './components/AppErrorBoundary';
 import AnimatedBackground from './components/AnimatedBackground';
 import DriveLiveSync from './components/DriveLiveSync';
+import { GooglePhotosBoot } from './components/GooglePhotosConnectPanel';
 import MusicPlayer from './components/MusicPlayer';
 import Navbar from './components/Navbar';
 import SplashCursor from './components/SplashCursor';
@@ -114,6 +115,7 @@ const AppContent: React.FC = () => {
   return (
     <>
       <DriveLiveSync />
+      <GooglePhotosBoot />
       <AnimatedBackground />
       {!isLegacyTvBrowser() && !mobileSurface && currentPage !== 'story' && (
         <SplashCursor
