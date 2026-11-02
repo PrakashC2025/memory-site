@@ -1405,87 +1405,89 @@ const DriveCameraCapture: React.FC<Props> = ({
               </select>
             </label>
           </div>
-          <div className="memoriya-camera-settings" role="group" aria-label="Where to store captured photos">
-            <button
-              type="button"
-              onClick={() => setSaveTarget('drive')}
-              className={saveTarget === 'drive' ? 'is-active' : ''}
-              aria-pressed={saveTarget === 'drive'}
-            >
-              Store: Drive
-            </button>
-            <button
-              type="button"
-              onClick={() => setSaveTarget('google-photos')}
-              className={saveTarget === 'google-photos' ? 'is-active' : ''}
-              aria-pressed={saveTarget === 'google-photos'}
-            >
-              Store: Google Photos
-            </button>
-            <button
-              type="button"
-              onClick={() => setSaveTarget('both')}
-              className={saveTarget === 'both' ? 'is-active' : ''}
-              aria-pressed={saveTarget === 'both'}
-            >
-              Store: Both
-            </button>
-          </div>
-          {(saveTarget === 'drive' || saveTarget === 'both') && (
-            <label className="memoriya-camera-destination">Save to Drive folder
-              <select value={folderId} onChange={event => setFolderId(event.target.value)}>
-                <option value="drive-root">My Drive root</option>
-                {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-              </select>
-            </label>
-          )}
-          {(saveTarget === 'google-photos' || saveTarget === 'both') && (
-            <>
-              <label className="memoriya-camera-destination">Save to Google Photos collection
-                <select
-                  value={collectionId}
-                  onChange={event => {
-                    if (event.target.value === '__new__') {
-                      setCreatingCollection(true);
-                      return;
-                    }
-                    setCollectionId(event.target.value);
-                  }}
-                >
-                  {gphotosCollections.length === 0 && (
-                    <option value="">Memoriya Camera (Auto-create)</option>
-                  )}
-                  {gphotosCollections.map(col => (
-                    <option key={col.id} value={col.id}>
-                      {col.name} ({col.count})
-                    </option>
-                  ))}
-                  <option value="__new__">+ New collection…</option>
+          <div className="memoriya-camera-destination-stack">
+            <div className="memoriya-camera-store-switch" role="group" aria-label="Where to store captured photos">
+              <button
+                type="button"
+                onClick={() => setSaveTarget('drive')}
+                className={saveTarget === 'drive' ? 'is-active' : ''}
+                aria-pressed={saveTarget === 'drive'}
+              >
+                Store: Drive
+              </button>
+              <button
+                type="button"
+                onClick={() => setSaveTarget('google-photos')}
+                className={saveTarget === 'google-photos' ? 'is-active' : ''}
+                aria-pressed={saveTarget === 'google-photos'}
+              >
+                Store: Google Photos
+              </button>
+              <button
+                type="button"
+                onClick={() => setSaveTarget('both')}
+                className={saveTarget === 'both' ? 'is-active' : ''}
+                aria-pressed={saveTarget === 'both'}
+              >
+                Store: Both
+              </button>
+            </div>
+            {(saveTarget === 'drive' || saveTarget === 'both') && (
+              <label className="memoriya-camera-destination">Save to Drive folder
+                <select value={folderId} onChange={event => setFolderId(event.target.value)}>
+                  <option value="drive-root">My Drive root</option>
+                  {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
                 </select>
               </label>
-              {creatingCollection && (
-                <div className="memoriya-camera-settings" style={{ gap: '0.4rem' }}>
-                  <input
-                    type="text"
-                    value={newCollectionName}
-                    onChange={e => setNewCollectionName(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') handleCreateCameraCollection();
-                      if (e.key === 'Escape') setCreatingCollection(false);
+            )}
+            {(saveTarget === 'google-photos' || saveTarget === 'both') && (
+              <>
+                <label className="memoriya-camera-destination">Save to Google Photos collection
+                  <select
+                    value={collectionId}
+                    onChange={event => {
+                      if (event.target.value === '__new__') {
+                        setCreatingCollection(true);
+                        return;
+                      }
+                      setCollectionId(event.target.value);
                     }}
-                    placeholder="New collection name..."
-                    className="min-w-0 flex-1 rounded-lg border border-white/20 bg-black/50 px-3 py-1.5 text-xs text-white outline-none"
-                  />
-                  <button type="button" onClick={handleCreateCameraCollection} className="is-active">
-                    Create
-                  </button>
-                  <button type="button" onClick={() => setCreatingCollection(false)}>
-                    Cancel
-                  </button>
-                </div>
-              )}
-            </>
-          )}
+                  >
+                    {gphotosCollections.length === 0 && (
+                      <option value="">Memoriya Camera (Auto-create)</option>
+                    )}
+                    {gphotosCollections.map(col => (
+                      <option key={col.id} value={col.id}>
+                        {col.name} ({col.count})
+                      </option>
+                    ))}
+                    <option value="__new__">+ New collection…</option>
+                  </select>
+                </label>
+                {creatingCollection && (
+                  <div className="memoriya-camera-store-switch">
+                    <input
+                      type="text"
+                      value={newCollectionName}
+                      onChange={e => setNewCollectionName(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') handleCreateCameraCollection();
+                        if (e.key === 'Escape') setCreatingCollection(false);
+                      }}
+                      placeholder="New collection name..."
+                      className="min-w-0 flex-1 rounded-lg border border-white/20 bg-black/60 px-3 py-1.5 text-xs text-white outline-none"
+                    />
+                    <button type="button" onClick={handleCreateCameraCollection} className="is-active">
+                      Create
+                    </button>
+                    <button type="button" onClick={() => setCreatingCollection(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
           <p className={`memoriya-camera-message ${error ? 'is-error' : ''}`}>{error || status}</p>
           {pendingUploads > 0 && <p className="memoriya-camera-saved"><Loader2 size={15} className="memoriya-spin-icon" /> Uploading securely in the background</p>}
           {(uploadedFile || capturedPhoto?.savedToGooglePhotos) && !reviewOpen && (

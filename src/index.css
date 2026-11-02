@@ -14231,3 +14231,94 @@ html:not(.legacy-tv-browser) .page-hero button {
     scroll-behavior: auto;
   }
 }
+
+/* Google Drive & Google Photos inline folder/collection selectors + Camera store destinations */
+body:not(.memoriya-camera-active) {
+  overflow-y: auto;
+}
+
+.memoriya-drive-folder-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+}
+
+.memoriya-drive-folder-select select {
+  min-width: 0;
+  max-width: 14rem;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.memoriya-drive-folder-select select option,
+.memoriya-camera-destination select option,
+.memoriya-camera-filter select option,
+.memoriya-camera-edit-tools select option {
+  background: #0f1422;
+  color: #f8f4ee;
+}
+
+.memoriya-camera-destination-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.48rem;
+  width: 100%;
+}
+
+.memoriya-camera-store-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.memoriya-camera-store-switch button {
+  flex: 1 1 auto;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(5, 7, 14, 0.72);
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.memoriya-camera-store-switch button.is-active {
+  border-color: rgba(255, 208, 138, 0.65);
+  background: rgba(255, 208, 138, 0.18);
+  color: #ffd08a;
+}
+
+@media (min-width: 900px) {
+  .memoriya-camera-panel {
+    max-height: calc(100dvh - 2rem);
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 899px) {
+  .memoriya-camera-bottom-deck {
+    max-height: 44dvh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 899px) and (orientation: landscape) {
+  .memoriya-camera-destination-stack {
+    grid-area: destination;
+    min-width: 0;
+  }
+
+  .memoriya-camera-destination-stack .memoriya-camera-destination {
+    grid-area: auto;
+  }
+}
+

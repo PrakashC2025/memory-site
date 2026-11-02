@@ -549,7 +549,6 @@ export const hydrateGooglePhotosLibrary = async (): Promise<boolean> => {
 export const ensureGooglePhotosBootHydration = (): void => {
   if (!hasWindow() || initialHydrationStarted) return;
   initialHydrationStarted = true;
-  void resolveGoogleClientId();
   void hydrateGooglePhotosLibrary();
 };
 
@@ -1001,12 +1000,11 @@ export const connectGooglePhotosGmail = async (options?: {
   clientId?: string;
   usePickerScope?: boolean;
 }): Promise<{ accessToken: string; account: GooglePhotosAccount | null }> => {
-  const clientId =
-    getConfiguredGoogleClientId(options?.clientId) ||
-    (await resolveGoogleClientId(options?.clientId));
+  // Follow the exact same direct Client ID + script flow as Google Drive (`googleDriveService.connect`).
+  const clientId = getConfiguredGoogleClientId(options?.clientId);
   if (!clientId) {
     throw new Error(
-      'Google Client ID is not set yet. Add VITE_GOOGLE_CLIENT_ID in Vercel (or .env) and redeploy.',
+      'Google Photos is not configured. Add VITE_GOOGLE_CLIENT_ID in .env (or Vercel Environment Variables) and restart/redeploy.',
     );
   }
 

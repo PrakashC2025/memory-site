@@ -193,11 +193,7 @@ export class GoogleDriveService {
   }
 
   async connect(loginHint?: string, prompt = ''): Promise<DriveConnectionState> {
-    const clientId =
-      import.meta.env.VITE_GOOGLE_CLIENT_ID ||
-      (typeof window !== 'undefined'
-        ? (window.localStorage.getItem('memoriya-google-client-id-override-v1') || '').trim()
-        : '');
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
     if (!clientId) {
       throw new Error('Google Drive is not configured. Add VITE_GOOGLE_CLIENT_ID in .env and restart the dev server.');

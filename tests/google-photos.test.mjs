@@ -179,8 +179,14 @@ test('Google Photos collection dropdown, upload, and camera capture sync to coll
 test('Simple 1-button Google Photos UI and Camera destination options are wired across pages', async () => {
   const memoriya = await readProjectFile('src/pages/Memoriya.tsx');
   const camera = await readProjectFile('src/components/DriveCameraCapture.tsx');
+  const modal = await readProjectFile('src/components/GooglePhotosModal.tsx');
+  const css = await readProjectFile('src/index.css');
   const dashboard = await readProjectFile('src/pages/Dashboard.tsx');
   const settings = await readProjectFile('src/pages/Settings.tsx');
+
+  // No unscrollable popup modal or Client ID paste box anywhere
+  assert.doesNotMatch(modal, /OAuth Client ID Setup/);
+  assert.doesNotMatch(memoriya, /OAuth Client ID Setup/);
 
   // Simple 1-button connect + inline Collection dropdown + Add to Google Photos
   assert.match(memoriya, /Connect Google Photos/);
@@ -191,11 +197,13 @@ test('Simple 1-button Google Photos UI and Camera destination options are wired 
   assert.match(memoriya, /Folder · \$\{memory\.collectionName\}/);
 
   // Camera inside gives Drive / Google Photos / Both destination options + folder & collection selectors
+  assert.match(camera, /memoriya-camera-destination-stack/);
   assert.match(camera, /Store: Drive/);
   assert.match(camera, /Store: Google Photos/);
   assert.match(camera, /Store: Both/);
   assert.match(camera, /Save to Drive folder/);
   assert.match(camera, /Save to Google Photos collection/);
+  assert.match(css, /\.memoriya-drive-folder-select select option/);
 
   assert.match(dashboard, /GooglePhotosConnectPanel/);
   assert.match(settings, /GooglePhotosConnectPanel/);
