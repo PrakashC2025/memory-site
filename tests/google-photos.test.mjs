@@ -24,6 +24,7 @@ const setupBrowserMocks = () => {
   const listeners = new Map();
 
   const mockWindow = {
+    location: { origin: 'https://memory-site.vercel.app' },
     localStorage,
     sessionStorage,
     indexedDB: undefined,
@@ -68,44 +69,123 @@ const loadGooglePhotosService = async () => {
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 };
 
-test('Google Photos mobile vs PC detection and Picker URI formatting', async () => {
+test('Google Photos handles 400 and empty libraries gracefully with friendly no-photos state', async () => {
   setupBrowserMocks();
   const svc = await loadGooglePhotosService();
 
-  assert.equal(
-    svc.isMobileGooglePhotosDevice(
-      'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36',
-    ),
-    true,
-  );
-  assert.equal(
-    svc.isMobileGooglePhotosDevice(
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
-    ),
-    true,
-  );
-  assert.equal(
-    svc.isMobileGooglePhotosDevice(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36',
-    ),
-    false,
-  );
-  assert.equal(
-    svc.isMobileGooglePhotosDevice(
-      'Mozilla/5.0 (Linux; Android 12; GoogleTV) AppleWebKit/537.36 Chrome/120.0 Safari/537.36',
-    ),
-    false,
-  );
+  // Simulate Google Photos API returning HTTP 400 FAILED_PRECONDITION on an empty/new account
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ error: { code: 400, status: 'FAILED_PRECONDITION' } }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    });
 
-  const rawUri = 'https://photos.google.com/photospicker/abc-123/';
-  assert.equal(svc.formatGooglePhotosPickerUrl(rawUri, false), rawUri);
-  assert.equal(
-    svc.formatGooglePhotosPickerUrl(rawUri, true),
-    'https://photos.google.com/photospicker/abc-123/autoclose',
-  );
+  try {
+    const syncRes = await svc.syncGooglePhotosLibrary('mock-access-token');
+    assert.equal(syncRes.connected, true);
+    assert.equal(syncRes.empty, true);
+    assert.match(syncRes.message, /no photos found/i);
+    assert.doesNotMatch(syncRes.message, /\b400\b/);
+    // Zero predefined collections when the Google account has none
+    assert.equal(syncRes.collections.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // Friendly error translator never leaks raw 400 error codes
+  assert.match(svc.formatFriendlyGooglePhotosError(new Error('Request failed with 400')), /no photos were found/i);
+  assert.match(svc.formatFriendlyGooglePhotosError(new Error('origin_mismatch')), /Authorized JavaScript origins/i);
 });
 
-test('Google Photos collections selection controls which memories appear on the site', async () => {
+test('Google Photos reads all collections and their photos directly from the connected Google account', async () => {
+  setupBrowserMocks();
+  const svc = await loadGooglePhotosService();
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('/v1/albums?')) {
+      return new Response(
+        JSON.stringify({
+          albums: [
+            { id: 'alb-trip', title: 'Family Trip', mediaItemsCount: '2' },
+            { id: 'alb-wedding', title: 'Wedding', mediaItemsCount: '1' },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    if (u.includes('/v1/mediaItems:search')) {
+      const body = JSON.parse(String(init?.body || '{}'));
+      if (body.albumId === 'alb-trip') {
+        return new Response(
+          JSON.stringify({
+            mediaItems: [
+              {
+                id: 'gp-1',
+                filename: 'beach.jpg',
+                mimeType: 'image/jpeg',
+                baseUrl: 'https://lh3.googleusercontent.com/mock-gp-1',
+                mediaMetadata: { creationTime: '2026-05-01T10:00:00Z', width: '1600', height: '1200' },
+              },
+              {
+                id: 'gp-2',
+                filename: 'hills.jpg',
+                mimeType: 'image/jpeg',
+                baseUrl: 'https://lh3.googleusercontent.com/mock-gp-2',
+                mediaMetadata: { creationTime: '2026-05-02T10:00:00Z', width: '1600', height: '1200' },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (body.albumId === 'alb-wedding') {
+        return new Response(
+          JSON.stringify({
+            mediaItems: [
+              {
+                id: 'gp-3',
+                filename: 'ceremony.jpg',
+                mimeType: 'image/jpeg',
+                baseUrl: 'https://lh3.googleusercontent.com/mock-gp-3',
+                mediaMetadata: { creationTime: '2026-06-10T15:00:00Z', width: '1200', height: '1600' },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+    }
+    if (u.includes('/v1/mediaItems?')) {
+      return new Response(JSON.stringify({ mediaItems: [] }), { status: 200 });
+    }
+    if (u.includes('lh3.googleusercontent.com')) {
+      return new Response(new Blob(['img-bytes'], { type: 'image/jpeg' }), { status: 200 });
+    }
+    return new Response('{}', { status: 200 });
+  };
+
+  try {
+    const res = await svc.syncGooglePhotosLibrary('account-token');
+    assert.equal(res.collections.length, 2);
+    const names = res.collections.map(c => `${c.name}:${c.count}`).sort();
+    assert.deepEqual(names, ['Family Trip:2', 'Wedding:1']);
+    assert.equal(res.memories.length, 3);
+
+    // Selecting "Wedding" from the Google account collection dropdown filters to Wedding's photo
+    const weddingCol = res.collections.find(c => c.name === 'Wedding');
+    svc.setActiveGooglePhotosCollectionId(weddingCol.id);
+    const weddingOnly = svc.readSelectedGooglePhotosMemories();
+    assert.equal(weddingOnly.length, 1);
+    assert.equal(weddingOnly[0].collectionName, 'Wedding');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Google Photos collection dropdown, upload, and camera capture sync to collections', async () => {
   const { dispatched } = setupBrowserMocks();
   const svc = await loadGooglePhotosService();
 
@@ -116,75 +196,102 @@ test('Google Photos collections selection controls which memories appear on the 
     return file;
   };
 
-  // Import 2 photos into "Goa Trip" collection and 1 photo into "Work Notes" collection
-  await svc.importFilesIntoGooglePhotosCollection(
-    [
-      makeMockFile('beach_sunset.jpg', 'image/jpeg', Date.UTC(2025, 1, 14)),
-      makeMockFile('waves.mp4', 'video/mp4', Date.UTC(2025, 1, 15)),
-    ],
-    { mode: 'custom', name: 'Goa Trip' },
-  );
+  // Mock Google Photos cloud endpoints (albums create, raw byte uploads, mediaItems:batchCreate)
+  const originalFetch = globalThis.fetch;
+  const cloudCalls = [];
+  globalThis.fetch = async (url, init) => {
+    cloudCalls.push(String(url));
+    if (String(url).endsWith('/v1/albums')) {
+      return new Response(JSON.stringify({ id: 'remote-album-camera-1' }), { status: 200 });
+    }
+    if (String(url).endsWith('/v1/uploads')) {
+      return new Response('upload-token-xyz', { status: 200 });
+    }
+    if (String(url).includes('mediaItems:batchCreate')) {
+      return new Response(
+        JSON.stringify({ newMediaItemResults: [{ mediaItem: { id: 'remote-media-1' } }] }),
+        { status: 200 },
+      );
+    }
+    return new Response('{}', { status: 200 });
+  };
 
-  await svc.importFilesIntoGooglePhotosCollection(
-    [makeMockFile('receipt.jpg', 'image/jpeg', Date.UTC(2025, 2, 10))],
-    { mode: 'custom', name: 'Work Notes' },
-  );
+  try {
+    // 1. Upload a camera capture into "Camera Memories" collection with cloud token
+    const camUpload = await svc.uploadFilesToGooglePhotosCollection(
+      [makeMockFile('camera-shot.jpg', 'image/jpeg', Date.UTC(2026, 2, 10))],
+      {
+        collectionName: 'Camera Memories',
+        accessToken: 'valid-token',
+        source: 'camera',
+      },
+    );
+    assert.equal(camUpload.importedCount, 1);
+    assert.equal(camUpload.syncedToCloud, true);
+    assert.equal(camUpload.collection?.name, 'Camera Memories');
+    assert.ok(cloudCalls.some(u => u.endsWith('/v1/uploads')));
+    assert.ok(cloudCalls.some(u => u.includes('mediaItems:batchCreate')));
 
-  const summaryInitial = svc.readGooglePhotosCollectionsSummary();
-  assert.equal(summaryInitial.length, 2);
-  assert.equal(svc.readSelectedGooglePhotosMemories().length, 3);
+    // 2. Upload 2 photos into "Goa Trip" collection
+    const tripUpload = await svc.uploadFilesToGooglePhotosCollection(
+      [
+        makeMockFile('beach.jpg', 'image/jpeg', Date.UTC(2026, 1, 14)),
+        makeMockFile('sunset.mp4', 'video/mp4', Date.UTC(2026, 1, 15)),
+      ],
+      { collectionName: 'Goa Trip', accessToken: 'valid-token' },
+    );
+    assert.equal(tripUpload.importedCount, 2);
 
-  const workCol = summaryInitial.find(c => c.name === 'Work Notes');
-  const goaCol = summaryInitial.find(c => c.name === 'Goa Trip');
-  assert.ok(workCol && goaCol);
-  assert.equal(goaCol.photoCount, 1);
-  assert.equal(goaCol.videoCount, 1);
+    // All collections selected -> 3 total memories visible
+    assert.equal(svc.readSelectedGooglePhotosMemories().length, 3);
 
-  // Unselect "Work Notes" -> only "Goa Trip" (2 items) appears on the site
-  svc.setGooglePhotosCollectionSelected(workCol.id, false);
-  const visibleAfterUncheck = svc.readSelectedGooglePhotosMemories();
-  assert.equal(visibleAfterUncheck.length, 2);
-  assert.ok(visibleAfterUncheck.every(m => m.collectionName === 'Goa Trip'));
-  assert.ok(dispatched.includes(svc.GOOGLE_PHOTOS_UPDATED_EVENT));
-  assert.ok(dispatched.includes('memoriya-drive-memories-updated'));
+    // Choose "Camera Memories" in the Collection dropdown -> only that 1 camera photo appears on site
+    svc.setActiveGooglePhotosCollectionId(camUpload.collection.id);
+    assert.equal(svc.readSelectedGooglePhotosMemories().length, 1);
+    assert.equal(svc.readSelectedGooglePhotosMemories()[0].collectionName, 'Camera Memories');
 
-  // Rename "Goa Trip" -> "Goa Friends 2025"
-  svc.renameGooglePhotosCollection(goaCol.id, 'Goa Friends 2025');
-  assert.equal(svc.readSelectedGooglePhotosMemories()[0].collectionName, 'Goa Friends 2025');
-  assert.equal(svc.readSelectedGooglePhotosMemories()[0].event, 'Goa Friends 2025');
+    // Switch back to "All collections" -> all 3 appear again
+    svc.setActiveGooglePhotosCollectionId('');
+    assert.equal(svc.readSelectedGooglePhotosMemories().length, 3);
+    assert.ok(dispatched.includes(svc.GOOGLE_PHOTOS_UPDATED_EVENT));
 
-  // Hide all -> 0 visible; Show all -> 3 visible
-  svc.setAllGooglePhotosCollectionsSelected(false);
-  assert.equal(svc.readSelectedGooglePhotosMemories().length, 0);
-
-  svc.setAllGooglePhotosCollectionsSelected(true);
-  assert.equal(svc.readSelectedGooglePhotosMemories().length, 3);
-
-  // Delete "Work Notes" -> 1 collection and 2 items remain
-  await svc.deleteGooglePhotosCollection(workCol.id);
-  assert.equal(svc.readGooglePhotosCollectionsSummary().length, 1);
-  assert.equal(svc.readSelectedGooglePhotosMemories().length, 2);
+    // Delete single camera item -> 2 remain
+    await svc.deleteGooglePhotoItem(camUpload.memories[0].googlePhotoId);
+    assert.equal(svc.readSelectedGooglePhotosMemories().length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
-test('Google Photos UI and archive wiring is present across all pages', async () => {
+test('Simple 1-button Google Photos UI and Camera destination options are wired across pages', async () => {
   const memoriya = await readProjectFile('src/pages/Memoriya.tsx');
+  const camera = await readProjectFile('src/components/DriveCameraCapture.tsx');
+  const modal = await readProjectFile('src/components/GooglePhotosModal.tsx');
+  const css = await readProjectFile('src/index.css');
   const dashboard = await readProjectFile('src/pages/Dashboard.tsx');
   const settings = await readProjectFile('src/pages/Settings.tsx');
-  const timeline = await readProjectFile('src/pages/Timeline.tsx');
-  const tree = await readProjectFile('src/pages/MemoryTree.tsx');
-  const events = await readProjectFile('src/pages/EventExplorer.tsx');
-  const story = await readProjectFile('src/pages/StoryMode.tsx');
-  const modal = await readProjectFile('src/components/GooglePhotosModal.tsx');
 
-  assert.match(memoriya, /GooglePhotosModal/);
-  assert.match(memoriya, /Link Google Photos/);
+  // No unscrollable popup modal or Client ID paste box anywhere
+  assert.doesNotMatch(modal, /OAuth Client ID Setup/);
+  assert.doesNotMatch(memoriya, /OAuth Client ID Setup/);
+
+  // Simple 1-button connect + inline Collection dropdown + Add to Google Photos
+  assert.match(memoriya, /Connect Google Photos/);
+  assert.match(memoriya, /Choose Google Photos collection/);
+  assert.match(memoriya, /Add to Google Photos/);
+  assert.match(memoriya, /No photos found/);
+  assert.match(memoriya, /Collection · \$\{memory\.collectionName\}/);
+  assert.match(memoriya, /Folder · \$\{memory\.collectionName\}/);
+
+  // Camera inside gives Drive / Google Photos / Both destination options + folder & collection selectors
+  assert.match(camera, /memoriya-camera-destination-stack/);
+  assert.match(camera, /Store: Drive/);
+  assert.match(camera, /Store: Google Photos/);
+  assert.match(camera, /Store: Both/);
+  assert.match(camera, /Save to Drive folder/);
+  assert.match(camera, /Save to Google Photos collection/);
+  assert.match(css, /\.memoriya-drive-folder-select select option/);
+
   assert.match(dashboard, /GooglePhotosConnectPanel/);
-  assert.match(dashboard, /readArchiveMemories/);
   assert.match(settings, /GooglePhotosConnectPanel/);
-  assert.match(timeline, /readArchiveMemories/);
-  assert.match(tree, /readArchiveMemories/);
-  assert.match(events, /readArchiveMemories/);
-  assert.match(story, /readSelectedGooglePhotosMemories/);
-  assert.match(modal, /photospicker|createGooglePhotosPickerSession/);
-  assert.match(modal, /Appears on Site/);
 });

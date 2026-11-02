@@ -18,9 +18,19 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import type { Memory } from '../data/memories';
 import type { DriveMediaFile } from '../services/googleDriveService';
 import { googleDriveService, isDriveAuthorizationError } from '../services/googleDriveService';
 import { saveDriveAccessToken } from '../services/driveLibrary';
+import {
+  deleteGooglePhotoItem,
+  GOOGLE_PHOTOS_UPDATED_EVENT,
+  readActiveGooglePhotosCollectionId,
+  readGooglePhotosAccessToken,
+  readGooglePhotosCollectionsSummary,
+  uploadFilesToGooglePhotosCollection,
+  type GooglePhotosCollectionSummary,
+} from '../services/googlePhotosService';
 import { deleteCachedStoryMedia, readCachedStoryMedia, writeCachedStoryMedia } from '../services/storyMediaCache';
 import { markCameraUploadCompleted, readCompletedCameraUploads, readPendingCameraUploads, writePendingCameraUploads } from '../services/cameraUploadQueue';
 
@@ -28,10 +38,17 @@ interface ImageCaptureLike {
   takePhoto: () => Promise<Blob>;
 }
 
+export type CameraSaveTarget = 'drive' | 'google-photos' | 'both';
+
 interface Props {
   accessToken: string;
+  googlePhotosToken?: string;
+  googlePhotosConnected?: boolean;
   initialFolderId?: string;
+  initialCollectionId?: string;
+  initialSaveTarget?: CameraSaveTarget;
   onUploaded: (file: DriveMediaFile, accessToken?: string, localFile?: File) => void;
+  onGooglePhotosUploaded?: (memories: Memory[], collectionName: string) => void;
   onDeleted?: (fileId: string) => void;
   onClose: () => void;
 }
@@ -47,12 +64,16 @@ interface CapturedPhoto {
   url: string;
   queueId: string;
   uploadedFile?: DriveMediaFile | null;
+  googlePhotoId?: string;
+  savedToGooglePhotos?: boolean;
 }
 
 interface UploadJob {
   id: string;
   file: File;
   folderId: string;
+  saveTarget?: CameraSaveTarget;
+  collectionId?: string;
 }
 
 type CameraCrop = 'original' | 'square' | 'portrait' | 'landscape';
@@ -91,7 +112,18 @@ const canvasToJpegBlob = (canvas: HTMLCanvasElement) => new Promise<Blob>((resol
   }, 'image/jpeg', 0.98);
 });
 
-const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onUploaded, onDeleted, onClose }) => {
+const DriveCameraCapture: React.FC<Props> = ({
+  accessToken,
+  googlePhotosToken,
+  googlePhotosConnected,
+  initialFolderId,
+  initialCollectionId,
+  initialSaveTarget,
+  onUploaded,
+  onGooglePhotosUploaded,
+  onDeleted,
+  onClose,
+}) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -141,6 +173,21 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const [error, setError] = useState('');
   const [folderId, setFolderId] = useState(initialFolderId || 'drive-root');
   const [folders, setFolders] = useState<DriveFolderChoice[]>([]);
+  const [saveTarget, setSaveTarget] = useState<CameraSaveTarget>(() => {
+    if (initialSaveTarget) return initialSaveTarget;
+    if (accessToken && googlePhotosConnected) return 'both';
+    if (!accessToken && googlePhotosConnected) return 'google-photos';
+    return 'drive';
+  });
+  const [gphotosCollections, setGphotosCollections] = useState<GooglePhotosCollectionSummary[]>(
+    () => readGooglePhotosCollectionsSummary(),
+  );
+  const [collectionId, setCollectionId] = useState<string>(() => {
+    if (initialCollectionId) return initialCollectionId;
+    const active = readActiveGooglePhotosCollectionId();
+    if (active) return active;
+    return readGooglePhotosCollectionsSummary()[0]?.id || '';
+  });
   const [pendingUploads, setPendingUploads] = useState(0);
   const [uploadStatuses, setUploadStatuses] = useState<Record<string, CameraUploadStatus>>({});
   const [uploadingQueueId, setUploadingQueueId] = useState('');
@@ -219,10 +266,24 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   }, []);
 
   useEffect(() => {
+    if (!accessToken) {
+      setFolders([]);
+      return;
+    }
     void googleDriveService.listFolders(accessToken)
       .then(setFolders)
       .catch(() => setFolders([]));
   }, [accessToken]);
+
+  useEffect(() => {
+    const syncCollections = () => {
+      const next = readGooglePhotosCollectionsSummary();
+      setGphotosCollections(next);
+      setCollectionId(prev => (prev && next.some(c => c.id === prev) ? prev : next[0]?.id || ''));
+    };
+    window.addEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, syncCollections);
+    return () => window.removeEventListener(GOOGLE_PHOTOS_UPDATED_EVENT, syncCollections);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -592,7 +653,13 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     setPendingUploads(uploadQueueRef.current.length);
   };
 
-  const startUpload = async (file: File, queueId = '', targetFolderId = folderId): Promise<boolean> => {
+  const startUpload = async (
+    file: File,
+    queueId = '',
+    targetFolderId = folderId,
+    jobTarget: CameraSaveTarget = saveTarget,
+    jobCollectionId: string = collectionId,
+  ): Promise<boolean> => {
     if (uploadInFlightRef.current) return false;
     const controller = new AbortController();
     uploadAbortRef.current = controller;
@@ -602,9 +669,72 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       updateUploadStatus(queueId, 'uploading');
     }
     setError('');
-    setStatus('Uploading securely to Drive…');
+    const wantsGooglePhotos = jobTarget === 'google-photos' || jobTarget === 'both';
+    const wantsDrive = jobTarget === 'drive' || jobTarget === 'both';
+    setStatus(
+      wantsDrive && wantsGooglePhotos
+        ? 'Saving to Drive folder & Google Photos collection…'
+        : wantsGooglePhotos
+          ? 'Saving to Google Photos collection…'
+          : 'Uploading securely to Drive…',
+    );
     try {
+      let savedCollectionName = '';
+      if (wantsGooglePhotos) {
+        const gphotoToken = googlePhotosToken || readGooglePhotosAccessToken();
+        const gphotoRes = await uploadFilesToGooglePhotosCollection([file], {
+          collectionId: jobCollectionId || undefined,
+          accessToken: gphotoToken || undefined,
+          source: 'camera',
+          signal: controller.signal,
+        });
+        savedCollectionName = gphotoRes.collection?.name || 'Memoriya Camera';
+        const firstGphotoId = gphotoRes.memories[0]?.googlePhotoId;
+        setCapturedGallery(current =>
+          current.map(photo =>
+            photo.queueId === queueId
+              ? { ...photo, savedToGooglePhotos: true, googlePhotoId: firstGphotoId }
+              : photo,
+          ),
+        );
+        setCapturedPhoto(current =>
+          current?.queueId === queueId
+            ? { ...current, savedToGooglePhotos: true, googlePhotoId: firstGphotoId }
+            : current,
+        );
+        try {
+          if (gphotoRes.memories.length) {
+            onGooglePhotosUploaded?.(gphotoRes.memories, savedCollectionName);
+          }
+        } catch {
+          // Parent refresh should never interrupt camera capture.
+        }
+      }
+
+      if (controller.signal.aborted) return false;
+
+      if (!wantsDrive || (!accessToken && jobTarget === 'both')) {
+        // Google Photos-only capture (or Both when Drive is not connected yet)
+        if (queueId) {
+          cancelledUploadIdsRef.current.delete(queueId);
+          updateUploadStatus(queueId, 'uploaded');
+          void deleteCachedStoryMedia(queueId);
+          writePendingCameraUploads(readPendingCameraUploads().filter(job => job.id !== queueId));
+        }
+        setStatus(`Photo saved to Google Photos collection "${savedCollectionName || 'Memoriya Camera'}".`);
+        return true;
+      }
+
       let token = accessToken;
+      if (!token) {
+        const driveState = await googleDriveService.connect();
+        token = driveState.accessToken || '';
+        if (token) saveDriveAccessToken(token);
+      }
+      if (!token) {
+        throw new Error('Connect Google Drive or choose Google Photos to store this photo.');
+      }
+
       let uploaded: DriveMediaFile;
       try {
         uploaded = await googleDriveService.uploadMedia(token, file, targetFolderId, controller.signal);
@@ -646,7 +776,11 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         // Drive has succeeded and the local copy is safe. A parent-page
         // refresh must never turn a successful camera capture into an error.
       }
-      setStatus('Photo saved locally and synced to Drive.');
+      setStatus(
+        wantsGooglePhotos
+          ? `Photo saved to Drive & Google Photos "${savedCollectionName || 'Memoriya Camera'}".`
+          : 'Photo saved locally and synced to Drive.',
+      );
       return true;
     } catch (uploadError) {
       const wasCancelled = Boolean(queueId && cancelledUploadIdsRef.current.has(queueId));
@@ -703,7 +837,13 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
           continue;
         }
         updatePendingCount();
-        const uploaded = await startUpload(job.file, job.id, job.folderId);
+        const uploaded = await startUpload(
+          job.file,
+          job.id,
+          job.folderId,
+          job.saveTarget || saveTarget,
+          job.collectionId ?? collectionId,
+        );
         if (!uploaded) break;
         uploadQueueRef.current.shift();
         persistUploadQueue();
@@ -718,7 +858,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   const resumeUpload = (file: File) => {
     const id = `camera-pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     latestQueueIdRef.current = id;
-    uploadQueueRef.current.push({ id, file, folderId });
+    uploadQueueRef.current.push({ id, file, folderId, saveTarget, collectionId });
     updateUploadStatus(id, 'queued');
     persistUploadQueue();
     updatePendingCount();
@@ -757,10 +897,10 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
   };
 
   const retryUpload = (photo: CapturedPhoto) => {
-    if (photo.uploadedFile || uploadingQueueId === photo.queueId) return;
+    if ((photo.uploadedFile || photo.savedToGooglePhotos) || uploadingQueueId === photo.queueId) return;
     cancelledUploadIdsRef.current.delete(photo.queueId);
     if (!uploadQueueRef.current.some(job => job.id === photo.queueId)) {
-      uploadQueueRef.current.push({ id: photo.queueId, file: photo.file, folderId });
+      uploadQueueRef.current.push({ id: photo.queueId, file: photo.file, folderId, saveTarget, collectionId });
     }
     persistUploadQueue();
     updateUploadStatus(photo.queueId, 'queued');
@@ -917,6 +1057,9 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
     if (!capturedPhoto) return;
     pauseUpload();
     try {
+      if (capturedPhoto.googlePhotoId) {
+        await deleteGooglePhotoItem(capturedPhoto.googlePhotoId);
+      }
       if (uploadedFile) {
         let token = accessToken;
         try {
@@ -968,6 +1111,23 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
       const localFile = blobToFile(blob);
       let nextUploadedFile: DriveMediaFile | null = null;
       let nextQueueId = capturedPhoto.queueId;
+      let nextGooglePhotoId = capturedPhoto.googlePhotoId;
+      let nextSavedToGooglePhotos = capturedPhoto.savedToGooglePhotos;
+      if (capturedPhoto.savedToGooglePhotos) {
+        if (capturedPhoto.googlePhotoId) {
+          await deleteGooglePhotoItem(capturedPhoto.googlePhotoId);
+        }
+        const gphotoRes = await uploadFilesToGooglePhotosCollection([localFile], {
+          collectionId: collectionId || undefined,
+          accessToken: googlePhotosToken || readGooglePhotosAccessToken() || undefined,
+          source: 'camera',
+        });
+        nextGooglePhotoId = gphotoRes.memories[0]?.googlePhotoId;
+        nextSavedToGooglePhotos = true;
+        if (gphotoRes.memories.length) {
+          onGooglePhotosUploaded?.(gphotoRes.memories, gphotoRes.collection?.name || 'Memoriya Camera');
+        }
+      }
       if (uploadedFile) {
         let token = accessToken;
         try {
@@ -982,11 +1142,11 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         }
         onUploaded(nextUploadedFile, token, localFile);
         void writeCachedStoryMedia(uploadedFile.id, localFile, nextUploadedFile.mimeType || localFile.type);
-      } else {
+      } else if (!nextSavedToGooglePhotos) {
         await removeQueuedUpload(capturedPhoto.queueId);
         nextQueueId = resumeUpload(localFile);
       }
-      const photo = {
+      const photo: CapturedPhoto = {
         // Keep the edited/enhanced pixels as the new source so the preview,
         // local restore, and any later upload all use the same image.
         sourceBlob: blob,
@@ -994,6 +1154,8 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         url: localPreviewUrl,
         queueId: nextQueueId,
         uploadedFile: nextUploadedFile,
+        googlePhotoId: nextGooglePhotoId,
+        savedToGooglePhotos: nextSavedToGooglePhotos,
       };
       setCapturedPhoto(photo);
       setCapturedGallery(current => current.map(item => item.queueId === capturedPhoto.queueId ? photo : item));
@@ -1128,7 +1290,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
         <header>
           <div className="memoriya-camera-header-copy">
             <button type="button" className="memoriya-camera-back" onClick={closeCamera} aria-label="Back from camera"><ArrowLeft size={18} /> <span>Back</span></button>
-            <div><span className="memoriya-kicker"><Camera size={15} /> Mobile camera</span><h2>Capture a new memory</h2></div>
+            <div><span className="memoriya-kicker"><Camera size={15} /> Camera</span><h2>Capture a new memory</h2></div>
           </div>
           <div className="memoriya-camera-header-actions">
             <button type="button" onClick={() => void toggleCameraFullscreen()} aria-label={cameraFullscreen ? 'Exit camera fullscreen' : 'Open camera fullscreen'} title={cameraFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>{cameraFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</button>
@@ -1210,7 +1372,7 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
             </label>
           </div>
           <label className="memoriya-camera-gallery-picker">
-            <Images size={16} /> Add from mobile gallery
+            <Images size={16} /> Add photo
             <input
               type="file"
               accept="image/*"
@@ -1230,19 +1392,73 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
               </select>
             </label>
           </div>
-          <label className="memoriya-camera-destination">Save to Drive folder
-            <select value={folderId} onChange={event => setFolderId(event.target.value)}>
-              <option value="drive-root">My Drive root</option>
-              {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-            </select>
-          </label>
+          <div className="memoriya-camera-destination-stack">
+            <div className="memoriya-camera-store-switch" role="group" aria-label="Where to store captured photos">
+              <button
+                type="button"
+                onClick={() => setSaveTarget('drive')}
+                className={saveTarget === 'drive' ? 'is-active' : ''}
+                aria-pressed={saveTarget === 'drive'}
+              >
+                Store: Drive
+              </button>
+              <button
+                type="button"
+                onClick={() => setSaveTarget('google-photos')}
+                className={saveTarget === 'google-photos' ? 'is-active' : ''}
+                aria-pressed={saveTarget === 'google-photos'}
+              >
+                Store: Google Photos
+              </button>
+              <button
+                type="button"
+                onClick={() => setSaveTarget('both')}
+                className={saveTarget === 'both' ? 'is-active' : ''}
+                aria-pressed={saveTarget === 'both'}
+              >
+                Store: Both
+              </button>
+            </div>
+            {(saveTarget === 'drive' || saveTarget === 'both') && (
+              <label className="memoriya-camera-destination">Save to Drive folder
+                <select value={folderId} onChange={event => setFolderId(event.target.value)}>
+                  <option value="drive-root">My Drive root</option>
+                  {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                </select>
+              </label>
+            )}
+            {(saveTarget === 'google-photos' || saveTarget === 'both') && (
+              <label className="memoriya-camera-destination">Save to Google Photos collection
+                <select
+                  value={collectionId}
+                  onChange={event => setCollectionId(event.target.value)}
+                >
+                  <option value="">Google Photos</option>
+                  {gphotosCollections.map(col => (
+                    <option key={col.id} value={col.id}>
+                      {col.name} ({col.count})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
           <p className={`memoriya-camera-message ${error ? 'is-error' : ''}`}>{error || status}</p>
           {pendingUploads > 0 && <p className="memoriya-camera-saved"><Loader2 size={15} className="memoriya-spin-icon" /> Uploading securely in the background</p>}
-          {uploadedFile && !reviewOpen && <p className="memoriya-camera-saved"><Check size={15} /> Latest photo is saved to Drive and your live story.</p>}
+          {(uploadedFile || capturedPhoto?.savedToGooglePhotos) && !reviewOpen && (
+            <p className="memoriya-camera-saved">
+              <Check size={15} />{' '}
+              {uploadedFile && capturedPhoto?.savedToGooglePhotos
+                ? 'Latest photo is saved to Drive & Google Photos collection.'
+                : capturedPhoto?.savedToGooglePhotos
+                  ? 'Latest photo is saved to your Google Photos collection.'
+                  : 'Latest photo is saved to Drive and your live story.'}
+            </p>
+          )}
           {capturedGallery.length > 0 && (
             <div className="memoriya-camera-upload-list" aria-label="Camera upload status" aria-live="polite">
               {recentGallery.map((photo, index) => {
-                const status = photo.uploadedFile
+                const status = (photo.uploadedFile || photo.savedToGooglePhotos)
                   ? 'uploaded'
                   : uploadStatuses[photo.queueId] || (uploadQueueRef.current.some(job => job.id === photo.queueId) ? 'queued' : 'paused');
                 const statusLabel = status === 'uploaded' ? 'Uploaded' : status === 'uploading' ? 'Uploading' : status === 'paused' ? 'Paused' : status === 'cancelled' ? 'Canceled' : status === 'failed' ? 'Failed' : 'Waiting';
@@ -1317,8 +1533,18 @@ const DriveCameraCapture: React.FC<Props> = ({ accessToken, initialFolderId, onU
               )}
             </div>
             <div className="memoriya-camera-review-footer">
-              <p>{uploadedFile ? 'Saved to Drive. Your story is up to date.' : 'Upload is paused while you review this photo.'}</p>
-              <button type="button" className="memoriya-camera-review-done" onClick={closeReview}>{uploadedFile ? 'Done' : 'Resume upload'}</button>
+              <p>
+                {uploadedFile && capturedPhoto.savedToGooglePhotos
+                  ? 'Saved to Drive & Google Photos collection. Your story is up to date.'
+                  : capturedPhoto.savedToGooglePhotos
+                    ? 'Saved to your Google Photos collection. Your story is up to date.'
+                    : uploadedFile
+                      ? 'Saved to Drive. Your story is up to date.'
+                      : 'Saving in the background while you review this photo.'}
+              </p>
+              <button type="button" className="memoriya-camera-review-done" onClick={closeReview}>
+                {(uploadedFile || capturedPhoto.savedToGooglePhotos) ? 'Done' : 'Resume upload'}
+              </button>
             </div>
           </div>
         )}

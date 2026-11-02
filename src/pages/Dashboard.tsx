@@ -10,8 +10,8 @@ import { useTheme } from '../context/ThemeContext';
 import { useUser } from '../context/UserContext';
 import { groupMemoriesByYear } from '../data/memories';
 import type { Memory } from '../data/memories';
-import { DRIVE_MEMORIES_UPDATED_EVENT, readArchiveMemories } from '../services/driveLibrary';
-import { GOOGLE_PHOTOS_UPDATED_EVENT } from '../services/googlePhotosService';
+import { DRIVE_MEMORIES_UPDATED_EVENT, readArchiveMemories, readDriveAccessToken } from '../services/driveLibrary';
+import { GOOGLE_PHOTOS_UPDATED_EVENT, isGooglePhotosConnected } from '../services/googlePhotosService';
 import { buildRecapSections } from '../services/memoryOrganizer';
 
 interface Props {
@@ -227,7 +227,9 @@ const Dashboard: React.FC<Props> = ({ onNavigate }) => {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {recaps.length === 0 && (
             <div className="neon-card p-6 text-center text-sm text-white/56 md:col-span-2 xl:col-span-4">
-              Connect Google Drive in Memoriya to generate Drive recaps.
+              {Boolean(readDriveAccessToken() || isGooglePhotosConnected())
+                ? 'No photos found in your selected collection or folder yet.'
+                : 'Connect Google Photos or Google Drive above to load your memories and recaps.'}
             </div>
           )}
           {recaps.map(recap => (
