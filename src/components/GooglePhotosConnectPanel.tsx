@@ -241,7 +241,7 @@ const GooglePhotosConnectPanel: React.FC = () => {
   const activeCol = collections.find(c => c.id === activeCollectionId);
 
   return (
-    <div className="neon-card flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
+    <div className="neon-card flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
       <div className="flex items-start gap-4">
         <span
           className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border"
@@ -254,15 +254,23 @@ const GooglePhotosConnectPanel: React.FC = () => {
           <GooglePhotosIcon size={22} />
         </span>
 
-        <div>
-          <h2 className="font-black text-white">
-            {connected ? 'Google Photos linked' : 'Connect Google Photos'}
-          </h2>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="font-black text-white">
+              {connected ? 'Google Photos Linked' : 'Connect Google Photos'}
+            </h2>
+            {connected && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-emerald-300">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                Connected
+              </span>
+            )}
+          </div>
           <p className="mt-1 text-sm leading-6 text-white/58">
             {connected
               ? totalCount > 0
                 ? `${accountEmail ? `${accountEmail} · ` : ''}${activeCol ? `Showing "${activeCol.name}" (${activeCol.count})` : `${totalCount} ${totalCount === 1 ? 'memory' : 'memories'} across ${collections.length} ${collections.length === 1 ? 'collection' : 'collections'}`}.`
-                : `${accountEmail ? `${accountEmail} · ` : ''}Connected — no photos found in this collection yet. Upload photos or capture from Camera.`
+                : `${accountEmail ? `${accountEmail} · ` : ''}Connected — no photos found in this collection yet. Pick from Google Photos, upload, or capture from Camera.`
               : 'Connect Google Photos with one click, choose a collection, or upload photos directly.'}
           </p>
 
@@ -286,7 +294,7 @@ const GooglePhotosConnectPanel: React.FC = () => {
                 <select
                   value={activeCollectionId}
                   onChange={e => void handleCollectionChange(e.target.value)}
-                  className="bg-transparent font-semibold text-white outline-none"
+                  className="max-w-[190px] bg-transparent font-semibold text-white outline-none sm:max-w-[230px]"
                   aria-label="Choose Google Photos collection"
                 >
                   <option value="" className="bg-slate-950 text-white">
@@ -314,19 +322,20 @@ const GooglePhotosConnectPanel: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex flex-col gap-2 sm:flex-row">
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
         <motion.button
           type="button"
           onClick={() => void handleConnect()}
           disabled={loading}
           whileHover={{ scale: loading ? 1 : 1.02 }}
           whileTap={{ scale: loading ? 1 : 0.98 }}
-          className="neon-button px-5 py-3 text-sm font-black"
+          className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-black"
           style={{
             color: connected ? '#36f1cd' : '#ffd166',
             borderColor: connected ? '#36f1cd55' : '#fbbc0455',
           }}
         >
+          <GooglePhotosIcon size={15} />
           {loading ? 'Connecting...' : connected ? 'Sync Google Photos' : 'Connect Google Photos'}
         </motion.button>
 
@@ -351,24 +360,27 @@ const GooglePhotosConnectPanel: React.FC = () => {
               onClick={() => uploadInputRef.current?.click()}
             >
               <Upload size={15} />
-              {uploading ? 'Uploading...' : 'Add Photos'}
+              {uploading ? 'Uploading...' : 'Add to Google Photos'}
             </button>
 
             <button
               type="button"
-              className="neon-button flex items-center justify-center gap-2 px-4 py-3 text-sm font-black text-white/70 hover:text-white"
-              style={{ borderColor: 'rgba(255,255,255,0.16)' }}
+              className="memoriya-disconnect-btn flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-black transition-all disabled:opacity-55"
               disabled={loading}
               onClick={() => {
                 void disconnectGooglePhotos(true).then(() => {
                   setConnected(false);
-                  setMessage('Google Photos disconnected.');
+                  setCollections([]);
+                  setActiveCollectionId('');
+                  setAccountEmail('');
+                  setMessage('Google Photos disconnected and photos cleared.');
                   setError('');
                 });
               }}
               title="Disconnect Google Photos"
             >
               <LogOut size={15} />
+              Disconnect Google Photos
             </button>
           </>
         )}

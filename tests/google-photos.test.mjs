@@ -603,4 +603,64 @@ test('Both Google Drive and Google Photos OAuth linking work cleanly without GIS
   }
 });
 
+test('Disconnecting Google Photos or Google Drive removes its photos immediately and disconnecting both leaves archive empty', async () => {
+  setupBrowserMocks();
+  const photosSvc = await loadGooglePhotosService();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('Forbidden', { status: 403 });
+
+  try {
+    const mockFile = new File([new Uint8Array([1, 2, 3, 4])], 'beach-day.jpg', {
+      type: 'image/jpeg',
+      lastModified: Date.UTC(2026, 5, 10),
+    });
+    await photosSvc.uploadFilesToGooglePhotosCollection([mockFile], {
+      collectionName: 'Summer',
+      accessToken: 'valid-token',
+    });
+
+    assert.equal(photosSvc.isGooglePhotosConnected(), true);
+    assert.equal(photosSvc.readSelectedGooglePhotosMemories().length, 1);
+
+    // Calling disconnectGooglePhotos() with default args must clear all Google Photos memories
+    await photosSvc.disconnectGooglePhotos();
+    assert.equal(photosSvc.isGooglePhotosConnected(), false);
+    assert.equal(photosSvc.readSelectedGooglePhotosMemories().length, 0);
+    assert.equal(photosSvc.readGooglePhotosCollectionsSummary().length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Separate red Disconnect Google Drive & Disconnect Google Photos buttons and Story Mode loaded/pics/video counts are wired cleanly', async () => {
+  const [drivePanel, photosPanel, memoriya, storyMode, memoryReel, css] = await Promise.all([
+    readProjectFile('src/components/DriveConnectPanel.tsx'),
+    readProjectFile('src/components/GooglePhotosConnectPanel.tsx'),
+    readProjectFile('src/pages/Memoriya.tsx'),
+    readProjectFile('src/pages/StoryMode.tsx'),
+    readProjectFile('src/components/MemoryReel.tsx'),
+    readProjectFile('src/index.css'),
+  ]);
+
+  // Separate explicit red disconnect buttons across all views
+  assert.match(drivePanel, /memoriya-disconnect-btn[\s\S]*Disconnect Google Drive/);
+  assert.match(photosPanel, /memoriya-disconnect-btn[\s\S]*Disconnect Google Photos/);
+  assert.match(memoriya, /Disconnect Google Drive/);
+  assert.match(memoriya, /Disconnect Google Photos/);
+  assert.doesNotMatch(memoriya, /disconnectAll/);
+  assert.match(css, /\.memoriya-disconnect-btn\s*\{[\s\S]*rgba\(244,\s*63,\s*94/);
+
+  // StoryMode clears Drive memories when Drive session disconnects
+  assert.match(storyMode, /setDriveMemories\(\[\]\)/);
+
+  // Story Mode stats HUD shows loaded/total, Pics count, and Videos count for all media sources and mobile
+  assert.match(memoryReel, /className=\{`memory-reel-stats-hud/);
+  assert.match(memoryReel, /\{storyLoadedCount\}\/\{storyAvailableCount\}/);
+  assert.match(memoryReel, /storyPhotoCount === 1 \? 'Pic' : 'Pics'/);
+  assert.match(memoryReel, /storyVideoCount === 1 \? 'Video' : 'Videos'/);
+  assert.match(css, /\.memory-reel-stats-hud\s*\{/);
+  assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.memory-reel-stats-hud\s*\{/);
+});
+
+
 

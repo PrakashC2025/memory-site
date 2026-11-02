@@ -1,5 +1,7 @@
 import { visualMemoriesOnly, type Memory } from '../data/memories';
+import { clearAllCachedDriveMedia } from './driveCache';
 import { readSelectedGooglePhotosMemories } from './googlePhotosService';
+import { clearAllCachedStoryMedia } from './storyMediaCache';
 
 export const DRIVE_SESSION_KEY = 'memoriya-drive-session-v1';
 export const DRIVE_TOKEN_STORAGE_KEY = 'memoriya-drive-token-v1';
@@ -319,6 +321,8 @@ export const saveDriveAccessToken = (accessToken: string, expiresInSec = 3500) =
 
 export const clearDriveSession = () => {
   persistDriveTokenWithExpiry('');
+  void clearAllCachedDriveMedia();
+  void clearAllCachedStoryMedia();
   try {
     window.sessionStorage.removeItem(DRIVE_SESSION_KEY);
     window.localStorage.removeItem(DRIVE_OFFLINE_LIBRARY_KEY);

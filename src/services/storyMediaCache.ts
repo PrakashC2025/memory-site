@@ -140,3 +140,11 @@ export const deleteCachedStoryMedia = async (key: string) => {
     // Cache cleanup is best effort; Drive metadata remains authoritative.
   }
 };
+
+export const clearAllCachedStoryMedia = async () => {
+  try {
+    await withStore<undefined>('readwrite', store => store.clear());
+  } catch {
+    // Cache cleanup is best effort.
+  }
+};

@@ -239,7 +239,7 @@ const DriveConnectPanel: React.FC = () => {
   const activeFolderObj = availableFolders.find(f => f.id === selectedFolderId);
 
   return (
-    <div className="neon-card flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
+    <div className="neon-card flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
       <div className="flex items-start gap-4">
         <span
           className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border"
@@ -247,8 +247,16 @@ const DriveConnectPanel: React.FC = () => {
         >
           <Cloud size={22} />
         </span>
-        <div>
-          <h2 className="font-black text-white">{state.connected ? 'Google Drive linked' : 'Connect Google Drive'}</h2>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="font-black text-white">{state.connected ? 'Google Drive Linked' : 'Connect Google Drive'}</h2>
+            {state.connected && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-emerald-300">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                Connected
+              </span>
+            )}
+          </div>
           <p className="mt-1 text-sm leading-6 text-white/58">
             {state.connected
               ? mediaCount > 0
@@ -268,11 +276,11 @@ const DriveConnectPanel: React.FC = () => {
                 style={{ borderColor: `${config.primary}35`, background: 'rgba(255,255,255,0.04)' }}
               >
                 <FolderOpen size={13} style={{ color: '#8ab4ff' }} />
-                <span>Folder:</span>
+                <span>Drive Folder:</span>
                 <select
                   value={selectedFolderId}
                   onChange={e => void handleFolderChange(e.target.value)}
-                  className="max-w-[210px] bg-transparent font-semibold text-white outline-none"
+                  className="max-w-[190px] bg-transparent font-semibold text-white outline-none sm:max-w-[230px]"
                   aria-label="Choose Google Drive folder"
                 >
                   <option value="" className="bg-slate-950 text-white">
@@ -296,17 +304,18 @@ const DriveConnectPanel: React.FC = () => {
           )}
         </div>
       </div>
-      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
         <motion.button
           type="button"
           onClick={() => void handleConnect()}
           disabled={state.loading}
           whileHover={{ scale: state.loading ? 1 : 1.02 }}
           whileTap={{ scale: state.loading ? 1 : 0.98 }}
-          className="neon-button px-5 py-3 text-sm font-black"
+          className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-black"
           style={{ color: state.connected ? '#36f1cd' : '#8ab4ff', borderColor: state.connected ? '#36f1cd55' : '#4285f455' }}
         >
-          {state.loading ? 'Connecting...' : state.connected ? 'Sync Drive' : 'Connect Drive'}
+          <Cloud size={15} />
+          {state.loading ? 'Connecting...' : state.connected ? 'Sync Google Drive' : 'Connect Google Drive'}
         </motion.button>
         {state.connected && (
           <>
@@ -318,22 +327,26 @@ const DriveConnectPanel: React.FC = () => {
               onClick={() => uploadInputRef.current?.click()}
             >
               <Upload size={15} />
-              {uploading ? 'Uploading...' : 'Upload'}
+              {uploading ? 'Uploading...' : 'Upload to Drive'}
             </button>
             <button
               type="button"
-              className="neon-button flex items-center justify-center gap-2 px-4 py-3 text-sm font-black text-white/70 hover:text-white"
-              style={{ borderColor: 'rgba(255,255,255,0.16)' }}
+              className="memoriya-disconnect-btn flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-black transition-all disabled:opacity-55"
               disabled={state.loading}
               onClick={() => {
                 clearDriveSession();
-                setState(emptyState);
+                setState({
+                  ...emptyState,
+                  message: 'Google Drive disconnected and Drive photos cleared.',
+                });
+                setSelectedFolderId('');
+                setAvailableFolders([]);
                 setMediaCount(0);
               }}
               title="Disconnect Google Drive"
             >
               <LogOut size={15} />
-              Disconnect
+              Disconnect Google Drive
             </button>
           </>
         )}
