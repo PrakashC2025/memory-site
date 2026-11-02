@@ -5647,9 +5647,11 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
             </div>
           </div>
           <button type="button" className={clarityOpen ? 'is-active' : ''} aria-expanded={clarityOpen} onClick={openClarity}><WandSparkles size={16} /> Clarity</button>
-          {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
+          {(storyPhotoCount > 0 || storyVideoCount > 0 || storyAvailableCount > 0) && (
             <div className="memory-reel-folder-summary">
-              <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+              {driveFolders && driveFolders.length > 0 && onDriveFolderChange && (
+                <label className="memory-reel-folder-picker"><span>Drive folder</span><select value={driveFolderId || ''} onChange={event => onDriveFolderChange(event.target.value)} aria-label="Choose Story Mode Drive folder"><option value="">All My Drive photos</option>{driveFolders.filter(folder => folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+              )}
               <span className="memory-reel-folder-count" aria-live="polite">{storyLoadedCount}/{storyAvailableCount} loaded · {storyPhotoCount} photos · {storyVideoCount} videos</span>
             </div>
           )}

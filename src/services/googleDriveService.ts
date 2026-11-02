@@ -93,6 +93,9 @@ const DRIVE_MEDIA_TIMEOUT_MS = 90000;
 const DRIVE_MEDIA_ATTEMPTS = 4;
 const invalidDriveTokens = new Set<string>();
 
+let lastDrivePopupBlockedAt = 0;
+const DRIVE_POPUP_BLOCK_COOLDOWN_MS = 10_000;
+
 const markDriveTokenInvalid = (accessToken: string) => {
   if (!accessToken) return;
   invalidDriveTokens.add(accessToken);
@@ -147,12 +150,21 @@ const loadScript = (src: string) =>
     script.async = true;
     script.defer = true;
     script.dataset.loaded = 'false';
-    script.onload = () => {
-      script.dataset.loaded = 'true';
-      resolve();
+    let settled = false;
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(scriptTimeout);
+      if (err) reject(err);
+      else resolve();
     };
-    script.onerror = () => reject(new Error('Google OAuth script failed to load.'));
+    script.onload = () => { script.dataset.loaded = 'true'; finish(); };
+    script.onerror = () => finish(new Error('Google OAuth script failed to load.'));
     document.head.appendChild(script);
+
+    const scriptTimeout = window.setTimeout(() => {
+      finish(new Error('Google OAuth script took too long to load.'));
+    }, 10000);
   });
 
 const fetchDriveJson = async <T,>(url: string, accessToken: string): Promise<T> => {
@@ -210,16 +222,29 @@ export class GoogleDriveService {
       }
 
       let settled = false;
+      let popupTimeoutId: number | null = null;
       const finish = (handler: () => void) => {
         if (settled) return;
         settled = true;
         window.clearTimeout(timeoutId);
+        if (popupTimeoutId) window.clearTimeout(popupTimeoutId);
         handler();
       };
 
       const timeoutId = window.setTimeout(() => {
         finish(() => reject(new Error('Google Drive authorization was cancelled.')));
       }, 45000);
+
+      // Prevent rapid-fire popup attempts that trigger the browser's popup blocker.
+      const now = Date.now();
+      if (now - lastDrivePopupBlockedAt < DRIVE_POPUP_BLOCK_COOLDOWN_MS) {
+        finish(() => reject(
+          new Error(
+            'Popup was blocked by the browser. Allow popups for this site, then click Connect Drive again.',
+          ),
+        ));
+        return;
+      }
 
       const tokenClient = oauth.initTokenClient({
         client_id: clientId,
@@ -245,6 +270,8 @@ export class GoogleDriveService {
         },
         error_callback: error => {
           const wasClosed = error.type === 'popup_closed' || error.type === 'popup_closed_by_user';
+          const blocked = /popup/i.test(error.type || '') || /blocked/i.test((error.message || '').toLowerCase());
+          if (blocked) lastDrivePopupBlockedAt = Date.now();
           finish(() => reject(new Error(wasClosed
             ? 'Google Drive authorization was cancelled.'
             : error.message || 'Google Drive authorization failed.')));
@@ -255,6 +282,16 @@ export class GoogleDriveService {
         // Empty prompt skips the consent screen when the user has already granted
         // access, so reconnecting is instant. First-time connects still show consent.
         tokenClient.requestAccessToken({ prompt, hint: this.loginHint || undefined });
+
+        // If the browser blocks the popup, GSI may never call callback/error_callback.
+        // Reject quickly so the "loading" spinner doesn't spin forever.
+        popupTimeoutId = window.setTimeout(() => {
+          finish(() => reject(
+            new Error(
+              'Popup was blocked by the browser. Allow popups for this site, then click Connect Drive again.',
+            ),
+          ));
+        }, 8000);
       } catch (err) {
         finish(() => reject(err instanceof Error ? err : new Error('Google Drive authorization failed.')));
       }

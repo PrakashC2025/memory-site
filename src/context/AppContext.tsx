@@ -4,8 +4,11 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import type { User, MemorySpace, MediaFile, ThemeId, ViewMode } from '../types';
+import type { Memory } from '../data/memories';
 import { DEMO_MEMORY_SPACE, DEMO_USER } from '../data/demoMemories';
 import { THEMES } from '../data/themes';
+import { googleDriveService, type DriveConnectionState } from '../services/googleDriveService';
+import { clearDriveSession, readDriveMemories, saveDriveAccessToken, saveDriveMemories } from '../services/driveLibrary';
 
 interface LightboxState {
   isOpen: boolean;
@@ -37,7 +40,8 @@ interface AppState {
   // Actions
   login: (email: string) => void;
   logout: () => void;
-  connectDrive: () => void;
+  connectDrive: () => Promise<void>;
+  disconnectDrive: () => void;
   setTheme: (theme: ThemeId) => void;
   setViewMode: (mode: ViewMode) => void;
   openLightbox: (mediaId: string, mediaList?: string[]) => void;
@@ -119,14 +123,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setLightbox({ isOpen: false, mediaId: null, mediaList: [] });
   }, []);
 
-  const connectDrive = useCallback(() => {
+  const connectDrive = useCallback(async (): Promise<void> => {
     setIsLoading(true);
-    // REAL INTEGRATION: Open Google OAuth popup here
-    // window.open(`https://accounts.google.com/o/oauth2/auth?...`, '_blank')
-    setTimeout(() => {
-      setIsDriveConnected(true);
+    try {
+      const state: DriveConnectionState = await googleDriveService.connect();
+      if (state.accessToken) {
+        saveDriveAccessToken(state.accessToken);
+        saveDriveMemories(readDriveMemories().map((memory: Memory) => memory.driveFileId
+          ? { ...memory, authToken: state.accessToken }
+          : memory), state.accessToken);
+        setIsDriveConnected(true);
+      }
+    } catch (error) {
+      // Swallow user-cancelled / popup-blocked errors so the UI doesn't show a
+      // scary alert; the Drive panel already reports its own error message.
+      const message = error instanceof Error ? error.message : 'Drive connection failed.';
+      if (!/cancel|closed|blocked|popup/i.test(message)) {
+        setIsDriveConnected(false);
+      }
+    } finally {
       setIsLoading(false);
-    }, 2000);
+    }
+  }, []);
+
+  const disconnectDrive = useCallback(() => {
+    clearDriveSession();
+    setIsDriveConnected(false);
   }, []);
 
   const setTheme = useCallback((theme: ThemeId) => {
@@ -201,7 +223,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     activeTheme, viewMode: viewMode,
     lightbox, selectedYear, selectedEventId,
     searchQuery, isMusicEnabled, animationIntensity, isDriveConnected,
-    login, logout, connectDrive,
+    login, logout, connectDrive, disconnectDrive,
     setTheme, setViewMode: handleSetViewMode,
     openLightbox, closeLightbox, nextLightboxMedia, prevLightboxMedia,
     setSelectedYear, setSelectedEvent: setSelectedEventId,
