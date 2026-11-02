@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Check, FolderOpen, Upload } from 'lucide-react';
+import { Check, FolderOpen, LogOut, Upload } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { GooglePhotosIcon } from './GooglePhotosModal';
 import {
   connectAndSyncGooglePhotos,
+  disconnectGooglePhotos,
   ensureGooglePhotosBootHydration,
   formatFriendlyGooglePhotosError,
   GOOGLE_PHOTOS_UPDATED_EVENT,
@@ -230,19 +231,40 @@ const GooglePhotosConnectPanel: React.FC = () => {
             borderColor: connected ? '#36f1cd55' : '#fbbc0455',
           }}
         >
-          {loading ? 'Connecting...' : connected ? 'Connected' : 'Connect Google Photos'}
+          {loading ? 'Connecting...' : connected ? 'Sync Google Photos' : 'Connect Google Photos'}
         </motion.button>
 
-        <button
-          type="button"
-          className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-black disabled:cursor-wait disabled:opacity-55"
-          style={{ color: config.primary, borderColor: `${config.primary}44` }}
-          disabled={loading || uploading}
-          onClick={() => uploadInputRef.current?.click()}
-        >
-          <Upload size={15} />
-          {uploading ? 'Uploading...' : 'Add Photos'}
-        </button>
+        {connected && (
+          <>
+            <button
+              type="button"
+              className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-black disabled:cursor-wait disabled:opacity-55"
+              style={{ color: config.primary, borderColor: `${config.primary}44` }}
+              disabled={loading || uploading}
+              onClick={() => uploadInputRef.current?.click()}
+            >
+              <Upload size={15} />
+              {uploading ? 'Uploading...' : 'Add Photos'}
+            </button>
+
+            <button
+              type="button"
+              className="neon-button flex items-center justify-center gap-2 px-4 py-3 text-sm font-black text-white/70 hover:text-white"
+              style={{ borderColor: 'rgba(255,255,255,0.16)' }}
+              disabled={loading}
+              onClick={() => {
+                void disconnectGooglePhotos(true).then(() => {
+                  setConnected(false);
+                  setMessage('Google Photos disconnected.');
+                  setError('');
+                });
+              }}
+              title="Disconnect Google Photos"
+            >
+              <LogOut size={15} />
+            </button>
+          </>
+        )}
 
         <input
           ref={uploadInputRef}
