@@ -14,6 +14,7 @@ const GOOGLE_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 // - photospicker.mediaitems.readonly: pick existing photos added directly in photos.google.com
 const GOOGLE_PHOTOS_LIBRARY_SCOPE = [
   'https://www.googleapis.com/auth/photoslibrary.appendonly',
+  'https://www.googleapis.com/auth/photoslibrary.readonly',
   'https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata',
   'https://www.googleapis.com/auth/photospicker.mediaitems.readonly',
   'https://www.googleapis.com/auth/userinfo.email',
@@ -38,6 +39,9 @@ const IDB_OPEN_TIMEOUT_MS = 10_000;
 const IDB_REQ_TIMEOUT_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 25_000;
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 90_000;
+
+let lastPopupBlockedAt = 0;
+const POPUP_BLOCK_COOLDOWN_MS = 10_000;
 
 export interface GooglePhotosAccount {
   email: string;
@@ -399,6 +403,13 @@ export const readGooglePhotosAccessToken = (): string => {
 
 export const saveGooglePhotosAccessToken = (accessToken: string, expiresInSec = 3500): void => {
   if (!hasWindow()) return;
+  // A freshly granted token must never stay marked as forbidden from a prior failed scope.
+  photosLibraryForbiddenTokens.delete(accessToken);
+  try {
+    window.sessionStorage.removeItem(PHOTOS_LIBRARY_FORBIDDEN_KEY);
+  } catch {
+    // Session storage is optional.
+  }
   try {
     if (!accessToken) {
       window.sessionStorage.removeItem(GOOGLE_PHOTOS_SESSION_KEY);
@@ -981,6 +992,18 @@ const requestOAuthTokenWithScope = (
       return;
     }
 
+    // Prevent rapid-fire popup attempts that trigger the browser's popup blocker.
+    // After a block, require the user to allow popups before retrying.
+    const now = Date.now();
+    if (now - lastPopupBlockedAt < POPUP_BLOCK_COOLDOWN_MS) {
+      reject(
+        new Error(
+          'Popup was blocked by the browser. Allow popups for this site, then click Connect Google Photos again.',
+        ),
+      );
+      return;
+    }
+
     let settled = false;
     const finish = (cb: () => void) => {
       if (settled) return;
@@ -1010,6 +1033,8 @@ const requestOAuthTokenWithScope = (
       },
       error_callback: err => {
         const closed = err.type === 'popup_closed' || err.type === 'popup_closed_by_user';
+        const blocked = /popup/i.test(err.type || '') || /blocked/i.test((err.message || '').toLowerCase());
+        if (blocked) lastPopupBlockedAt = Date.now();
         finish(() =>
           reject(
             new Error(
