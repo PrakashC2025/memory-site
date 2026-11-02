@@ -662,5 +662,310 @@ test('Separate red Disconnect Google Drive & Disconnect Google Photos buttons an
   assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.memory-reel-stats-hud\s*\{/);
 });
 
+test('Cancelling Google OAuth or Google Photos Picker stops loading immediately without 45s-300s hang', async () => {
+  setupBrowserMocks();
+  const svc = await loadGooglePhotosService();
+  const originalFetch = globalThis.fetch;
+
+  try {
+    // 1. OAuth popup closed by user (blur -> focus without token callback) resolves/rejects in ~900ms, not 50s
+    globalThis.window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient: () => ({
+            requestAccessToken: () => {
+              // Simulate popup taking focus and user closing it 20ms later
+              setTimeout(() => {
+                globalThis.window.dispatchEvent({ type: 'blur' });
+                setTimeout(() => globalThis.window.dispatchEvent({ type: 'focus' }), 20);
+              }, 10);
+            },
+          }),
+        },
+      },
+    };
+
+    const startOAuth = Date.now();
+    await assert.rejects(
+      () => svc.connectGooglePhotosGmail({ clientId: 'test-client.apps.googleusercontent.com' }),
+      /cancelled/i,
+    );
+    assert.ok(Date.now() - startOAuth < 2500, 'OAuth popup close must stop loading within ~1s');
+
+    // 2. Clicking Cancel button (AbortController.abort) aborts Google Photos Picker immediately in <100ms
+    globalThis.fetch = async url => {
+      const target = String(url);
+      if (target.endsWith('/v1/sessions')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'picker-session-cancel',
+            pickerUri: 'https://photos.google.com/photospicker/session-cancel',
+            mediaItemsSet: false,
+            pollingConfig: { pollInterval: '5s' },
+          }),
+        };
+      }
+      if (target.includes('/v1/sessions/picker-session-cancel')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'picker-session-cancel',
+            mediaItemsSet: false,
+            pollingConfig: { pollInterval: '5s' },
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+
+    const abortController = new AbortController();
+    let popupClosed = false;
+    const mockPopup = {
+      closed: false,
+      location: { href: 'about:blank' },
+      close() {
+        popupClosed = true;
+        this.closed = true;
+      },
+    };
+
+    setTimeout(() => abortController.abort(), 40);
+    const startPickerAbort = Date.now();
+    const abortedResult = await svc.pickFromGooglePhotosCloud({
+      accessToken: 'valid-picker-token',
+      popupWindow: mockPopup,
+      signal: abortController.signal,
+    });
+    assert.ok(Date.now() - startPickerAbort < 500, 'Cancel button abort must stop Picker immediately');
+    assert.equal(abortedResult.importedCount, 0);
+    assert.equal(popupClosed, true, 'Abort must also close any open picker popup');
+
+    // 3. User closing the Picker popup window directly resolves cleanly (0 imported, no hang)
+    const closingPopup = {
+      closed: false,
+      location: { href: 'about:blank' },
+      close() {
+        this.closed = true;
+      },
+    };
+    setTimeout(() => {
+      closingPopup.closed = true;
+      globalThis.window.dispatchEvent({ type: 'focus' });
+    }, 50);
+
+    const startPopupClose = Date.now();
+    const closedResult = await svc.pickFromGooglePhotosCloud({
+      accessToken: 'valid-picker-token',
+      popupWindow: closingPopup,
+    });
+    assert.ok(Date.now() - startPopupClose < 1500, 'Closing picker popup must finish immediately');
+    assert.equal(closedResult.importedCount, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Google Photos Picker preserves signed baseUrl paths, groups Month-Year albums, and exposes Smart Categories', async () => {
+  setupBrowserMocks();
+  const svc = await loadGooglePhotosService();
+  const originalFetch = globalThis.fetch;
+  const requestedDownloadUrls = [];
+
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      const target = String(url);
+      if (target.endsWith('/v1/sessions') && init.method === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'sess-albums',
+            pickerUri: 'https://photos.google.com/photospicker/sess-albums',
+            mediaItemsSet: false,
+          }),
+        };
+      }
+      if (target.includes('/v1/sessions/sess-albums') && (!init.method || init.method === 'GET')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'sess-albums',
+            mediaItemsSet: true,
+          }),
+        };
+      }
+      if (target.includes('/v1/mediaItems?')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            mediaItems: [
+              {
+                id: 'pick-cam-1',
+                createTime: '2026-10-14T10:15:00Z',
+                type: 'PHOTO',
+                mediaFile: {
+                  // Signed path containing `=` in directory token must NOT be truncated!
+                  baseUrl: 'https://lh3.googleusercontent.com/pw/AP1GczToken=SignedPath123/photoA=d',
+                  mimeType: 'image/jpeg',
+                  filename: 'IMG_20261014.jpg',
+                },
+              },
+              {
+                id: 'pick-screen-2',
+                createTime: '2025-03-08T08:00:00Z',
+                type: 'PHOTO',
+                mediaFile: {
+                  baseUrl: 'https://lh3.googleusercontent.com/pw/AP1GczToken=SignedPath456/photoB',
+                  mimeType: 'image/png',
+                  filename: 'Screenshot_20250308.png',
+                },
+              },
+              {
+                id: 'pick-vid-3',
+                createTime: '2025-03-09T18:30:00Z',
+                type: 'VIDEO',
+                mediaFile: {
+                  baseUrl: 'https://lh3.googleusercontent.com/pw/AP1GczToken=SignedVideo789/vidC',
+                  mimeType: 'video/mp4',
+                  filename: 'VID_20250309.mp4',
+                },
+              },
+            ],
+          }),
+        };
+      }
+      if (target.startsWith('https://lh3.googleusercontent.com/')) {
+        requestedDownloadUrls.push(target);
+        const isVideo = target.includes('vidC');
+        return {
+          ok: true,
+          status: 200,
+          blob: async () =>
+            new Blob([new Uint8Array([1, 2, 3, 4])], {
+              type: isVideo ? 'video/mp4' : 'image/jpeg',
+            }),
+        };
+      }
+      if (target.includes('photoslibrary.googleapis.com/v1/albums') && init.method === 'POST') {
+        const body = JSON.parse(init.body || '{}');
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: `remote-${body.album?.title || 'album'}`, title: body.album?.title }),
+        };
+      }
+      if (target.includes('photoslibrary.googleapis.com/v1/uploads')) {
+        return { ok: true, status: 200, text: async () => 'upload-tok' };
+      }
+      if (target.includes('mediaItems:batchCreate')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            newMediaItemResults: [{ mediaItem: { id: `rm-${Math.random()}` } }],
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+
+    // Also create a custom empty album first to ensure custom albums persist
+    const customAlbum = svc.createGooglePhotosCollection('Family Favorites', false);
+    assert.equal(customAlbum.name, 'Family Favorites');
+
+    const mockPopup = {
+      closed: false,
+      location: { href: 'about:blank' },
+      close() {
+        this.closed = true;
+      },
+    };
+
+    const res = await svc.pickFromGooglePhotosCloud({
+      accessToken: 'picker-valid-token',
+      popupWindow: mockPopup,
+    });
+
+    assert.equal(res.importedCount, 3);
+    // Verify signed path token `AP1GczToken=SignedPath123` was preserved intact!
+    assert.ok(
+      requestedDownloadUrls.some(u => u.includes('AP1GczToken=SignedPath123/photoA=w2048-h2048')),
+      `Expected signed path token to remain intact, got: ${requestedDownloadUrls.join(', ')}`,
+    );
+
+    const collections = svc.readGooglePhotosCollectionsSummary();
+    const colNames = collections.map(c => c.name);
+    assert.ok(colNames.includes('October 2026'), `Expected October 2026 album in ${colNames}`);
+    assert.ok(colNames.includes('March 2025'), `Expected March 2025 album in ${colNames}`);
+    assert.ok(colNames.includes('Family Favorites'), `Expected custom album in ${colNames}`);
+
+    // Smart Categories (`All Photos`, `Videos`, `Camera & Phone`, `Screenshots & Saved`)
+    const smartCats = svc.readGooglePhotosSmartCategories();
+    const smartIds = smartCats.map(c => `${c.id}:${c.count}`);
+    assert.ok(smartIds.includes('smart:photos:2'), `Expected smart:photos:2 in ${smartIds}`);
+    assert.ok(smartIds.includes('smart:videos:1'), `Expected smart:videos:1 in ${smartIds}`);
+    assert.ok(smartIds.includes('smart:camera:2'), `Expected smart:camera:2 in ${smartIds}`);
+    assert.ok(smartIds.includes('smart:screenshots:1'), `Expected smart:screenshots:1 in ${smartIds}`);
+
+    // Filtering by smart category works seamlessly
+    svc.setActiveGooglePhotosCollectionId('smart:videos');
+    const onlyVideos = svc.readSelectedGooglePhotosMemories();
+    assert.equal(onlyVideos.length, 1);
+    assert.equal(onlyVideos[0].type, 'video');
+
+    svc.setActiveGooglePhotosCollectionId('smart:screenshots');
+    const onlyScreenshots = svc.readSelectedGooglePhotosMemories();
+    assert.equal(onlyScreenshots.length, 1);
+    assert.match(onlyScreenshots[0].title, /Screenshot/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Security headers, WS limits, SW cross-origin isolation, logout cleanup, and UI Cancel buttons are enforced', async () => {
+  const [vercelConfig, publicConfigApi, swSource, realtimeServer, userContext, drivePanel, photosPanel, memoriya] =
+    await Promise.all([
+      readProjectFile('vercel.json'),
+      readProjectFile('api/public-config.js'),
+      readProjectFile('public/sw.js'),
+      readProjectFile('server/realtime-server.js'),
+      readProjectFile('src/context/UserContext.tsx'),
+      readProjectFile('src/components/DriveConnectPanel.tsx'),
+      readProjectFile('src/components/GooglePhotosConnectPanel.tsx'),
+      readProjectFile('src/pages/Memoriya.tsx'),
+    ]);
+
+  // Security headers in vercel.json & api/public-config.js
+  assert.match(vercelConfig, /Content-Security-Policy/);
+  assert.match(vercelConfig, /Strict-Transport-Security/);
+  assert.match(vercelConfig, /Permissions-Policy/);
+  assert.match(publicConfigApi, /req\.method !== 'GET' && req\.method !== 'HEAD'/);
+  assert.match(publicConfigApi, /X-Content-Type-Options', 'nosniff'/);
+
+  // Service worker never intercepts cross-origin Google OAuth/Photos/Drive APIs
+  assert.match(swSource, /parsed\.origin !== self\.location\.origin\) return true/);
+
+  // Realtime WS server caps connections & frame buffers and isolates rooms
+  assert.match(realtimeServer, /MAX_WS_CLIENTS\s*=\s*256/);
+  assert.match(realtimeServer, /MAX_FRAME_BUFFER_BYTES\s*=\s*1024\s*\*\s*1024/);
+  assert.match(realtimeServer, /info\.room !== message\.room/);
+
+  // App logout clears both Google Drive and Google Photos sessions
+  assert.match(userContext, /clearDriveSession\(\)/);
+  assert.match(userContext, /disconnectGooglePhotos\(true\)/);
+
+  // Instant Cancel buttons are wired in DriveConnectPanel, GooglePhotosConnectPanel, and Memoriya
+  assert.match(drivePanel, /handleCancelSync/);
+  assert.match(photosPanel, /handleCancelSync/);
+  assert.match(memoriya, /cancelDriveSync/);
+  assert.match(memoriya, /cancelGooglePhotosSync/);
+});
+
+
 
 

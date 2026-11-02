@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import type { User } from '../data/memories';
 import { authService, isFirebaseConfigured } from '../services/firebaseService';
 import { clearDriveSession } from '../services/driveLibrary';
+import { disconnectGooglePhotos } from '../services/googlePhotosService';
 import { googleDriveService } from '../services/googleDriveService';
 import { isLegacyTvBrowser } from '../utils/legacyBrowser';
 
@@ -69,6 +70,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await authService.logout();
     } finally {
       clearDriveSession();
+      void disconnectGooglePhotos(true);
       setUser(null);
     }
   }, []);

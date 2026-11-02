@@ -88,6 +88,12 @@ export interface GooglePhotosCollectionSummary extends GooglePhotosCollection {
   coverMemory?: Memory;
 }
 
+export interface GooglePhotosSmartCategory {
+  id: string; // e.g. 'smart:photos', 'smart:videos', 'smart:camera', 'smart:screenshots', 'smart:recent'
+  name: string;
+  count: number;
+}
+
 export interface GooglePhotosPickerSession {
   sessionId: string;
   pickerUri: string;
@@ -325,10 +331,13 @@ export const isGooglePhotosConnected = (): boolean => {
   return Boolean(readGooglePhotosAccessToken() || state.account?.email || state.collections.length > 0);
 };
 
+const isSmartCategoryId = (value: string): boolean => value.startsWith('smart:');
+
 export const readActiveGooglePhotosCollectionId = (): string => {
   const state = readGooglePhotosState();
   const active = state.activeCollectionId || '';
   if (!active) return '';
+  if (isSmartCategoryId(active)) return active;
   return state.collections.some(col => col.id === active) ? active : '';
 };
 
@@ -337,6 +346,8 @@ export const setActiveGooglePhotosCollectionId = (collectionId: string): void =>
   const clean = collectionId.trim();
   if (!clean) {
     state.activeCollectionId = '';
+  } else if (isSmartCategoryId(clean)) {
+    state.activeCollectionId = clean;
   } else {
     const target = state.collections.find(col => col.id === clean);
     if (target) {
@@ -630,8 +641,55 @@ const toMemory = (item: StoredGooglePhotoItem, collectionNameOverride?: string):
   };
 };
 
+const matchesSmartCategory = (item: StoredGooglePhotoItem, categoryId: string): boolean => {
+  const lowerTitle = (item.title || '').toLowerCase();
+  const lowerTags = (item.tags || []).map(t => t.toLowerCase());
+  switch (categoryId) {
+    case 'smart:photos':
+      return item.type === 'photo';
+    case 'smart:videos':
+      return item.type === 'video';
+    case 'smart:camera':
+      return (
+        lowerTags.some(t => t.includes('camera')) ||
+        /^(?:img|pxl|dsc|vid|mvimg|dji|gop|20\d{2}\d{4})[\s_-]?/i.test(lowerTitle)
+      );
+    case 'smart:screenshots':
+      return /(?:screenshot|screen_shot|whatsapp|wa\d{4}|fb_img|saved)/i.test(lowerTitle);
+    case 'smart:recent': {
+      const ts = new Date(item.date).getTime();
+      return Number.isFinite(ts) && Date.now() - ts <= 30 * 24 * 60 * 60 * 1000;
+    }
+    default:
+      return true;
+  }
+};
+
+export const readGooglePhotosSmartCategories = (): GooglePhotosSmartCategory[] => {
+  if (!isGooglePhotosConnected()) return [];
+  const state = readGooglePhotosState();
+  if (!state.items.length) return [];
+
+  const defs: Array<{ id: string; name: string }> = [
+    { id: 'smart:photos', name: 'All Photos' },
+    { id: 'smart:videos', name: 'Videos' },
+    { id: 'smart:camera', name: 'Camera & Phone' },
+    { id: 'smart:screenshots', name: 'Screenshots & Saved' },
+    { id: 'smart:recent', name: 'Recent (Last 30 Days)' },
+  ];
+
+  return defs
+    .map(def => ({
+      id: def.id,
+      name: def.name,
+      count: state.items.filter(item => matchesSmartCategory(item, def.id)).length,
+    }))
+    .filter(cat => cat.count > 0);
+};
+
 /**
  * Returns Google Photos memories that should appear on the site:
+ * - If `activeCollectionId` is a smart category (`smart:*`), returns matching items.
  * - If `activeCollectionId` is chosen in the Collection dropdown, returns ONLY that collection's items.
  * - Otherwise returns all items belonging to collections with `selected: true`.
  */
@@ -641,6 +699,14 @@ export const readSelectedGooglePhotosMemories = (): Memory[] => {
   if (!state.items.length || !state.collections.length) return [];
 
   const specificId = state.activeCollectionId || '';
+  if (specificId && isSmartCategoryId(specificId)) {
+    const colMap = new Map(state.collections.map(c => [c.id, c.name]));
+    return state.items
+      .filter(item => matchesSmartCategory(item, specificId))
+      .map(item => toMemory(item, colMap.get(item.collectionId) || item.collectionName))
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }
+
   if (specificId) {
     const chosen = state.collections.find(col => col.id === specificId);
     if (chosen) {
@@ -664,6 +730,7 @@ export const readSelectedGooglePhotosMemories = (): Memory[] => {
 };
 
 export const readGooglePhotosCollectionsSummary = (): GooglePhotosCollectionSummary[] => {
+  if (!isGooglePhotosConnected()) return [];
   const state = readGooglePhotosState();
   const itemsByCollection = new Map<string, StoredGooglePhotoItem[]>();
 
@@ -1015,8 +1082,13 @@ const requestOAuthTokenWithScope = (
   scope: string,
   prompt: string,
   loginHint?: string,
+  signal?: AbortSignal,
 ): Promise<{ accessToken: string; expiresIn: number }> =>
   new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('Google Photos sign-in was cancelled.'));
+      return;
+    }
     const win = window as unknown as GoogleOAuthWindow;
     const oauth = win.google?.accounts?.oauth2;
     if (!oauth) {
@@ -1025,12 +1097,66 @@ const requestOAuthTokenWithScope = (
     }
 
     let settled = false;
+    let focusSettleTimer = 0;
+    const startedAt = Date.now();
+    let popupBlurred = false;
+
+    const cleanup = () => {
+      if (focusSettleTimer) window.clearTimeout(focusSettleTimer);
+      if (typeof window.removeEventListener === 'function') {
+        window.removeEventListener('blur', onBlur);
+        window.removeEventListener('focus', onFocusReturn);
+      }
+      if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+        document.removeEventListener('visibilitychange', onVisibilityReturn);
+      }
+      signal?.removeEventListener('abort', onAbort);
+    };
+
     const finish = (cb: () => void) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timeoutId);
+      cleanup();
       cb();
     };
+
+    const onBlur = () => {
+      popupBlurred = true;
+      if (focusSettleTimer) {
+        window.clearTimeout(focusSettleTimer);
+        focusSettleTimer = 0;
+      }
+    };
+
+    const scheduleCancelOnReturn = () => {
+      if (settled) return;
+      if (!popupBlurred && Date.now() - startedAt < 750) return;
+      if (focusSettleTimer) window.clearTimeout(focusSettleTimer);
+      focusSettleTimer = window.setTimeout(() => {
+        finish(() => reject(new Error('Google Photos sign-in was cancelled.')));
+      }, 900);
+    };
+
+    const onFocusReturn = () => scheduleCancelOnReturn();
+    const onVisibilityReturn = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        scheduleCancelOnReturn();
+      }
+    };
+    const onAbort = () => {
+      finish(() => reject(new Error('Google Photos sign-in was cancelled.')));
+    };
+
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('blur', onBlur);
+      window.addEventListener('focus', onFocusReturn);
+    }
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', onVisibilityReturn);
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+
     const timeoutId = window.setTimeout(() => {
       finish(() => reject(new Error('Google Photos sign-in was closed.')));
     }, 50_000);
@@ -1085,7 +1211,11 @@ export const connectGooglePhotosGmail = async (options?: {
   prompt?: string;
   clientId?: string;
   usePickerScope?: boolean;
+  signal?: AbortSignal;
 }): Promise<{ accessToken: string; account: GooglePhotosAccount | null }> => {
+  if (options?.signal?.aborted) {
+    throw new Error('Google Photos sign-in was cancelled.');
+  }
   // Follow the exact same direct Client ID + script flow as Google Drive (`googleDriveService.connect`).
   const clientId = getConfiguredGoogleClientId(options?.clientId);
   if (!clientId) {
@@ -1096,6 +1226,9 @@ export const connectGooglePhotosGmail = async (options?: {
 
   if (!(window as unknown as GoogleOAuthWindow).google?.accounts?.oauth2) {
     await loadGoogleIdentityScript();
+  }
+  if (options?.signal?.aborted) {
+    throw new Error('Google Photos sign-in was cancelled.');
   }
 
   const desiredPrompt =
@@ -1116,6 +1249,7 @@ export const connectGooglePhotosGmail = async (options?: {
     primaryScope,
     desiredPrompt,
     options?.loginHint,
+    options?.signal,
   );
 
   saveGooglePhotosAccessToken(tokenResult.accessToken, tokenResult.expiresIn);
@@ -1188,14 +1322,33 @@ interface RemoteGoogleMediaItem {
   };
 }
 
-const downloadAuthedBlob = async (url: string, accessToken?: string): Promise<Blob | null> => {
-  if (!url) return null;
+/**
+ * Strip only trailing Google Photos sizing/download flags (e.g. `=w2048-h2048`, `=dv`, `=d`),
+ * NEVER arbitrary `=` characters inside Google's signed baseUrl token path!
+ */
+const cleanGoogleBaseUrl = (rawUrl: string): string =>
+  rawUrl.trim().replace(/=(?:w\d+|h\d+|s\d+|d|dv|cp|c|p|no)(?:-[a-zA-Z0-9]+)*$/, '');
+
+const downloadAuthedBlob = async (
+  url: string,
+  accessToken?: string,
+  options?: { signal?: AbortSignal; preferNoAuthFirst?: boolean },
+): Promise<Blob | null> => {
+  if (!url || options?.signal?.aborted) return null;
+  const withAuth: RequestInit = accessToken
+    ? { headers: { Authorization: `Bearer ${accessToken}` } }
+    : {};
   const attempts: RequestInit[] = accessToken
-    ? [{ headers: { Authorization: `Bearer ${accessToken}` } }, {}]
+    ? options?.preferNoAuthFirst
+      ? [{}, withAuth]
+      : [withAuth, {}]
     : [{}];
 
   for (const init of attempts) {
+    if (options?.signal?.aborted) return null;
     const controller = new AbortController();
+    const onExternalAbort = () => controller.abort();
+    options?.signal?.addEventListener('abort', onExternalAbort, { once: true });
     const timer = window.setTimeout(() => controller.abort(), MEDIA_DOWNLOAD_TIMEOUT_MS);
     try {
       const res = await fetch(url, { ...init, signal: controller.signal });
@@ -1207,7 +1360,26 @@ const downloadAuthedBlob = async (url: string, accessToken?: string): Promise<Bl
       // Try next strategy.
     } finally {
       window.clearTimeout(timer);
+      options?.signal?.removeEventListener('abort', onExternalAbort);
     }
+  }
+  return null;
+};
+
+const downloadGooglePhotoMediaVariant = async (
+  rawBaseUrl: string,
+  variants: string[],
+  accessToken?: string,
+  options?: { signal?: AbortSignal; preferNoAuthFirst?: boolean },
+): Promise<Blob | null> => {
+  const cleanBase = cleanGoogleBaseUrl(rawBaseUrl);
+  const candidateUrls = Array.from(
+    new Set([...variants.map(suffix => `${cleanBase}=${suffix}`), rawBaseUrl]),
+  );
+  for (const candidateUrl of candidateUrls) {
+    if (options?.signal?.aborted) return null;
+    const blob = await downloadAuthedBlob(candidateUrl, accessToken, options);
+    if (blob) return blob;
   }
   return null;
 };
@@ -1369,8 +1541,11 @@ let liveSyncBusy = false;
 export const syncGooglePhotosLibrary = async (
   accessToken: string,
   targetCollectionId?: string,
-  options?: { background?: boolean },
+  options?: { background?: boolean; signal?: AbortSignal },
 ): Promise<GooglePhotosSyncResult> => {
+  if (options?.signal?.aborted) {
+    throw new Error('Google Photos sync was cancelled.');
+  }
   void requestPersistentBrowserStorage();
   const state = readGooglePhotosState();
   const previousSignature = buildLibrarySignature(state);
@@ -1379,10 +1554,14 @@ export const syncGooglePhotosLibrary = async (
     state.activeCollectionId = targetCollectionId;
   }
 
-  // Strip any legacy empty predefined collections before reading real Google account collections.
+  // Strip any legacy empty predefined collections before reading real Google account collections,
+  // while preserving user-created custom albums (`source === 'custom'`).
   const initialItemCollectionIds = new Set(state.items.map(i => i.collectionId));
   state.collections = state.collections.filter(
-    col => Boolean(col.remoteAlbumId) || initialItemCollectionIds.has(col.id),
+    col =>
+      Boolean(col.remoteAlbumId) ||
+      initialItemCollectionIds.has(col.id) ||
+      (col.source === 'custom' && col.name !== 'Memoriya Photos'),
   );
 
   const workingToken = accessToken;
@@ -1499,10 +1678,13 @@ export const syncGooglePhotosLibrary = async (
     // 4. Download & hydrate media blobs in fast concurrent batches of 6
     const CONCURRENCY = 6;
     for (let start = 0; start < queuedEntries.length; start += CONCURRENCY) {
+      if (options?.signal?.aborted) {
+        throw new Error('Google Photos sync was cancelled.');
+      }
       const batch = queuedEntries.slice(start, start + CONCURRENCY);
       await Promise.all(
         batch.map(async ({ remote, collection }) => {
-          if (!remote.id || !remote.baseUrl) return;
+          if (!remote.id || !remote.baseUrl || options?.signal?.aborted) return;
           const existing = existingByRemoteOrPhotoId.get(remote.id);
           const googlePhotoId = existing?.googlePhotoId || remote.id;
 
@@ -1516,11 +1698,22 @@ export const syncGooglePhotosLibrary = async (
 
           let finalMimeType = existing?.mimeType || mimeType;
           if (!alreadyHydrated) {
-            const cleanBase = remote.baseUrl.replace(/=[^/]*$/, '');
-            const thumbBlob = await downloadAuthedBlob(`${cleanBase}=w720-h720`, workingToken);
+            const dlOpts = { signal: options?.signal, preferNoAuthFirst: true };
+            const thumbBlob = await downloadGooglePhotoMediaVariant(
+              remote.baseUrl,
+              ['w720-h720', 'd'],
+              workingToken,
+              dlOpts,
+            );
             const fullBlob = isVideo
-              ? (await downloadAuthedBlob(`${cleanBase}=dv`, workingToken)) || thumbBlob
-              : (await downloadAuthedBlob(`${cleanBase}=w2048-h2048`, workingToken)) || thumbBlob;
+              ? (await downloadGooglePhotoMediaVariant(remote.baseUrl, ['dv', 'd'], workingToken, dlOpts)) ||
+                thumbBlob
+              : (await downloadGooglePhotoMediaVariant(
+                  remote.baseUrl,
+                  ['w2048-h2048', 'd'],
+                  workingToken,
+                  dlOpts,
+                )) || thumbBlob;
 
             if (!fullBlob) return;
 
@@ -1566,6 +1759,19 @@ export const syncGooglePhotosLibrary = async (
           nextByPrimaryId.set(googlePhotoId, storedItem);
         }),
       );
+      // Publish progressive updates so photos appear on screen immediately as batches arrive!
+      if (!options?.background && nextByPrimaryId.size > 0) {
+        state.items = Array.from(nextByPrimaryId.values()).sort(
+          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+        );
+        state.collections.forEach(col => {
+          col.selected =
+            state.activeCollectionId && !isSmartCategoryId(state.activeCollectionId)
+              ? col.id === state.activeCollectionId
+              : true;
+        });
+        writeGooglePhotosState(state, true);
+      }
     }
 
     state.items = Array.from(nextByPrimaryId.values()).sort(
@@ -1573,15 +1779,19 @@ export const syncGooglePhotosLibrary = async (
     );
   }
 
-  // Ensure collection selection reflects activeCollectionId ('' = show all Google account collections)
+  // Ensure collection selection reflects activeCollectionId ('' or 'smart:*' = keep all collections selected)
   if (
     state.activeCollectionId &&
+    !isSmartCategoryId(state.activeCollectionId) &&
     !state.collections.some(col => col.id === state.activeCollectionId)
   ) {
     state.activeCollectionId = '';
   }
   state.collections.forEach(col => {
-    col.selected = state.activeCollectionId ? col.id === state.activeCollectionId : true;
+    col.selected =
+      state.activeCollectionId && !isSmartCategoryId(state.activeCollectionId)
+        ? col.id === state.activeCollectionId
+        : true;
   });
 
   const nextSignature = buildLibrarySignature(state);
@@ -1643,12 +1853,16 @@ export const connectAndSyncGooglePhotos = async (options?: {
   loginHint?: string;
   prompt?: string;
   collectionId?: string;
+  signal?: AbortSignal;
 }): Promise<GooglePhotosSyncResult> => {
   const { accessToken } = await connectGooglePhotosGmail({
     loginHint: options?.loginHint,
     prompt: options?.prompt ?? '',
+    signal: options?.signal,
   });
-  return syncGooglePhotosLibrary(accessToken, options?.collectionId);
+  return syncGooglePhotosLibrary(accessToken, options?.collectionId, {
+    signal: options?.signal,
+  });
 };
 
 // Ensure a remote Google Photos album exists for a given local collection before uploading bytes
@@ -2235,42 +2449,106 @@ export const waitForGooglePhotosPickerSelection = async (
   let intervalMs = session.pollIntervalMs || 2400;
   const startedAt = Date.now();
   // Avoid reading cross-origin `popupWindow.closed` (triggers COOP console warnings in Chrome).
-  // Google Photos `/autoclose` closes the window when the user clicks Done, returning focus here.
+  // Track blur -> focus return so closing/cancelling the picker window exits promptly instead of hanging!
   const maxWaitMs = 5 * 60 * 1000;
+  let popupBlurred = false;
+  let focusReturnedAfterOpen = false;
 
-  while (Date.now() - startedAt < maxWaitMs) {
-    if (options?.signal?.aborted) return false;
-    const status = await checkGooglePhotosPickerSessionOnce(session.sessionId, accessToken);
-    options?.onTick?.();
-    if (status.mediaItemsSet) return true;
-    intervalMs = status.pollIntervalMs;
+  const isPopupWindowClosed = (): boolean => {
+    if (!options?.popupWindow) return false;
+    try {
+      return Boolean(options.popupWindow.closed);
+    } catch {
+      return false;
+    }
+  };
 
-    await new Promise<void>(resolve => {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        window.clearTimeout(timer);
-        if (hasWindow()) {
-          window.removeEventListener('focus', onReturn);
-          document.removeEventListener('visibilitychange', onVisibility);
-        }
-        options?.signal?.removeEventListener('abort', finish);
-        resolve();
-      };
-      const onReturn = () => finish();
-      const onVisibility = () => {
-        if (document.visibilityState === 'visible') finish();
-      };
-      const timer = window.setTimeout(finish, intervalMs);
-      if (hasWindow()) {
-        window.addEventListener('focus', onReturn, { once: true });
-        document.addEventListener('visibilitychange', onVisibility);
-      }
-      options?.signal?.addEventListener('abort', finish, { once: true });
-    });
+  const onWindowBlur = () => {
+    popupBlurred = true;
+  };
+  if (hasWindow() && typeof window.addEventListener === 'function') {
+    window.addEventListener('blur', onWindowBlur);
   }
-  return false;
+
+  try {
+    while (Date.now() - startedAt < maxWaitMs) {
+      if (options?.signal?.aborted) return false;
+      const status = await checkGooglePhotosPickerSessionOnce(session.sessionId, accessToken);
+      options?.onTick?.();
+      if (status.mediaItemsSet) return true;
+
+      if (focusReturnedAfterOpen || isPopupWindowClosed()) {
+        // User closed the Google Photos popup or returned to the app window.
+        // Wait 900ms once in case Google's `/autoclose` redirect just committed the selection;
+        // if still unset, the user closed/cancelled the window without picking!
+        await new Promise<void>(resolve => {
+          const t = window.setTimeout(resolve, 900);
+          options?.signal?.addEventListener(
+            'abort',
+            () => {
+              window.clearTimeout(t);
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        if (options?.signal?.aborted) return false;
+        const recheck = await checkGooglePhotosPickerSessionOnce(session.sessionId, accessToken);
+        return Boolean(recheck.mediaItemsSet);
+      }
+
+      intervalMs = status.pollIntervalMs;
+      const pollDeadline = Date.now() + intervalMs;
+
+      while (Date.now() < pollDeadline) {
+        if (options?.signal?.aborted || focusReturnedAfterOpen || isPopupWindowClosed()) break;
+        const sliceMs = Math.min(300, Math.max(20, pollDeadline - Date.now()));
+        await new Promise<void>(resolve => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            window.clearTimeout(timer);
+            if (hasWindow() && typeof window.removeEventListener === 'function') {
+              window.removeEventListener('focus', onReturn);
+            }
+            if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+              document.removeEventListener('visibilitychange', onVisibility);
+            }
+            options?.signal?.removeEventListener('abort', finish);
+            resolve();
+          };
+          const onReturn = () => {
+            if (popupBlurred || isPopupWindowClosed() || Date.now() - startedAt > 1200) {
+              focusReturnedAfterOpen = true;
+            }
+            finish();
+          };
+          const onVisibility = () => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+              if (popupBlurred || isPopupWindowClosed() || Date.now() - startedAt > 1200) {
+                focusReturnedAfterOpen = true;
+              }
+              finish();
+            }
+          };
+          const timer = window.setTimeout(finish, sliceMs);
+          if (hasWindow() && typeof window.addEventListener === 'function') {
+            window.addEventListener('focus', onReturn, { once: true });
+          }
+          if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', onVisibility);
+          }
+          options?.signal?.addEventListener('abort', finish, { once: true });
+        });
+      }
+    }
+    return false;
+  } finally {
+    if (hasWindow() && typeof window.removeEventListener === 'function') {
+      window.removeEventListener('blur', onWindowBlur);
+    }
+  }
 };
 
 export const importGooglePhotosPickerSession = async (
@@ -2307,9 +2585,9 @@ export const importGooglePhotosPickerSession = async (
     });
     const isVideo =
       it.type === 'VIDEO' || (it.mediaFile?.mimeType || '').toLowerCase().startsWith('video/');
-    const cleanBase = base.replace(/=[^/]*$/, '');
-    const blob = await downloadAuthedBlob(
-      isVideo ? `${cleanBase}=dv` : `${cleanBase}=w2048-h2048`,
+    const blob = await downloadGooglePhotoMediaVariant(
+      base,
+      isVideo ? ['dv', 'd'] : ['w2048-h2048', 'd'],
       accessToken,
     );
     if (!blob) continue;
@@ -2325,58 +2603,97 @@ export const importGooglePhotosPickerSession = async (
 };
 
 /**
- * 1-click Google Photos cloud selector (no custom modal) for pulling existing photos
- * that were uploaded directly inside photos.google.com, immediately showing them across
- * the site and syncing them into the user's cloud collection.
+ * 1-click Google Photos cloud selector (no custom modal) for pulling existing photos,
+ * albums, collections, favorites, & videos directly from photos.google.com, immediately
+ * organizing them into collections/albums and streaming them across the site.
  */
 export const pickFromGooglePhotosCloud = async (options?: {
   accessToken?: string;
   collectionId?: string;
+  collectionName?: string;
   popupWindow?: Window | null;
+  signal?: AbortSignal;
   onStatus?: (message: string) => void;
 }): Promise<{
   importedCount: number;
   collectionName: string;
+  collectionsTouched: string[];
   syncedToCloud: boolean;
 }> => {
   const popup = options?.popupWindow || null;
   try {
+    if (options?.signal?.aborted) {
+      throw new Error('Google Photos sync was cancelled.');
+    }
     const token = options?.accessToken || readGooglePhotosAccessToken();
     if (!token) {
-      throw new Error('Your Google Photos session expired. Click "Sync Google Photos" once, then click "Pick from Google Photos".');
+      throw new Error(
+        'Your Google Photos session expired. Click "Sync Google Photos" once, then try again.',
+      );
     }
 
     const session = await createGooglePhotosPickerSession(token);
+    if (options?.signal?.aborted) {
+      throw new Error('Google Photos sync was cancelled.');
+    }
 
     if (popup) {
       popup.location.href = session.autoCloseUri;
-      popup.focus();
+      try {
+        popup.focus?.();
+      } catch {
+        // Cross-origin or mobile WebView focus is best-effort.
+      }
     } else if (hasWindow()) {
       window.open(session.autoCloseUri, 'memoriya-gphotos-picker', 'width=980,height=740');
     }
 
     options?.onStatus?.(
-      'Select your photos in Google Photos and click "Done" — Memoriya will update automatically...',
+      'Select photos, albums, or collections in Google Photos and click "Done"...',
     );
 
     const ready = await waitForGooglePhotosPickerSelection(session, token, {
       popupWindow: popup,
+      signal: options?.signal,
     });
 
-    if (!ready) {
-      return { importedCount: 0, collectionName: 'Google Photos', syncedToCloud: false };
+    if (!ready || options?.signal?.aborted) {
+      if (popup) {
+        try {
+          popup.close();
+        } catch {
+          // Ignore cross-origin close error.
+        }
+      }
+      return {
+        importedCount: 0,
+        collectionName: 'Google Photos',
+        collectionsTouched: [],
+        syncedToCloud: false,
+      };
     }
 
-    options?.onStatus?.('Importing selected photos from Google Photos...');
+    options?.onStatus?.('Syncing selected photos & albums from Google Photos...');
 
     const allItems: Array<{
       id?: string;
       createTime?: string;
       type?: string;
-      mediaFile?: { baseUrl?: string; mimeType?: string; filename?: string };
+      mediaFile?: {
+        baseUrl?: string;
+        mimeType?: string;
+        filename?: string;
+        mediaFileMetadata?: {
+          width?: number;
+          height?: number;
+          cameraMake?: string;
+          cameraModel?: string;
+        };
+      };
     }> = [];
     let pageToken = '';
     for (let page = 0; page < 15; page += 1) {
+      if (options?.signal?.aborted) break;
       const params = new URLSearchParams({
         sessionId: session.sessionId,
         pageSize: '100',
@@ -2384,7 +2701,10 @@ export const pickFromGooglePhotosCloud = async (options?: {
       if (pageToken) params.set('pageToken', pageToken);
       const res = await fetch(
         `https://photospicker.googleapis.com/v1/mediaItems?${params.toString()}`,
-        { headers: { Authorization: `Bearer ${token}` } },
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: options?.signal,
+        },
       );
       if (!res.ok) break;
       const json = (await res.json()) as {
@@ -2398,55 +2718,110 @@ export const pickFromGooglePhotosCloud = async (options?: {
       pageToken = json.nextPageToken;
     }
 
-    if (!allItems.length) {
-      return { importedCount: 0, collectionName: 'Google Photos', syncedToCloud: false };
+    if (!allItems.length || options?.signal?.aborted) {
+      return {
+        importedCount: 0,
+        collectionName: 'Google Photos',
+        collectionsTouched: [],
+        syncedToCloud: false,
+      };
     }
 
-    const files: File[] = [];
+    const filesByGroup = new Map<string, File[]>();
+    const activeColId =
+      options?.collectionId && !isSmartCategoryId(options.collectionId)
+        ? options.collectionId
+        : '';
+    const explicitColName = (options?.collectionName || '').trim();
+
     const CONCURRENCY = 6;
     for (let start = 0; start < allItems.length; start += CONCURRENCY) {
+      if (options?.signal?.aborted) break;
+      options?.onStatus?.(
+        `Loading ${Math.min(allItems.length, start + CONCURRENCY)} of ${allItems.length} from Google Photos...`,
+      );
       const batch = allItems.slice(start, start + CONCURRENCY);
       const downloaded = await Promise.all(
         batch.map(async (it, offset) => {
           const base = it.mediaFile?.baseUrl;
-          if (!base) return null;
+          if (!base || options?.signal?.aborted) return null;
           const isVideo =
             it.type === 'VIDEO' ||
             (it.mediaFile?.mimeType || '').toLowerCase().startsWith('video/');
-          const cleanBase = base.replace(/=[^/]*$/, '');
-          const blob = await downloadAuthedBlob(
-            isVideo ? `${cleanBase}=dv` : `${cleanBase}=w2048-h2048`,
+          const blob = await downloadGooglePhotoMediaVariant(
+            base,
+            isVideo ? ['dv', 'd'] : ['w2048-h2048', 'w1600-h1600', 'd'],
             token,
+            { signal: options?.signal },
           );
           if (!blob) return null;
-          const fname =
+          const camPrefix = it.mediaFile?.mediaFileMetadata?.cameraMake ? 'IMG_' : '';
+          const rawName =
             it.mediaFile?.filename ||
-            `google-photo-${start + offset + 1}.${isVideo ? 'mp4' : 'jpg'}`;
-          return new File([blob], fname, {
-            type: blob.type || it.mediaFile?.mimeType || (isVideo ? 'video/mp4' : 'image/jpeg'),
-            lastModified: it.createTime ? new Date(it.createTime).getTime() : Date.now(),
-          });
+            `${camPrefix}google-photo-${start + offset + 1}.${isVideo ? 'mp4' : 'jpg'}`;
+          const createdMs = it.createTime ? new Date(it.createTime).getTime() : Date.now();
+          const validMs = Number.isFinite(createdMs) ? createdMs : Date.now();
+          const dt = new Date(validMs);
+          const monthCollectionName = `${MONTH_LABELS[dt.getMonth() + 1] || 'Moments'} ${dt.getFullYear()}`;
+          const groupKey = explicitColName || (activeColId ? `__id:${activeColId}` : monthCollectionName);
+          return {
+            groupKey,
+            file: new File([blob], rawName, {
+              type: blob.type || it.mediaFile?.mimeType || (isVideo ? 'video/mp4' : 'image/jpeg'),
+              lastModified: validMs,
+            }),
+          };
         }),
       );
-      downloaded.forEach(file => {
-        if (file) files.push(file);
+      downloaded.forEach(entry => {
+        if (!entry) return;
+        const bucket = filesByGroup.get(entry.groupKey) || [];
+        bucket.push(entry.file);
+        filesByGroup.set(entry.groupKey, bucket);
       });
     }
 
-    if (!files.length) {
-      return { importedCount: 0, collectionName: 'Google Photos', syncedToCloud: false };
+    if (!filesByGroup.size) {
+      return {
+        importedCount: 0,
+        collectionName: 'Google Photos',
+        collectionsTouched: [],
+        syncedToCloud: false,
+      };
     }
 
-    const uploaded = await uploadFilesToGooglePhotosCollection(files, {
-      collectionId: options?.collectionId || readActiveGooglePhotosCollectionId() || undefined,
-      accessToken: token,
-      source: 'picker',
-    });
+    let totalImported = 0;
+    let anySyncedToCloud = false;
+    const touchedNames: string[] = [];
+
+    for (const [groupKey, groupFiles] of filesByGroup.entries()) {
+      if (options?.signal?.aborted) break;
+      const isById = groupKey.startsWith('__id:');
+      const uploaded = await uploadFilesToGooglePhotosCollection(groupFiles, {
+        collectionId: isById ? groupKey.slice(5) : undefined,
+        collectionName: isById ? undefined : groupKey,
+        accessToken: token,
+        source: 'picker',
+        signal: options?.signal,
+      });
+      totalImported += uploaded.importedCount;
+      if (uploaded.syncedToCloud) anySyncedToCloud = true;
+      if (uploaded.collection?.name) touchedNames.push(uploaded.collection.name);
+    }
+
+    // If user had a single collection filter that hid newly created month albums, reset to All so all picked albums show!
+    if (!activeColId && !explicitColName && touchedNames.length > 1) {
+      setActiveGooglePhotosCollectionId('');
+    }
 
     return {
-      importedCount: uploaded.importedCount,
-      collectionName: uploaded.collection?.name || 'Google Photos',
-      syncedToCloud: uploaded.syncedToCloud,
+      importedCount: totalImported,
+      collectionName:
+        touchedNames.length === 1
+          ? touchedNames[0]
+          : `${touchedNames.length} Google Photos collections`,
+      collectionsTouched: touchedNames,
+      syncedToCloud: anySyncedToCloud,
     };
   } catch (err) {
     if (popup) {

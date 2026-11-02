@@ -324,8 +324,7 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     // Uploads and deletions therefore join the running story within seconds.
     const LIVE_STORY_POLL_MS = 8000;
     const LIVE_STORY_COOLDOWN_MS = 6000;
-    const LIVE_STORY_FAST_POLL_MS = 2000;
-    const LIVE_STORY_ACTIVE_COOLDOWN_MS = 1000;
+    const LIVE_STORY_ACTIVE_COOLDOWN_MS = 4000;
     let lastSyncAt = 0;
 
     const retryDrive = () => {
@@ -346,14 +345,9 @@ const StoryMode: React.FC<StoryModeProps> = ({ onExit }) => {
     document.addEventListener('visibilitychange', onVisibilityChange);
     void syncDrive();
     const interval = window.setInterval(retryDrive, LIVE_STORY_POLL_MS);
-    // Keep the legacy cadence for idle/background compatibility while the
-    // visible story uses a cheap fast changes-feed check for direct Drive
-    // uploads. No media is downloaded unless Drive reports a new file.
-    const fastInterval = window.setInterval(retryDrive, LIVE_STORY_FAST_POLL_MS);
     return () => {
       active = false;
       window.clearInterval(interval);
-      window.clearInterval(fastInterval);
       window.removeEventListener('online', retryDrive);
       window.removeEventListener('focus', retryDrive);
       document.removeEventListener('visibilitychange', onVisibilityChange);
