@@ -67,7 +67,7 @@ const DriveMediaPreview: React.FC<Props> = ({ memory, alt, className = '', eager
     void ensureHydratedGooglePhotoUrls(memory.googlePhotoId).then(hydrated => {
       if (cancelled || !hydrated?.url) return;
       setBlobSrc(hydrated.url);
-      if (hydrated.thumbnail) setGooglePosterSrc(hydrated.thumbnail);
+      if (hydrated.thumbnailUrl) setGooglePosterSrc(hydrated.thumbnailUrl);
       setFailed(false);
     });
     return () => {

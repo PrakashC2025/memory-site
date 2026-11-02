@@ -520,3 +520,87 @@ test('403 on photoslibrary.googleapis.com never wipes OAuth token, never opens b
   }
 });
 
+test('Both Google Drive and Google Photos OAuth linking work cleanly without GIS script deadlock or retired scopes', async () => {
+  setupBrowserMocks();
+
+  // 1. Verify Google Photos never requests retired `photoslibrary.readonly` scope (only active post-2025 scopes)
+  const gphotosSource = await readProjectFile('src/services/googlePhotosService.ts');
+  assert.doesNotMatch(
+    gphotosSource,
+    /['"]https:\/\/www\.googleapis\.com\/auth\/photoslibrary\.readonly['"]/,
+  );
+  assert.match(
+    gphotosSource,
+    /https:\/\/www\.googleapis\.com\/auth\/photospicker\.mediaitems\.readonly/,
+  );
+
+  // 2. Verify Google Drive never deadlocks when gsi/client script tag already exists without dataset.loaded
+  const driveSource = (await readProjectFile('src/services/googleDriveService.ts')).replace(
+    /import\.meta\.env\.VITE_GOOGLE_CLIENT_ID/g,
+    '"test-client-id.apps.googleusercontent.com"',
+  );
+  const compiledDrive = ts.transpileModule(driveSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2018,
+    },
+  }).outputText;
+  const driveModule = await import(
+    `data:text/javascript;base64,${Buffer.from(compiledDrive).toString('base64')}`
+  );
+
+  let driveRequestedScopes = '';
+  globalThis.window.google = {
+    accounts: {
+      oauth2: {
+        initTokenClient: cfg => {
+          driveRequestedScopes = cfg.scope;
+          return {
+            requestAccessToken: () => {
+              cfg.callback({ access_token: 'drive-token-ok', expires_in: 3600 });
+            },
+          };
+        },
+      },
+    },
+  };
+
+  const driveConnected = await driveModule.googleDriveService.connect();
+  assert.equal(driveConnected.connected, true);
+  assert.equal(driveConnected.accessToken, 'drive-token-ok');
+  assert.match(driveRequestedScopes, /drive\.readonly/);
+
+  // 3. Verify `drive-root` is normalized away in listMediaPage so Drive root files always load
+  let capturedDriveUrl = '';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    capturedDriveUrl = String(url);
+    return new Response(
+      JSON.stringify({
+        files: [{ id: 'f1', name: 'sunset.jpg', mimeType: 'image/jpeg', thumbnailLink: 'https://lh3.googleusercontent.com/t1=s220' }],
+      }),
+      { status: 200 },
+    );
+  };
+  try {
+    const page = await driveModule.googleDriveService.listMediaPage('drive-token-ok', '', 'drive-root');
+    assert.equal(page.files.length, 1);
+    assert.doesNotMatch(capturedDriveUrl, /drive-root/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // 4. Verify Google Photos connectGooglePhotosGmail succeeds cleanly in 1 synchronous popup
+  const photosSvc = await loadGooglePhotosService();
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ email: 'user@gmail.com', name: 'Test User' }), { status: 200 });
+  try {
+    const linked = await photosSvc.connectGooglePhotosGmail({ clientId: 'test-client-id.apps.googleusercontent.com' });
+    assert.equal(linked.accessToken, 'drive-token-ok');
+    assert.equal(linked.account?.email, 'user@gmail.com');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+

@@ -27,13 +27,14 @@ import { GooglePhotosIcon } from '../components/GooglePhotosModal';
 import MemoryLightbox from '../components/MemoryLightbox';
 import MemoryReel from '../components/MemoryReel';
 import { getMemoryAspect, isVisualMemory, type Memory } from '../data/memories';
-import { acquireDriveSyncLock, clearDriveChangePageToken, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, DRIVE_SESSION_KEY, readDriveAccessToken, readDriveAuthRequired, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveAuthRequired, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
+import { acquireDriveSyncLock, clearDriveChangePageToken, clearDriveSession, DRIVE_ACCESS_TOKEN_UPDATED_EVENT, DRIVE_MEMORIES_UPDATED_EVENT, DRIVE_SESSION_KEY, readDriveAccessToken, readDriveAuthRequired, readDriveMemories, releaseDriveSyncLock, removeDriveMemories, saveDriveAccessToken, saveDriveAuthRequired, saveDriveChangePageToken, saveDriveMemories, upgradeDriveImageUrls } from '../services/driveLibrary';
 import {
   connectAndSyncGooglePhotos,
   disconnectGooglePhotos,
   formatFriendlyGooglePhotosError,
   GOOGLE_PHOTOS_UPDATED_EVENT,
   isGooglePhotosConnected,
+  isPhotosLibraryForbidden,
   pickFromGooglePhotosCloud,
   readActiveGooglePhotosCollectionId,
   readGooglePhotosAccessToken,
@@ -154,7 +155,7 @@ const Memoriya: React.FC = () => {
   const [gphotosLoading, setGphotosLoading] = useState(false);
   const gphotosUploadInputRef = useRef<HTMLInputElement>(null);
   const [memories, setMemories] = useState<Memory[]>(() => {
-    const driveInitial = restored?.memories || [];
+    const driveInitial = restored?.memories?.length ? restored.memories : readDriveMemories();
     const gphotosInitial = readSelectedGooglePhotosMemories();
     if (!gphotosInitial.length) return driveInitial;
     const byId = new Map<string, Memory>();
@@ -162,7 +163,7 @@ const Memoriya: React.FC = () => {
     return Array.from(byId.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   });
   const [selected, setSelected] = useState<Memory | null>(() => {
-    const driveInitial = restored?.memories || [];
+    const driveInitial = restored?.memories?.length ? restored.memories : readDriveMemories();
     const gphotosInitial = readSelectedGooglePhotosMemories();
     return driveInitial[0] || gphotosInitial[0] || null;
   });
@@ -1023,7 +1024,7 @@ const Memoriya: React.FC = () => {
     folderPollRef.current = null;
     localFileIdsRef.current.clear();
     setCameraOpen(false);
-    window.sessionStorage.removeItem(DRIVE_SESSION_KEY);
+    clearDriveSession();
   };
 
   const connectGooglePhotos = async () => {
@@ -1032,9 +1033,11 @@ const Memoriya: React.FC = () => {
     setMessage('Opening Google Photos connection...');
     try {
       const existingToken = readGooglePhotosAccessToken();
-      const result = existingToken
-        ? await syncGooglePhotosLibrary(existingToken, gphotosActiveCollectionId)
-        : await connectAndSyncGooglePhotos({ collectionId: gphotosActiveCollectionId });
+      const shouldReauthorize =
+        !gphotosConnected || !existingToken || isPhotosLibraryForbidden(existingToken);
+      const result = shouldReauthorize
+        ? await connectAndSyncGooglePhotos({ collectionId: gphotosActiveCollectionId })
+        : await syncGooglePhotosLibrary(existingToken, gphotosActiveCollectionId);
       setGphotosConnected(true);
       setGphotosToken(result.accessToken);
       setGphotosCollections(result.collections);
@@ -1350,8 +1353,10 @@ const Memoriya: React.FC = () => {
           <OnboardingCard
             loading={loading || gphotosLoading}
             isConnected={isAnyCloudConnected}
+            driveConnected={Boolean(accessToken)}
+            googlePhotosConnected={gphotosConnected}
             activeLabel={activeGphotosCollectionName || activeDriveFolderName}
-            onConnect={connectDrive}
+            onConnect={() => void connectDrive()}
             onConnectGooglePhotos={() => void connectGooglePhotos()}
             onPickFromGooglePhotos={gphotosConnected ? () => void handlePickFromGooglePhotos() : undefined}
             onUploadGooglePhotos={() => gphotosUploadInputRef.current?.click()}
@@ -1401,8 +1406,10 @@ const Memoriya: React.FC = () => {
           <EmptyDriveState
             loading={loading || gphotosLoading}
             isConnected={isAnyCloudConnected}
+            driveConnected={Boolean(accessToken)}
+            googlePhotosConnected={gphotosConnected}
             activeLabel={activeGphotosCollectionName || activeDriveFolderName}
-            onConnect={connectDrive}
+            onConnect={() => void connectDrive()}
             onConnectGooglePhotos={() => void connectGooglePhotos()}
             onPickFromGooglePhotos={gphotosConnected ? () => void handlePickFromGooglePhotos() : undefined}
             onUploadGooglePhotos={() => gphotosUploadInputRef.current?.click()}
@@ -1590,6 +1597,8 @@ HeroImage.displayName = 'HeroImage';
 const OnboardingCard: React.FC<{
   loading: boolean;
   isConnected: boolean;
+  driveConnected: boolean;
+  googlePhotosConnected: boolean;
   activeLabel?: string;
   onConnect: () => void;
   onConnectGooglePhotos: () => void;
@@ -1600,6 +1609,8 @@ const OnboardingCard: React.FC<{
 }> = ({
   loading,
   isConnected,
+  driveConnected,
+  googlePhotosConnected,
   activeLabel,
   onConnect,
   onConnectGooglePhotos,
@@ -1613,44 +1624,40 @@ const OnboardingCard: React.FC<{
     <h2>{isConnected ? (activeLabel ? `No photos in "${activeLabel}" yet` : 'No photos found yet') : 'Start with something real'}</h2>
     <p>
       {isConnected
-        ? 'Pick existing photos directly from your Google Photos library, upload new photos, or capture with Camera.'
+        ? 'Pick existing photos directly from Google Photos, connect Google Drive, upload new photos, or capture with Camera.'
         : 'Connect Google Drive or Google Photos in one click, or add media straight from this device.'}
     </p>
     <div className="flex flex-col gap-2">
-      {isConnected ? (
-        <>
-          {onPickFromGooglePhotos && (
-            <button className="memoriya-primary" onClick={onPickFromGooglePhotos} disabled={loading}>
-              <GooglePhotosIcon size={17} /> Pick from Google Photos
-            </button>
-          )}
-          <button className={onPickFromGooglePhotos ? 'memoriya-glass-button' : 'memoriya-primary'} onClick={onUploadGooglePhotos} disabled={loading}>
-            <Upload size={17} /> Add to Google Photos
-          </button>
-          {onOpenCamera && (
-            <button className="memoriya-glass-button" onClick={onOpenCamera}>
-              <Camera size={17} /> Open Camera
-            </button>
-          )}
-          <button className="memoriya-glass-button" onClick={onImportLocal}>
-            <Images size={17} /> Use Local Media
-          </button>
-        </>
-      ) : (
-        <>
-          <button className="memoriya-primary" onClick={onConnectGooglePhotos} disabled={loading}>
-            {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <GooglePhotosIcon size={17} />}
-            Connect Google Photos
-          </button>
-          <button className="memoriya-glass-button" onClick={onConnect} disabled={loading}>
-            {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
-            Connect Google Drive
-          </button>
-          <button className="memoriya-glass-button" onClick={onImportLocal}>
-            <Images size={17} /> Use Local Media
-          </button>
-        </>
+      {!googlePhotosConnected && (
+        <button className="memoriya-primary" onClick={onConnectGooglePhotos} disabled={loading}>
+          {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <GooglePhotosIcon size={17} />}
+          Connect Google Photos
+        </button>
       )}
+      {!driveConnected && (
+        <button className={googlePhotosConnected ? 'memoriya-primary' : 'memoriya-glass-button'} onClick={onConnect} disabled={loading}>
+          {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
+          Connect Google Drive
+        </button>
+      )}
+      {googlePhotosConnected && onPickFromGooglePhotos && (
+        <button className="memoriya-primary" onClick={onPickFromGooglePhotos} disabled={loading}>
+          <GooglePhotosIcon size={17} /> Pick from Google Photos
+        </button>
+      )}
+      {googlePhotosConnected && (
+        <button className="memoriya-glass-button" onClick={onUploadGooglePhotos} disabled={loading}>
+          <Upload size={17} /> Add to Google Photos
+        </button>
+      )}
+      {isConnected && onOpenCamera && (
+        <button className="memoriya-glass-button" onClick={onOpenCamera}>
+          <Camera size={17} /> Open Camera
+        </button>
+      )}
+      <button className="memoriya-glass-button" onClick={onImportLocal}>
+        <Images size={17} /> Use Local Media
+      </button>
     </div>
   </aside>
 );
@@ -1658,6 +1665,8 @@ const OnboardingCard: React.FC<{
 const EmptyDriveState: React.FC<{
   loading: boolean;
   isConnected: boolean;
+  driveConnected: boolean;
+  googlePhotosConnected: boolean;
   activeLabel?: string;
   onConnect: () => void;
   onConnectGooglePhotos: () => void;
@@ -1668,6 +1677,8 @@ const EmptyDriveState: React.FC<{
 }> = ({
   loading,
   isConnected,
+  driveConnected,
+  googlePhotosConnected,
   activeLabel,
   onConnect,
   onConnectGooglePhotos,
@@ -1687,43 +1698,39 @@ const EmptyDriveState: React.FC<{
     </h2>
     <p>
       {isConnected
-        ? 'Click "Pick from Google Photos" to bring in existing photos from Google Photos, or "Add to Google Photos" to upload new ones.'
+        ? 'Click "Pick from Google Photos" to bring in existing photos from Google Photos, connect Google Drive, or upload new ones.'
         : 'Connect Google Photos or Google Drive with one click to read your folders and collections.'}
     </p>
-    {isConnected ? (
-      <>
-        {onPickFromGooglePhotos && (
-          <button className="memoriya-primary" onClick={onPickFromGooglePhotos} disabled={loading}>
-            <GooglePhotosIcon size={17} /> Pick from Google Photos
-          </button>
-        )}
-        <button className={onPickFromGooglePhotos ? 'memoriya-glass-button' : 'memoriya-primary'} onClick={onUploadGooglePhotos} disabled={loading}>
-          <Upload size={17} /> Add to Google Photos
-        </button>
-        {onOpenCamera && (
-          <button className="memoriya-glass-button" onClick={onOpenCamera}>
-            <Camera size={17} /> Open Camera
-          </button>
-        )}
-        <button className="memoriya-glass-button" onClick={onImportLocal}>
-          <Images size={17} /> Use Local Media
-        </button>
-      </>
-    ) : (
-      <>
-        <button className="memoriya-primary" onClick={onConnectGooglePhotos} disabled={loading}>
-          {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <GooglePhotosIcon size={17} />}
-          {loading ? 'Connecting...' : 'Connect Google Photos'}
-        </button>
-        <button className="memoriya-glass-button" onClick={onConnect} disabled={loading}>
-          {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
-          {loading ? 'Connecting...' : 'Connect Google Drive'}
-        </button>
-        <button className="memoriya-glass-button" onClick={onImportLocal}>
-          <Images size={17} /> Use Local Media
-        </button>
-      </>
+    {!googlePhotosConnected && (
+      <button className="memoriya-primary" onClick={onConnectGooglePhotos} disabled={loading}>
+        {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <GooglePhotosIcon size={17} />}
+        {loading ? 'Connecting...' : 'Connect Google Photos'}
+      </button>
     )}
+    {!driveConnected && (
+      <button className={googlePhotosConnected ? 'memoriya-primary' : 'memoriya-glass-button'} onClick={onConnect} disabled={loading}>
+        {loading ? <Loader2 size={17} className="memoriya-spin-icon" /> : <Cloud size={17} />}
+        {loading ? 'Connecting...' : 'Connect Google Drive'}
+      </button>
+    )}
+    {googlePhotosConnected && onPickFromGooglePhotos && (
+      <button className="memoriya-primary" onClick={onPickFromGooglePhotos} disabled={loading}>
+        <GooglePhotosIcon size={17} /> Pick from Google Photos
+      </button>
+    )}
+    {googlePhotosConnected && (
+      <button className="memoriya-glass-button" onClick={onUploadGooglePhotos} disabled={loading}>
+        <Upload size={17} /> Add to Google Photos
+      </button>
+    )}
+    {isConnected && onOpenCamera && (
+      <button className="memoriya-glass-button" onClick={onOpenCamera}>
+        <Camera size={17} /> Open Camera
+      </button>
+    )}
+    <button className="memoriya-glass-button" onClick={onImportLocal}>
+      <Images size={17} /> Use Local Media
+    </button>
   </section>
 );
 

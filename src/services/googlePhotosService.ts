@@ -1,27 +1,22 @@
 import type { Memory } from '../data/memories';
 
 export const GOOGLE_PHOTOS_STORAGE_KEY = 'memoriya-google-photos-library-v1';
-export const GOOGLE_PHOTOS_SESSION_KEY = 'memoriya-google-photos-session-v2';
+export const GOOGLE_PHOTOS_SESSION_KEY = 'memoriya-google-photos-session-v3';
 export const GOOGLE_PHOTOS_CLIENT_ID_KEY = 'memoriya-google-client-id-override-v1';
 export const GOOGLE_PHOTOS_UPDATED_EVENT = 'memoriya-google-photos-updated';
 export const GOOGLE_PHOTOS_WEB_URL = 'https://photos.google.com';
 
 const GOOGLE_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 
-// Official active Google Photos scopes (post-2025):
+// Official active Google Photos scopes (post-March-2025):
+// NOTE: `photoslibrary.readonly` was retired by Google and causes OAuth 400 `invalid_scope`.
+// - photospicker.mediaitems.readonly: pick existing photos/albums from photos.google.com
 // - photoslibrary.appendonly: create albums/collections & upload photos/videos to Google Photos
 // - photoslibrary.readonly.appcreateddata: list albums & photos created/uploaded by Memoriya automatically
-// - photospicker.mediaitems.readonly: pick existing photos added directly in photos.google.com
 const GOOGLE_PHOTOS_LIBRARY_SCOPE = [
-  'https://www.googleapis.com/auth/photoslibrary.appendonly',
-  'https://www.googleapis.com/auth/photoslibrary.readonly',
-  'https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata',
   'https://www.googleapis.com/auth/photospicker.mediaitems.readonly',
-  'https://www.googleapis.com/auth/userinfo.email',
-  'https://www.googleapis.com/auth/userinfo.profile',
-].join(' ');
-
-const GOOGLE_PHOTOS_MINIMAL_PROFILE_SCOPE = [
+  'https://www.googleapis.com/auth/photoslibrary.appendonly',
+  'https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata',
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
 ].join(' ');
@@ -39,9 +34,6 @@ const IDB_OPEN_TIMEOUT_MS = 10_000;
 const IDB_REQ_TIMEOUT_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 25_000;
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 90_000;
-
-let lastPopupBlockedAt = 0;
-const POPUP_BLOCK_COOLDOWN_MS = 10_000;
 
 export interface GooglePhotosAccount {
   email: string;
@@ -360,7 +352,7 @@ export const setActiveGooglePhotosCollectionId = (collectionId: string): void =>
 const PHOTOS_LIBRARY_FORBIDDEN_KEY = 'memoriya-gphotos-lib-forbidden-v1';
 const photosLibraryForbiddenTokens = new Set<string>();
 
-const isPhotosLibraryForbidden = (token: string): boolean => {
+export const isPhotosLibraryForbidden = (token: string): boolean => {
   if (!token) return false;
   if (photosLibraryForbiddenTokens.has(token)) return true;
   if (!hasWindow()) return false;
@@ -936,23 +928,62 @@ const loadGoogleIdentityScript = (): Promise<void> =>
       resolve();
       return;
     }
-    const existing = document.querySelector(`script[src="${GOOGLE_SCRIPT_URL}"]`);
+
+    let settled = false;
+    let pollTimer = 0;
+    let timeoutTimer = 0;
+    const finish = (cb: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (pollTimer) window.clearInterval(pollTimer);
+      if (timeoutTimer) window.clearTimeout(timeoutTimer);
+      cb();
+    };
+
+    timeoutTimer = window.setTimeout(() => {
+      if ((window as unknown as GoogleOAuthWindow).google?.accounts?.oauth2) finish(resolve);
+      else finish(() => reject(new Error('Google Sign-In took too long to load. Check your connection and try again.')));
+    }, 12_000);
+
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${GOOGLE_SCRIPT_URL}"]`);
     if (existing) {
-      existing.addEventListener('load', () => resolve(), { once: true });
+      if (existing.dataset.loaded === 'true' || win.google?.accounts?.oauth2) {
+        finish(resolve);
+        return;
+      }
       existing.addEventListener(
-        'error',
-        () => reject(new Error('Could not load Google Sign-In. Check your internet connection.')),
+        'load',
+        () => {
+          existing.dataset.loaded = 'true';
+          finish(resolve);
+        },
         { once: true },
       );
+      existing.addEventListener(
+        'error',
+        () => finish(() => reject(new Error('Could not load Google Sign-In. Check your internet connection.'))),
+        { once: true },
+      );
+      pollTimer = window.setInterval(() => {
+        if ((window as unknown as GoogleOAuthWindow).google?.accounts?.oauth2) {
+          existing.dataset.loaded = 'true';
+          finish(resolve);
+        }
+      }, 40);
       return;
     }
+
     const script = document.createElement('script');
     script.src = GOOGLE_SCRIPT_URL;
     script.async = true;
     script.defer = true;
-    script.onload = () => resolve();
+    script.dataset.loaded = 'false';
+    script.onload = () => {
+      script.dataset.loaded = 'true';
+      finish(resolve);
+    };
     script.onerror = () =>
-      reject(new Error('Could not load Google Sign-In. Check your internet connection.'));
+      finish(() => reject(new Error('Could not load Google Sign-In. Check your internet connection.')));
     document.head.appendChild(script);
   });
 
@@ -992,18 +1023,6 @@ const requestOAuthTokenWithScope = (
       return;
     }
 
-    // Prevent rapid-fire popup attempts that trigger the browser's popup blocker.
-    // After a block, require the user to allow popups before retrying.
-    const now = Date.now();
-    if (now - lastPopupBlockedAt < POPUP_BLOCK_COOLDOWN_MS) {
-      reject(
-        new Error(
-          'Popup was blocked by the browser. Allow popups for this site, then click Connect Google Photos again.',
-        ),
-      );
-      return;
-    }
-
     let settled = false;
     const finish = (cb: () => void) => {
       if (settled) return;
@@ -1033,14 +1052,15 @@ const requestOAuthTokenWithScope = (
       },
       error_callback: err => {
         const closed = err.type === 'popup_closed' || err.type === 'popup_closed_by_user';
-        const blocked = /popup/i.test(err.type || '') || /blocked/i.test((err.message || '').toLowerCase());
-        if (blocked) lastPopupBlockedAt = Date.now();
+        const blocked = err.type === 'popup_failed_to_open';
         finish(() =>
           reject(
             new Error(
               closed
                 ? 'Google sign-in window was closed.'
-                : err.message || 'Google sign-in could not open. Allow popups for this site.',
+                : blocked
+                  ? 'Google sign-in popup was blocked by your browser. Allow popups for this site and click Connect Google Photos again.'
+                  : err.message || 'Google sign-in failed.',
             ),
           ),
         );
@@ -1088,29 +1108,14 @@ export const connectGooglePhotosGmail = async (options?: {
     ? GOOGLE_PHOTOS_PICKER_SCOPE
     : GOOGLE_PHOTOS_LIBRARY_SCOPE;
 
-  let tokenResult: { accessToken: string; expiresIn: number };
-  try {
-    tokenResult = await requestOAuthTokenWithScope(
-      clientId,
-      primaryScope,
-      desiredPrompt,
-      options?.loginHint,
-    );
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err || '');
-    // If the project has not added Google Photos scopes on the consent screen yet (400 / invalid_scope),
-    // fall back to basic Gmail profile scope so connecting still works smoothly without a 400 error.
-    if (/invalid_scope|invalid_request|\b400\b/i.test(msg)) {
-      tokenResult = await requestOAuthTokenWithScope(
-        clientId,
-        GOOGLE_PHOTOS_MINIMAL_PROFILE_SCOPE,
-        desiredPrompt,
-        options?.loginHint,
-      );
-    } else {
-      throw err;
-    }
-  }
+  // Launch exactly ONE OAuth popup synchronously inside the user's click gesture.
+  // Never open a second fallback popup after `await` (browsers block post-await popups).
+  const tokenResult = await requestOAuthTokenWithScope(
+    clientId,
+    primaryScope,
+    desiredPrompt,
+    options?.loginHint,
+  );
 
   saveGooglePhotosAccessToken(tokenResult.accessToken, tokenResult.expiresIn);
   const profile = await fetchGoogleUserProfile(tokenResult.accessToken);

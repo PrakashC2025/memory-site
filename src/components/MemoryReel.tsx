@@ -173,6 +173,7 @@ interface ReelCard {
   width: number;
   height: number;
   video?: HTMLVideoElement;
+  media?: HTMLImageElement | HTMLVideoElement;
   // Last values written to the DOM. Comparing before writing avoids style
   // invalidation and (for `filter: blur()`) full layer re-rasterisation on
   // frames where the value did not actually change.
@@ -1556,7 +1557,6 @@ export class MemoryReelController {
     let rot = (randomUnit(index + 61) - 0.5) * 16;
     const insertedAt = Math.min(insertIndex, this.cards.length);
     const activeShot = this.cards.length ? this.shotIndexAt(this.elapsed) : -1;
-    const shouldStartLiveCard = this.liveAppendInProgress && insertedAt === activeShot;
     const currentCard = activeShot >= 0 ? this.cards[activeShot] : undefined;
     const nextCard = activeShot >= 0
       ? this.cards[Math.min(this.cards.length - 1, activeShot + 1)]
@@ -2895,7 +2895,7 @@ export class MemoryReelController {
     return card ? { x: card.x, y: card.y, z: card.z, rot: card.rot } : { x: 0, y: 0, z: 0, rot: 0 };
   }
 
-  private springCamera(target: { x: number; y: number; z: number; rot: number }) {
+  protected springCamera(target: { x: number; y: number; z: number; rot: number }) {
     const now = performance.now();
     const delta = this.cinematicCameraAt ? clamp((now - this.cinematicCameraAt) / 1000, 0, 0.05) : 0;
     this.cinematicCameraAt = now;
@@ -3306,7 +3306,7 @@ export class MemoryReelController {
       // Only cards in this small visible set receive compositor/style work.
       // The previous implementation still visited every loaded card here,
       // which made a 300-1000 photo Drive folder feel like it was hanging.
-      const gridTemplate = isGridTemplate(this.options.template);
+      const gridTemplate = isGridTemplate(this.options.template || 'orbit');
       const visibleIndices = gridTemplate
         ? this.getAllCardIndices()
         : new Set<number>(nearestOrbitCards || this.candidates);
@@ -3486,7 +3486,7 @@ export class MemoryReelController {
       const focusedMedia = this.cards[focusedIndex]?.media;
       const ambientSource = focusedMedia?.currentSrc || focusedMedia?.getAttribute('src') || '';
       const heroCard = this.cards[shot]?.card;
-      const heroMedia = heroCard?.media;
+      const heroMedia = this.cards[shot]?.media;
       const heroSource = heroMedia?.currentSrc || heroMedia?.getAttribute('src') || '';
       if (heroCard && heroSource) {
         const heroImage = `url("${heroSource.replace(/"/g, '\\"')}")`;
@@ -3760,7 +3760,7 @@ const formatStoryTime = (seconds: number) => {
 
 const readAudioDuration = (source: string | Blob) => new Promise<number | null>(resolve => {
   const temporaryUrl = source instanceof Blob ? URL.createObjectURL(source) : '';
-  const url = temporaryUrl || source;
+  const url = source instanceof Blob ? temporaryUrl : source;
   const audio = document.createElement('audio');
   let settled = false;
   const finish = (duration: number | null) => {
@@ -3955,7 +3955,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
         return readAudioDuration(source);
       }));
       if (!active || durations.some(duration => duration === null)) return;
-      setMusicTotalDuration(durations.reduce((total, duration) => total + (duration || 0), 0));
+      setMusicTotalDuration(durations.reduce<number>((total, duration) => total + (duration || 0), 0));
     };
     void calculateTotalDuration();
     return () => { active = false; };
@@ -4913,7 +4913,7 @@ const MemoryReel: React.FC<MemoryReelProps> = ({ memories, title, audio, templat
 
     const createSource = async (token: string, forceConversion = false) => {
       const cached = await readCachedStoryMedia(cacheKey);
-      const sourceBlob = cached || await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id).then(result => result.blob), undefined, 25);
+      const sourceBlob: Blob = cached || await withMediaFetch(() => googleDriveService.downloadMediaFileWithReconnect(token, song.id).then(result => result.blob), undefined, 25);
       const playableBlob = await preparePlayableAudioBlob(sourceBlob, song, forceConversion);
       if (!cached || playableBlob !== cached) await writeCachedStoryMedia(cacheKey, playableBlob, playableBlob.type);
       const objectUrl = URL.createObjectURL(playableBlob);

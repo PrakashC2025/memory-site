@@ -613,7 +613,7 @@ const MemoryLightbox: React.FC<Props> = ({
     let cancelled = false;
     void ensureHydratedGooglePhotoUrls(current.googlePhotoId).then(hydrated => {
       if (cancelled || !hydrated?.url) return;
-      if (!isVideoMemory(current)) setPreviewSrc(hydrated.thumbnail || hydrated.url);
+      if (!isVideoMemory(current)) setPreviewSrc(hydrated.thumbnailUrl || hydrated.url);
       setMediaSrc(hydrated.url);
       setMediaFailed(false);
       setHighResReady(true);

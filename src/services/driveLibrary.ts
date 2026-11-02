@@ -2,9 +2,45 @@ import { visualMemoriesOnly, type Memory } from '../data/memories';
 import { readSelectedGooglePhotosMemories } from './googlePhotosService';
 
 export const DRIVE_SESSION_KEY = 'memoriya-drive-session-v1';
+export const DRIVE_TOKEN_STORAGE_KEY = 'memoriya-drive-token-v1';
 export const DRIVE_OFFLINE_LIBRARY_KEY = 'memoriya-drive-offline-library-v1';
 export const DRIVE_MEMORIES_UPDATED_EVENT = 'memoriya-drive-memories-updated';
 export const DRIVE_ACCESS_TOKEN_UPDATED_EVENT = 'memoriya-drive-access-token-updated';
+
+const persistDriveTokenWithExpiry = (accessToken: string, expiresInSec = 3500) => {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!accessToken) {
+      window.localStorage.removeItem(DRIVE_TOKEN_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(
+      DRIVE_TOKEN_STORAGE_KEY,
+      JSON.stringify({
+        accessToken,
+        expiresAt: Date.now() + Math.max(60, expiresInSec - 60) * 1000,
+      }),
+    );
+  } catch {
+    // Optional persistent storage.
+  }
+};
+
+const readPersistedDriveToken = (): string => {
+  if (typeof window === 'undefined') return '';
+  try {
+    const raw = window.localStorage.getItem(DRIVE_TOKEN_STORAGE_KEY);
+    if (!raw) return '';
+    const parsed = JSON.parse(raw) as { accessToken?: string; expiresAt?: number };
+    if (parsed.expiresAt && Date.now() > parsed.expiresAt) {
+      window.localStorage.removeItem(DRIVE_TOKEN_STORAGE_KEY);
+      return '';
+    }
+    return parsed.accessToken || '';
+  } catch {
+    return '';
+  }
+};
 
 let driveSyncLock = false;
 
@@ -87,11 +123,14 @@ export const readArchiveMemories = () => {
 export const readDriveAccessToken = () => {
   try {
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
-    if (!stored) return '';
-    return (JSON.parse(stored) as DriveSessionSnapshot).accessToken || '';
+    if (stored) {
+      const sessionToken = (JSON.parse(stored) as DriveSessionSnapshot).accessToken || '';
+      if (sessionToken) return sessionToken;
+    }
   } catch {
-    return '';
+    // Fall back to persistent token cache.
   }
+  return readPersistedDriveToken();
 };
 
 export const readDriveAuthRequired = () => {
@@ -105,12 +144,14 @@ export const readDriveAuthRequired = () => {
 };
 
 export const saveDriveAuthRequired = (required: boolean) => {
+  if (required) persistDriveTokenWithExpiry('');
   try {
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
     if (!stored) return;
     const current = JSON.parse(stored) as Partial<DriveSessionSnapshot>;
     window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
       ...current,
+      accessToken: required ? '' : current.accessToken || '',
       driveAuthRequired: required,
       savedAt: Date.now(),
     }));
@@ -122,7 +163,8 @@ export const saveDriveAuthRequired = (required: boolean) => {
 
 export const readDriveFolderId = () => {
   const session = readStoredSnapshot<DriveSessionSnapshot>(DRIVE_SESSION_KEY, window.sessionStorage);
-  return session?.driveFolderId || readStoredSnapshot<OfflineDriveSnapshot>(DRIVE_OFFLINE_LIBRARY_KEY, window.localStorage)?.driveFolderId || '';
+  const raw = session?.driveFolderId || readStoredSnapshot<OfflineDriveSnapshot>(DRIVE_OFFLINE_LIBRARY_KEY, window.localStorage)?.driveFolderId || '';
+  return raw === 'drive-root' ? '' : raw;
 };
 
 export const readDriveChangePageToken = () => {
@@ -168,30 +210,55 @@ export const readDriveFolders = () => {
   return folders.filter(folder => folder.id && folder.id !== 'drive-root');
 };
 
-export const saveDriveMemories = (memories: Memory[], accessToken: string, driveFolderId = '', notify = true) => {
-  const visualMemories = visualMemoriesOnly(memories).filter(
-    memory => !memory.googlePhotoId && memory.source !== 'google-photos',
-  );
+export const saveDriveFolders = (folders: Array<{ id: string; name: string }>) => {
+  const clean = folders.filter(f => f.id && f.id !== 'drive-root');
   try {
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
     const current = stored ? JSON.parse(stored) as Partial<DriveSessionSnapshot> : {};
     window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
       ...current,
+      driveFolders: clean,
+      savedAt: Date.now(),
+    }));
+  } catch {
+    // Optional session storage.
+  }
+  const offline = readStoredSnapshot<OfflineDriveSnapshot>(DRIVE_OFFLINE_LIBRARY_KEY, window.localStorage);
+  if (offline) {
+    saveOfflineSnapshot({ ...offline, driveFolders: clean, savedAt: Date.now() });
+  }
+};
+
+export const saveDriveMemories = (memories: Memory[], accessToken: string, driveFolderId = '', notify = true) => {
+  const normalizedFolderId = driveFolderId === 'drive-root' ? '' : driveFolderId;
+  const visualMemories = visualMemoriesOnly(memories).filter(
+    memory => !memory.googlePhotoId && memory.source !== 'google-photos',
+  );
+  if (accessToken) persistDriveTokenWithExpiry(accessToken);
+  try {
+    const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
+    const current = stored ? JSON.parse(stored) as Partial<DriveSessionSnapshot> : {};
+    const tokenChanged = Boolean(accessToken && current.accessToken !== accessToken);
+    window.sessionStorage.setItem(DRIVE_SESSION_KEY, JSON.stringify({
+      ...current,
       accessToken,
       driveAuthRequired: false,
       memories: visualMemories,
-      driveFolderId,
+      driveFolderId: normalizedFolderId,
       nextPageToken: '',
       importCount: visualMemories.length,
       savedAt: Date.now(),
     }));
+    if (tokenChanged) {
+      window.dispatchEvent(new CustomEvent(DRIVE_ACCESS_TOKEN_UPDATED_EVENT, { detail: accessToken }));
+    }
     if (notify) window.dispatchEvent(new CustomEvent(DRIVE_MEMORIES_UPDATED_EVENT));
   } catch {
     // Session storage is optional; IndexedDB remains the playback cache.
   }
   saveOfflineSnapshot({
     memories: visualMemories.map(({ authToken: _authToken, ...memory }) => memory),
-    driveFolderId,
+    driveFolderId: normalizedFolderId,
     driveFolders: readDriveFolders(),
     savedAt: Date.now(),
   });
@@ -226,8 +293,9 @@ export const removeDriveMemories = (driveFileIds: Iterable<string>) => {
   }
 };
 
-export const saveDriveAccessToken = (accessToken: string) => {
+export const saveDriveAccessToken = (accessToken: string, expiresInSec = 3500) => {
   if (!accessToken) return;
+  persistDriveTokenWithExpiry(accessToken, expiresInSec);
   try {
     const stored = window.sessionStorage.getItem(DRIVE_SESSION_KEY);
     const current = stored ? JSON.parse(stored) as Partial<DriveSessionSnapshot> : {};
@@ -250,6 +318,7 @@ export const saveDriveAccessToken = (accessToken: string) => {
 };
 
 export const clearDriveSession = () => {
+  persistDriveTokenWithExpiry('');
   try {
     window.sessionStorage.removeItem(DRIVE_SESSION_KEY);
     window.localStorage.removeItem(DRIVE_OFFLINE_LIBRARY_KEY);
