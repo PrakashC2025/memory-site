@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Check, FolderOpen, LogOut, Upload } from 'lucide-react';
+import { Check, FolderOpen, Images, LogOut, Upload } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { GooglePhotosIcon } from './GooglePhotosModal';
 import {
@@ -8,8 +8,13 @@ import {
   disconnectGooglePhotos,
   ensureGooglePhotosBootHydration,
   formatFriendlyGooglePhotosError,
+  GOOGLE_PHOTOS_STORAGE_KEY,
   GOOGLE_PHOTOS_UPDATED_EVENT,
+  hydrateGooglePhotosLibrary,
   isGooglePhotosConnected,
+  liveSyncGooglePhotos,
+  notifyGooglePhotosUpdated,
+  pickFromGooglePhotosCloud,
   readActiveGooglePhotosCollectionId,
   readGooglePhotosAccessToken,
   readGooglePhotosCollectionsSummary,
@@ -23,6 +28,44 @@ import {
 export const GooglePhotosBoot: React.FC = () => {
   useEffect(() => {
     ensureGooglePhotosBootHydration();
+
+    const LIVE_SYNC_INTERVAL_MS = 8_000;
+    const LIVE_SYNC_COOLDOWN_MS = 3_000;
+    let lastSyncAt = 0;
+
+    const triggerSync = (force = false) => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      const now = Date.now();
+      if (!force && now - lastSyncAt < LIVE_SYNC_COOLDOWN_MS) return;
+      lastSyncAt = now;
+      void liveSyncGooglePhotos();
+    };
+
+    const onFocus = () => triggerSync(true);
+    const onOnline = () => triggerSync(true);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') triggerSync(true);
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === GOOGLE_PHOTOS_STORAGE_KEY) {
+        void hydrateGooglePhotosLibrary().then(() => notifyGooglePhotosUpdated());
+      }
+    };
+
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('storage', onStorage);
+    triggerSync(true);
+    const interval = window.setInterval(() => triggerSync(false), LIVE_SYNC_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('storage', onStorage);
+    };
   }, []);
   return null;
 };
@@ -112,6 +155,33 @@ const GooglePhotosConnectPanel: React.FC = () => {
             : 'Showing all Google Photos collections.',
         );
       }
+    }
+  };
+
+  const handlePickFromGooglePhotos = async () => {
+    const popup = window.open('about:blank', 'memoriya-gphotos-picker', 'width=980,height=740');
+    setLoading(true);
+    setError('');
+    setMessage('Opening Google Photos...');
+    try {
+      const res = await pickFromGooglePhotosCloud({
+        collectionId: activeCollectionId || undefined,
+        popupWindow: popup,
+        onStatus: status => setMessage(status),
+      });
+      setConnected(true);
+      if (res.importedCount > 0) {
+        setMessage(
+          `Added ${res.importedCount} ${res.importedCount === 1 ? 'photo' : 'photos'} from Google Photos into "${res.collectionName}".`,
+        );
+      } else {
+        setMessage('No new photos were selected from Google Photos.');
+      }
+    } catch (err) {
+      setError(formatFriendlyGooglePhotosError(err));
+      setMessage('');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -236,6 +306,17 @@ const GooglePhotosConnectPanel: React.FC = () => {
 
         {connected && (
           <>
+            <button
+              type="button"
+              className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-black disabled:cursor-wait disabled:opacity-55"
+              style={{ color: '#ffd166', borderColor: 'rgba(251, 188, 4, 0.45)' }}
+              disabled={loading || uploading}
+              onClick={() => void handlePickFromGooglePhotos()}
+            >
+              <Images size={15} />
+              Pick from Google Photos
+            </button>
+
             <button
               type="button"
               className="neon-button flex items-center justify-center gap-2 px-5 py-3 text-sm font-black disabled:cursor-wait disabled:opacity-55"

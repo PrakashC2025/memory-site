@@ -295,3 +295,163 @@ test('Simple 1-button Google Photos UI and Camera destination options are wired 
   assert.match(dashboard, /GooglePhotosConnectPanel/);
   assert.match(settings, /GooglePhotosConnectPanel/);
 });
+
+test('liveSyncGooglePhotos reconciles newly added and deleted Google Photos instantly like Drive', async () => {
+  const { dispatched } = setupBrowserMocks();
+  const svc = await loadGooglePhotosService();
+
+  svc.saveGooglePhotosAccessToken('live-token', 3600);
+
+  let remoteMedia = [
+    {
+      id: 'live-1',
+      filename: 'first.jpg',
+      mimeType: 'image/jpeg',
+      baseUrl: 'https://lh3.googleusercontent.com/live-1',
+      mediaMetadata: { creationTime: '2026-07-01T10:00:00Z', width: '1600', height: '1200' },
+    },
+  ];
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const u = String(url);
+    if (u.includes('/v1/albums?')) {
+      return new Response(JSON.stringify({ albums: [{ id: 'alb-live', title: 'Live Album' }] }), { status: 200 });
+    }
+    if (u.includes('/v1/mediaItems:search')) {
+      return new Response(JSON.stringify({ mediaItems: remoteMedia }), { status: 200 });
+    }
+    if (u.includes('/v1/mediaItems?')) {
+      return new Response(JSON.stringify({ mediaItems: remoteMedia }), { status: 200 });
+    }
+    if (u.includes('lh3.googleusercontent.com')) {
+      return new Response(new Blob(['img-bytes'], { type: 'image/jpeg' }), { status: 200 });
+    }
+    return new Response('{}', { status: 200 });
+  };
+
+  try {
+    // 1. Initial background live sync picks up the first photo
+    const first = await svc.liveSyncGooglePhotos();
+    assert.equal(first.memories.length, 1);
+    assert.equal(svc.readSelectedGooglePhotosMemories()[0].title, 'first');
+
+    // 2. Unchanged background poll does NOT spam redundant update events
+    dispatched.length = 0;
+    await svc.liveSyncGooglePhotos();
+    assert.equal(dispatched.filter(e => e === svc.GOOGLE_PHOTOS_UPDATED_EVENT).length, 0);
+
+    // 3. New photo added to Google Photos -> next live poll picks it up immediately & notifies UI
+    remoteMedia = [
+      ...remoteMedia,
+      {
+        id: 'live-2',
+        filename: 'second-instant.jpg',
+        mimeType: 'image/jpeg',
+        baseUrl: 'https://lh3.googleusercontent.com/live-2',
+        mediaMetadata: { creationTime: '2026-07-02T10:00:00Z', width: '1600', height: '1200' },
+      },
+    ];
+    await svc.liveSyncGooglePhotos();
+    assert.equal(svc.readSelectedGooglePhotosMemories().length, 2);
+    assert.ok(dispatched.includes(svc.GOOGLE_PHOTOS_UPDATED_EVENT));
+
+    // 4. First photo deleted in Google Photos -> next live poll removes it cleanly
+    remoteMedia = [remoteMedia[1]];
+    await svc.liveSyncGooglePhotos();
+    assert.equal(svc.readSelectedGooglePhotosMemories().length, 1);
+    assert.equal(svc.readSelectedGooglePhotosMemories()[0].title, 'second-instant');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('pickFromGooglePhotosCloud imports photos added directly in photos.google.com and syncs them', async () => {
+  setupBrowserMocks();
+  const svc = await loadGooglePhotosService();
+  svc.saveGooglePhotosAccessToken('picker-token', 3600);
+
+  let popupHref = '';
+  let popupClosed = false;
+  const mockPopup = {
+    get closed() {
+      return popupClosed;
+    },
+    location: {
+      set href(v) {
+        popupHref = v;
+      },
+      get href() {
+        return popupHref;
+      },
+    },
+    focus: () => undefined,
+    close: () => {
+      popupClosed = true;
+    },
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const u = String(url);
+    if (u.endsWith('photospicker.googleapis.com/v1/sessions')) {
+      return new Response(
+        JSON.stringify({
+          id: 'sess-123',
+          pickerUri: 'https://photos.google.com/photospicker/sess-123',
+          pollingConfig: { pollInterval: '1.5s' },
+        }),
+        { status: 200 },
+      );
+    }
+    if (u.includes('photospicker.googleapis.com/v1/sessions/sess-123')) {
+      return new Response(JSON.stringify({ mediaItemsSet: true }), { status: 200 });
+    }
+    if (u.includes('photospicker.googleapis.com/v1/mediaItems')) {
+      return new Response(
+        JSON.stringify({
+          mediaItems: [
+            {
+              id: 'ext-1',
+              createTime: '2026-08-01T12:00:00Z',
+              type: 'PHOTO',
+              mediaFile: {
+                baseUrl: 'https://lh3.googleusercontent.com/ext-1',
+                mimeType: 'image/jpeg',
+                filename: 'direct-google-photo.jpg',
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    if (u.includes('lh3.googleusercontent.com')) {
+      return new Response(new Blob(['direct-photo'], { type: 'image/jpeg' }), { status: 200 });
+    }
+    if (u.endsWith('/v1/albums')) {
+      return new Response(JSON.stringify({ id: 'cloud-alb-1' }), { status: 200 });
+    }
+    if (u.endsWith('/v1/uploads')) {
+      return new Response('upload-tok-1', { status: 200 });
+    }
+    if (u.includes('mediaItems:batchCreate')) {
+      return new Response(
+        JSON.stringify({ newMediaItemResults: [{ mediaItem: { id: 'cloud-item-1' } }] }),
+        { status: 200 },
+      );
+    }
+    return new Response('{}', { status: 200 });
+  };
+
+  try {
+    const picked = await svc.pickFromGooglePhotosCloud({ popupWindow: mockPopup });
+    assert.equal(picked.importedCount, 1);
+    assert.equal(picked.syncedToCloud, true);
+    assert.match(popupHref, /photos\.google\.com\/photospicker\/sess-123\/autoclose/);
+    assert.equal(svc.readSelectedGooglePhotosMemories().length, 1);
+    assert.equal(svc.readSelectedGooglePhotosMemories()[0].title, 'direct-google-photo');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
