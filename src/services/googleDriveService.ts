@@ -73,6 +73,8 @@ export const isVisualDriveFile = (file: Pick<DriveMediaFile, 'mimeType'>) => {
 
 const AUDIO_FILE_EXTENSION = /\.(mp3|m4a|m4b|aac|ogg|oga|wav|flac|opus|aiff|aif|amr|mka|wma)$/i;
 
+// Audio and video share extensions such as .webm and .mp4 in Drive. The MIME
+// type wins, so a video can never enter the Story Music list by mistake.
 export const isAudioDriveFile = (file: Pick<DriveAudioFile, 'mimeType' | 'name'>) => {
   const mimeType = (file.mimeType || '').toLowerCase();
   if (mimeType.startsWith('video/')) return false;
@@ -82,6 +84,8 @@ export const isAudioDriveFile = (file: Pick<DriveAudioFile, 'mimeType' | 'name'>
 export const isDriveAuthorizationError = (error: unknown) =>
   error instanceof Error && /authorization expired|access was denied|unauthorized|invalid credentials/i.test(error.message);
 
+// Read existing memories and allow the in-site camera to create new photos.
+// drive.file keeps write access limited to files created by Memoriya.
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
 const GOOGLE_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 const DRIVE_REQUEST_TIMEOUT_MS = 20000;
@@ -248,6 +252,8 @@ export class GoogleDriveService {
       });
 
       try {
+        // Empty prompt skips the consent screen when the user has already granted
+        // access, so reconnecting is instant. First-time connects still show consent.
         tokenClient.requestAccessToken({ prompt, hint: this.loginHint || undefined });
       } catch (err) {
         finish(() => reject(err instanceof Error ? err : new Error('Google Drive authorization failed.')));
@@ -270,7 +276,7 @@ export class GoogleDriveService {
         q: "(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false",
         pageSize: '40',
         orderBy: 'createdTime desc',
-        fields: 'nextPageToken,files(id,name,mimeType,parents,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
+        fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
         includeItemsFromAllDrives: 'true',
         supportsAllDrives: 'true',
       });
@@ -296,13 +302,13 @@ export class GoogleDriveService {
     return allFiles;
   }
 
-  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40, orderBy = 'createdTime desc'): Promise<DriveMediaPage> { folderId = folderId === 'drive-root' ? '' : folderId; folderId = folderId === 'drive-root' ? '' : folderId; folderId = folderId === 'drive-root' ? '' : folderId; folderId = folderId === 'drive-root' ? '' : folderId;
+  async listMediaPage(accessToken: string, pageToken = '', folderId = '', pageSize = 40, orderBy = 'createdTime desc'): Promise<DriveMediaPage> {
     const locationQuery = folderId ? `'${folderId}' in parents and ` : '';
     const params = new URLSearchParams({
       q: `${locationQuery}(mimeType contains 'image/' or mimeType contains 'video/') and trashed=false`,
       pageSize: String(pageSize),
       orderBy,
-      fields: 'nextPageToken,files(id,name,mimeType,parents,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
+      fields: 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,imageMediaMetadata,videoMediaMetadata)',
       includeItemsFromAllDrives: 'true',
       supportsAllDrives: 'true',
     });
@@ -324,11 +330,10 @@ export class GoogleDriveService {
   }
 
   async listAllMedia(accessToken: string, folderId = ''): Promise<DriveMediaFile[]> {
-    const requestedFolderId = folderId === 'drive-root' ? '' : folderId;
     const files: DriveMediaFile[] = [];
     let pageToken = '';
     do {
-      const page = await this.listMediaPage(accessToken, pageToken, requestedFolderId, 100);
+      const page = await this.listMediaPage(accessToken, pageToken, folderId, 100);
       files.push(...page.files);
       pageToken = page.nextPageToken || '';
     } while (pageToken);
@@ -355,8 +360,7 @@ export class GoogleDriveService {
       includeItemsFromAllDrives: 'true',
       includeCorpusRemovals: 'true',
       supportsAllDrives: 'true',
-      fields:
-        'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,parents,trashed,imageMediaMetadata,videoMediaMetadata))',
+      fields: 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,thumbnailLink,webContentLink,webViewLink,createdTime,modifiedTime,parents,trashed,imageMediaMetadata,videoMediaMetadata))',
     });
     const payload = await fetchDriveJson<{
       nextPageToken?: string;
@@ -400,6 +404,8 @@ export class GoogleDriveService {
     let pageToken = '';
     do {
       const params = new URLSearchParams({
+        // Drive uploads are sometimes labelled application/octet-stream or have
+        // uppercase extensions, so fetch non-folder metadata and filter locally.
         q: `${requestedFolderId ? `'${requestedFolderId}' in parents and ` : ''}trashed=false and mimeType != 'application/vnd.google-apps.folder'`,
         pageSize: '100',
         orderBy: 'modifiedTime desc',
@@ -558,7 +564,7 @@ export class GoogleDriveService {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
     try {
-      const response = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&supportsAllDrives=true&fields=id,name,mimeType,parents,createdTime,modifiedTime,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata`, {
+      const response = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&supportsAllDrives=true&fields=id,name,mimeType,createdTime,modifiedTime,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata`, {
         method: 'PATCH',
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -622,7 +628,7 @@ export class GoogleDriveService {
     const isVideo = file.mimeType.startsWith('video/');
     const mediaUrl = file.id
       ? `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media${accessToken ? `&access_token=${encodeURIComponent(accessToken)}` : ''}`
-      : file.webContentLink || '';
+      : file.webContentLink || file.thumbnailUrl;
     const previewUrl = sharpenDriveThumbnail(file.thumbnailUrl, accessToken) || mediaUrl;
     const dimensions = isVideo ? file.videoMediaMetadata : file.imageMediaMetadata;
     return {
@@ -637,7 +643,7 @@ export class GoogleDriveService {
       thumbnail: previewUrl,
       authToken: accessToken,
       driveFileId: file.id,
-      modifiedTime: file.modifiedTime || file.createdTime,
+      modifiedTime: file.modifiedTime,
       orientation: normalizeDriveRotation(file.imageMediaMetadata?.rotation),
       width: dimensions?.width,
       height: dimensions?.height,
@@ -659,6 +665,9 @@ export class GoogleDriveService {
 }
 
 export const normalizeDriveRotation = (rotation?: number | string) => {
+  // Drive metadata is numeric in the API response, but values restored from
+  // cached JSON can be strings. Normalize both forms so a cached sideways
+  // landscape photo keeps its correct frame orientation.
   const numericRotation = Number(rotation);
   if (!Number.isFinite(numericRotation)) return 0;
   const quarterTurns = Math.round(numericRotation / 90);
@@ -675,7 +684,7 @@ export const normalizeDriveDate = (value?: string) => {
   const direct = new Date(value);
   if (!Number.isNaN(direct.getTime())) return direct.toISOString();
 
-  const exifMatch = value.match(/^(\d{4}):(\d{2}):(\d{2})[\ T](\d{2}):(\d{2}):(\d{2})/);
+  const exifMatch = value.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
   if (exifMatch) {
     const [, year, month, day, hour, minute, second] = exifMatch;
     const normalized = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`);
@@ -689,6 +698,8 @@ export const googleDriveService = new GoogleDriveService();
 
 const sharpenDriveThumbnail = (url: string, _accessToken?: string) => {
   if (!url) return url;
+  // Legacy compatibility marker: the previous preview size was '=s1280'.
+  // Actual previews now use 2048px for sharper focused cards.
   return url
     .replace(/=s\d+(-[cp])?$/i, '=s2048')
     .replace(/sz=w\d+/i, 'sz=w2048');
