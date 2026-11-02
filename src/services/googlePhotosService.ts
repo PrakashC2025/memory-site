@@ -353,14 +353,42 @@ export const setActiveGooglePhotosCollectionId = (collectionId: string): void =>
   writeGooglePhotosState(state);
 };
 
+const PHOTOS_LIBRARY_FORBIDDEN_KEY = 'memoriya-gphotos-lib-forbidden-v1';
+const photosLibraryForbiddenTokens = new Set<string>();
+
+const isPhotosLibraryForbidden = (token: string): boolean => {
+  if (!token) return false;
+  if (photosLibraryForbiddenTokens.has(token)) return true;
+  if (!hasWindow()) return false;
+  try {
+    return window.sessionStorage.getItem(PHOTOS_LIBRARY_FORBIDDEN_KEY) === token;
+  } catch {
+    return false;
+  }
+};
+
+const markPhotosLibraryForbidden = (token: string): void => {
+  if (!token) return;
+  photosLibraryForbiddenTokens.add(token);
+  if (!hasWindow()) return;
+  try {
+    window.sessionStorage.setItem(PHOTOS_LIBRARY_FORBIDDEN_KEY, token);
+  } catch {
+    // Optional session storage.
+  }
+};
+
 export const readGooglePhotosAccessToken = (): string => {
   if (!hasWindow()) return '';
   try {
-    const raw = window.sessionStorage.getItem(GOOGLE_PHOTOS_SESSION_KEY);
+    const raw =
+      window.sessionStorage.getItem(GOOGLE_PHOTOS_SESSION_KEY) ||
+      window.localStorage.getItem(GOOGLE_PHOTOS_SESSION_KEY);
     if (!raw) return '';
     const parsed = JSON.parse(raw) as { accessToken?: string; expiresAt?: number };
     if (parsed.expiresAt && Date.now() > parsed.expiresAt) {
       window.sessionStorage.removeItem(GOOGLE_PHOTOS_SESSION_KEY);
+      window.localStorage.removeItem(GOOGLE_PHOTOS_SESSION_KEY);
       return '';
     }
     return parsed.accessToken || '';
@@ -374,17 +402,17 @@ export const saveGooglePhotosAccessToken = (accessToken: string, expiresInSec = 
   try {
     if (!accessToken) {
       window.sessionStorage.removeItem(GOOGLE_PHOTOS_SESSION_KEY);
+      window.localStorage.removeItem(GOOGLE_PHOTOS_SESSION_KEY);
       return;
     }
-    window.sessionStorage.setItem(
-      GOOGLE_PHOTOS_SESSION_KEY,
-      JSON.stringify({
-        accessToken,
-        expiresAt: Date.now() + Math.max(60, expiresInSec - 60) * 1000,
-      }),
-    );
+    const payload = JSON.stringify({
+      accessToken,
+      expiresAt: Date.now() + Math.max(60, expiresInSec - 60) * 1000,
+    });
+    window.sessionStorage.setItem(GOOGLE_PHOTOS_SESSION_KEY, payload);
+    window.localStorage.setItem(GOOGLE_PHOTOS_SESSION_KEY, payload);
   } catch {
-    // Session storage is optional.
+    // Storage is optional.
   }
 };
 
@@ -551,6 +579,9 @@ export const hydrateGooglePhotosLibrary = async (): Promise<boolean> => {
 export const ensureGooglePhotosBootHydration = (): void => {
   if (!hasWindow() || initialHydrationStarted) return;
   initialHydrationStarted = true;
+  if (typeof document !== 'undefined') {
+    void loadGoogleIdentityScript().catch(() => undefined);
+  }
   void hydrateGooglePhotosLibrary();
 };
 
@@ -1017,7 +1048,9 @@ export const connectGooglePhotosGmail = async (options?: {
     );
   }
 
-  await loadGoogleIdentityScript();
+  if (!(window as unknown as GoogleOAuthWindow).google?.accounts?.oauth2) {
+    await loadGoogleIdentityScript();
+  }
 
   const desiredPrompt =
     typeof options?.prompt === 'string'
@@ -1150,11 +1183,15 @@ const downloadAuthedBlob = async (url: string, accessToken?: string): Promise<Bl
 
 const fetchAllRemoteGoogleAlbums = async (
   accessToken: string,
-): Promise<{ ok: boolean; unauthorized: boolean; albums: RemoteGoogleAlbum[] }> => {
+): Promise<{ ok: boolean; expired: boolean; forbidden: boolean; albums: RemoteGoogleAlbum[] }> => {
+  if (!accessToken || isPhotosLibraryForbidden(accessToken)) {
+    return { ok: false, expired: false, forbidden: true, albums: [] };
+  }
   const albums: RemoteGoogleAlbum[] = [];
   let pageToken = '';
   let anyOk = false;
-  let unauthorized = false;
+  let expired = false;
+  let forbidden = false;
 
   for (let page = 0; page < 20; page += 1) {
     const params = new URLSearchParams({ pageSize: '50' });
@@ -1165,7 +1202,13 @@ const fetchAllRemoteGoogleAlbums = async (
         { headers: { Authorization: `Bearer ${accessToken}` } },
       );
       if (!res.ok) {
-        if (res.status === 401 || res.status === 403) unauthorized = true;
+        if (res.status === 401) {
+          expired = true;
+          saveGooglePhotosAccessToken('');
+        } else if (res.status === 403) {
+          forbidden = true;
+          markPhotosLibraryForbidden(accessToken);
+        }
         break;
       }
       anyOk = true;
@@ -1183,17 +1226,19 @@ const fetchAllRemoteGoogleAlbums = async (
     }
   }
 
-  return { ok: anyOk, unauthorized, albums };
+  return { ok: anyOk, expired, forbidden, albums };
 };
 
 const fetchRemoteAlbumMediaItems = async (
   accessToken: string,
   remoteAlbumId: string,
-): Promise<{ ok: boolean; unauthorized: boolean; items: RemoteGoogleMediaItem[] }> => {
+): Promise<{ ok: boolean; items: RemoteGoogleMediaItem[] }> => {
+  if (!accessToken || isPhotosLibraryForbidden(accessToken)) {
+    return { ok: false, items: [] };
+  }
   const items: RemoteGoogleMediaItem[] = [];
   let pageToken = '';
   let anyOk = false;
-  let unauthorized = false;
 
   for (let page = 0; page < 15; page += 1) {
     const body: Record<string, unknown> = {
@@ -1211,7 +1256,8 @@ const fetchRemoteAlbumMediaItems = async (
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        if (res.status === 401 || res.status === 403) unauthorized = true;
+        if (res.status === 401) saveGooglePhotosAccessToken('');
+        else if (res.status === 403) markPhotosLibraryForbidden(accessToken);
         break;
       }
       anyOk = true;
@@ -1229,16 +1275,18 @@ const fetchRemoteAlbumMediaItems = async (
     }
   }
 
-  return { ok: anyOk, unauthorized, items };
+  return { ok: anyOk, items };
 };
 
 const fetchAllRemoteLibraryMediaItems = async (
   accessToken: string,
-): Promise<{ ok: boolean; unauthorized: boolean; items: RemoteGoogleMediaItem[] }> => {
+): Promise<{ ok: boolean; items: RemoteGoogleMediaItem[] }> => {
+  if (!accessToken || isPhotosLibraryForbidden(accessToken)) {
+    return { ok: false, items: [] };
+  }
   const items: RemoteGoogleMediaItem[] = [];
   let pageToken = '';
   let anyOk = false;
-  let unauthorized = false;
 
   for (let page = 0; page < 15; page += 1) {
     const params = new URLSearchParams({ pageSize: '100' });
@@ -1249,7 +1297,8 @@ const fetchAllRemoteLibraryMediaItems = async (
         { headers: { Authorization: `Bearer ${accessToken}` } },
       );
       if (!res.ok) {
-        if (res.status === 401 || res.status === 403) unauthorized = true;
+        if (res.status === 401) saveGooglePhotosAccessToken('');
+        else if (res.status === 403) markPhotosLibraryForbidden(accessToken);
         break;
       }
       anyOk = true;
@@ -1267,7 +1316,7 @@ const fetchAllRemoteLibraryMediaItems = async (
     }
   }
 
-  return { ok: anyOk, unauthorized, items };
+  return { ok: anyOk, items };
 };
 
 const buildLibrarySignature = (state: GooglePhotosPersistedState): string => {
@@ -1284,7 +1333,7 @@ let liveSyncBusy = false;
 
 /**
  * Syncs Google Photos albums (collections) and media items directly from the user's Google account —
- * never pre-defining empty collections. Never throws on 400 / 403 / 404 / empty libraries.
+ * never pre-defining empty collections and NEVER opening background popups.
  */
 export const syncGooglePhotosLibrary = async (
   accessToken: string,
@@ -1305,21 +1354,14 @@ export const syncGooglePhotosLibrary = async (
     col => Boolean(col.remoteAlbumId) || initialItemCollectionIds.has(col.id),
   );
 
-  let workingToken = accessToken;
+  const workingToken = accessToken;
   let cloudSyncActive = false;
   let importedCount = 0;
 
-  if (workingToken) {
-    // 1. Read all albums / collections directly from the user's Google account
-    let albumListing = await fetchAllRemoteGoogleAlbums(workingToken);
-    if (!albumListing.ok && albumListing.unauthorized) {
-      saveGooglePhotosAccessToken('');
-      const refreshed = await refreshGooglePhotosAccessToken(true);
-      if (refreshed) {
-        workingToken = refreshed;
-        albumListing = await fetchAllRemoteGoogleAlbums(workingToken);
-      }
-    }
+  if (workingToken && !isPhotosLibraryForbidden(workingToken)) {
+    // 1. Read all albums / collections directly from the user's Google account.
+    // Never call requestAccessToken here — browser popup blockers block non-gesture OAuth popups.
+    const albumListing = await fetchAllRemoteGoogleAlbums(workingToken);
 
     if (albumListing.ok) {
       cloudSyncActive = true;
@@ -1547,18 +1589,14 @@ export const syncGooglePhotosLibrary = async (
 /**
  * Background live poller for Google Photos — mirrors `DriveLiveSync` so new/deleted photos
  * update automatically across Home, Memoriya, Story Mode, Timeline, Event Explorer, and Memory Tree.
+ * Never opens an OAuth popup in the background (prevents browser popup-blocker console errors).
  */
 export const liveSyncGooglePhotos = async (): Promise<GooglePhotosSyncResult | null> => {
   if (liveSyncBusy || !hasWindow() || !isGooglePhotosConnected()) return null;
+  const token = readGooglePhotosAccessToken();
+  if (!token || isPhotosLibraryForbidden(token)) return null;
   liveSyncBusy = true;
   try {
-    let token = readGooglePhotosAccessToken();
-    if (!token) {
-      const state = readGooglePhotosState();
-      if (!state.account?.email) return null;
-      token = await refreshGooglePhotosAccessToken(true);
-    }
-    if (!token) return null;
     return await syncGooglePhotosLibrary(token, undefined, { background: true });
   } catch {
     return null;
@@ -1588,7 +1626,7 @@ const ensureRemoteAlbumForCollection = async (
   collection: GooglePhotosCollection,
 ): Promise<string> => {
   if (collection.remoteAlbumId) return collection.remoteAlbumId;
-  if (!accessToken) return '';
+  if (!accessToken || isPhotosLibraryForbidden(accessToken)) return '';
 
   try {
     const res = await fetch('https://photoslibrary.googleapis.com/v1/albums', {
@@ -1601,7 +1639,11 @@ const ensureRemoteAlbumForCollection = async (
         album: { title: collection.name },
       }),
     });
-    if (!res.ok) return '';
+    if (!res.ok) {
+      if (res.status === 401) saveGooglePhotosAccessToken('');
+      else if (res.status === 403) markPhotosLibraryForbidden(accessToken);
+      return '';
+    }
     const data = (await res.json()) as { id?: string };
     return data.id || '';
   } catch {
@@ -1615,7 +1657,7 @@ const uploadSingleFileToGooglePhotosCloud = async (
   remoteAlbumId?: string,
   signal?: AbortSignal,
 ): Promise<string> => {
-  if (!accessToken) return '';
+  if (!accessToken || isPhotosLibraryForbidden(accessToken)) return '';
   try {
     // Step 1: Upload raw bytes to get an uploadToken
     const uploadRes = await fetch('https://photoslibrary.googleapis.com/v1/uploads', {
@@ -1629,7 +1671,11 @@ const uploadSingleFileToGooglePhotosCloud = async (
       body: file,
       signal,
     });
-    if (!uploadRes.ok) return '';
+    if (!uploadRes.ok) {
+      if (uploadRes.status === 401) saveGooglePhotosAccessToken('');
+      else if (uploadRes.status === 403) markPhotosLibraryForbidden(accessToken);
+      return '';
+    }
     const uploadToken = (await uploadRes.text()).trim();
     if (!uploadToken) return '';
 
@@ -2076,16 +2122,23 @@ export const createGooglePhotosPickerSession = async (
     });
 
     if (!res.ok) {
+      const detail = await res.text().catch(() => '');
       if (res.status === 400 || res.status === 404) {
         throw new Error(
           'No photos found in Google Photos yet — use "Add to Google Photos" or Camera to add your first photo.',
         );
       }
       if (res.status === 401) {
-        throw new Error('Your Google Photos session expired. Click "Sync Google Photos" to reconnect.');
+        saveGooglePhotosAccessToken('');
+        throw new Error('Your Google Photos session expired. Click "Sync Google Photos" once, then try again.');
+      }
+      if (res.status === 403 && /SERVICE_DISABLED|has not been used|disabled/i.test(detail)) {
+        throw new Error(
+          'Enable "Google Photos Picker API" in Google Cloud Console (APIs & Services → Library → Google Photos Picker API → Enable), or use "Add to Google Photos" right now.',
+        );
       }
       throw new Error(
-        'Cloud picker is not enabled for this Google project yet — use "Add to Google Photos" or Camera right away.',
+        'Google Photos Picker permission was not granted yet — click "Sync Google Photos" and approve Google Photos access, or use "Add to Google Photos" right now.',
       );
     }
 
@@ -2150,7 +2203,9 @@ export const waitForGooglePhotosPickerSelection = async (
 ): Promise<boolean> => {
   let intervalMs = session.pollIntervalMs || 2400;
   const startedAt = Date.now();
-  const maxWaitMs = 12 * 60 * 1000;
+  // Avoid reading cross-origin `popupWindow.closed` (triggers COOP console warnings in Chrome).
+  // Google Photos `/autoclose` closes the window when the user clicks Done, returning focus here.
+  const maxWaitMs = 5 * 60 * 1000;
 
   while (Date.now() - startedAt < maxWaitMs) {
     if (options?.signal?.aborted) return false;
@@ -2158,12 +2213,6 @@ export const waitForGooglePhotosPickerSelection = async (
     options?.onTick?.();
     if (status.mediaItemsSet) return true;
     intervalMs = status.pollIntervalMs;
-
-    if (options?.popupWindow && options.popupWindow.closed) {
-      await new Promise<void>(r => window.setTimeout(r, 1200));
-      const finalCheck = await checkGooglePhotosPickerSessionOnce(session.sessionId, accessToken);
-      return finalCheck.mediaItemsSet;
-    }
 
     await new Promise<void>(resolve => {
       let done = false;
@@ -2250,6 +2299,7 @@ export const importGooglePhotosPickerSession = async (
  * the site and syncing them into the user's cloud collection.
  */
 export const pickFromGooglePhotosCloud = async (options?: {
+  accessToken?: string;
   collectionId?: string;
   popupWindow?: Window | null;
   onStatus?: (message: string) => void;
@@ -2260,31 +2310,14 @@ export const pickFromGooglePhotosCloud = async (options?: {
 }> => {
   const popup = options?.popupWindow || null;
   try {
-    let token = readGooglePhotosAccessToken();
+    const token = options?.accessToken || readGooglePhotosAccessToken();
     if (!token) {
-      options?.onStatus?.('Refreshing Google Photos access...');
-      token = await refreshGooglePhotosAccessToken(true);
-    }
-    if (!token) {
-      const connected = await connectGooglePhotosGmail({ usePickerScope: false });
-      token = connected.accessToken;
+      throw new Error('Your Google Photos session expired. Click "Sync Google Photos" once, then click "Pick from Google Photos".');
     }
 
-    let session: GooglePhotosPickerSession;
-    try {
-      session = await createGooglePhotosPickerSession(token);
-    } catch (firstErr) {
-      const msg = firstErr instanceof Error ? firstErr.message : String(firstErr || '');
-      if (/expired|401|not enabled|403/i.test(msg)) {
-        const reconnected = await connectGooglePhotosGmail({ usePickerScope: true });
-        token = reconnected.accessToken;
-        session = await createGooglePhotosPickerSession(token);
-      } else {
-        throw firstErr;
-      }
-    }
+    const session = await createGooglePhotosPickerSession(token);
 
-    if (popup && !popup.closed) {
+    if (popup) {
       popup.location.href = session.autoCloseUri;
       popup.focus();
     } else if (hasWindow()) {
@@ -2298,13 +2331,6 @@ export const pickFromGooglePhotosCloud = async (options?: {
     const ready = await waitForGooglePhotosPickerSelection(session, token, {
       popupWindow: popup,
     });
-    if (popup && !popup.closed) {
-      try {
-        popup.close();
-      } catch {
-        // Cross-origin window may already be closing via /autoclose.
-      }
-    }
 
     if (!ready) {
       return { importedCount: 0, collectionName: 'Google Photos', syncedToCloud: false };
@@ -2392,11 +2418,11 @@ export const pickFromGooglePhotosCloud = async (options?: {
       syncedToCloud: uploaded.syncedToCloud,
     };
   } catch (err) {
-    if (popup && !popup.closed) {
+    if (popup) {
       try {
         popup.close();
       } catch {
-        // Ignore popup close failure.
+        // Ignore close error if cross-origin.
       }
     }
     throw err;
